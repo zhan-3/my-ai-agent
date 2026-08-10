@@ -51,5 +51,7 @@
 - 2026-08-10：第十二课已交付（用户选「先调度优化」）：homework/0011_scheduler.py 并行调度（Send API fan-out/fan-in）；意图识别加 subtasks 多意图拆分；collected 归约器解决并行写冲突；实测 4/4（单意图回归 + 双意图并行×2 + 边界）；**加分项 B 完成**（动态路由+并行+先收集信息）；README 已更新（§5 目录/§6.7/案例四/加分项 B ✅）；LR-0013 已写；lesson 0012 已开；术语表待补「Send/并行调度」
 - 2026-08-10：第十三课已交付（用户选「类型检查警告优化」）：uv add --dev mypy + pyproject 配置；22 警告→0（真 Bug×1：0006 import 已改名的 add_preference 导致 ImportError；防御改进×4；变量注解×6；库噪音 call-overload 配置级关闭+jieba 单处 ignore）；0006 修复后回归、0010/0011 回归全绿；README §2/§6.8/§9 已更新；LR-0014 已写；lesson 0013 已开
 - 2026-08-10：第十三课补充（用户追问「不必要的 type ignore 去掉了没」）：21 处 ignore 清理→仅剩 1 处（jieba import-untyped，必要且带理由）；全部用真实代码替代——assert isinstance 收窄结构化输出（0003/0004/0005/0006/0010/0011）、_load 加 spec None 检查（0010 同步 0011）、常驻城市 hc 变量收窄 Optional；mypy 仍 0 警告；回归全绿（0005/0003 冒烟、0010 全量 7 用例、0011 并行）
-- 学生待办：0013 任务（mypy 确认+故意改回体验）、0012 三意图并行、README 过目+录屏
+- 2026-08-10：第十四课已交付（用户问「加分项 C 可行吗」→ 详细讲方案 → 先提交 git ba6ad56 再动手）：plugins/ 三插件（policy/weather/stats）+ homework/plugin_registry.py（discover/AST 元数据/load_plugin）+ 0012_plugin.py（插件式主管四幕演示）；热插拔演示成功（运行中新增插件主管自动认识新意图）；踩坑：@tool 后取 .func、return 换行拼接需括号；mypy homework+plugins 16 文件 0 错误；**加分项 C 完成**；README §2/§6.9/目录/§9 已更新；LR-0015 已写；lesson 0014 已开；术语表补「插件化」；插件化成果待 git 提交
+- 加分项全景：A ✅ 两层记忆｜B ✅ 调度优化｜C ✅ 插件化｜D ◐（+mypy 0）｜E ◐｜F ✖
+- 学生待办：0014 任务（写第 5 个插件测热插拔）、0013/0012 任务、README 过目+录屏
 - 候选：行程校验层、sqlite、演示录屏收尾、打包提交

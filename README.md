@@ -27,6 +27,7 @@
 | 联网数据 | open-meteo（天气/空气质量）、exchangerate-api（汇率） | 免费公开 API，无需 key |
 | 包管理 | uv | 依赖锁定（pyproject.toml + uv.lock） |
 | 类型检查 | mypy（dev 依赖） | 全项目 0 警告（22→0），见 §6.8 |
+| 插件机制 | 自研插件注册中心 | 动态发现/懒加载/渐进式披露（加分项 C），见 §6.9 |
 
 ## 3. 系统架构
 
@@ -96,6 +97,7 @@ python homework/0007_rag.py        # 知识问答（BM25 关键词版）
 python homework/0008_rag_vector.py # 知识问答（向量检索升级版）
 python homework/0009_web.py        # 联网查询（工具调用）
 python homework/0011_scheduler.py  # 调度优化：多请求并行执行
+python homework/0012_plugin.py     # 插件化架构：动态发现/懒加载/热插拔（四幕演示）
 ```
 
 > 首次运行 `0010_system.py` 中知识问答会构建向量索引（一次性，约 386 个文本块），之后复用磁盘索引，秒级返回。
@@ -113,7 +115,14 @@ homework/
   0009_web.py           联网查询（ToolNode + ReAct）
   0010_system.py        ★ 完整系统（6 Worker 全做实）
   0011_scheduler.py     ★ 调度优化（Send 并行执行，复用 0010 worker）
+  0012_plugin.py        ★ 插件化演示（插件式主管 + 四幕：发现/懒加载/热插拔/边界）
+  plugin_registry.py    插件注册中心（discover / AST 元数据 / load_plugin）
   memory_store.py       记忆存储层（短期 + 长期，可替换实现）
+
+plugins/                插件目录（每个插件 = INTENT + DESCRIPTION + run()）
+  policy.py             插件：知识问答（复用 0008 向量 RAG）
+  weather.py            插件：联网查询（复用 0009 天气工具）
+  stats.py              插件：差旅统计（新功能，演示动态发现）
 data/memory.json        记忆数据（自动生成，已 gitignore）
 data/chroma/            向量索引（自动生成，已 gitignore）
 ```
@@ -169,6 +178,10 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 ### 6.8 工程质量：类型检查（mypy）
 
 `uv run mypy homework/` → 0 警告。22 个警告分三类处理：真 Bug（0006 曾 import 已改名的 `add_preference`，一跑就 ImportError——改名后必须全局搜引用+回归）；防御性改进（`raise RuntimeError(...) from last`、importlib spec None 检查、结构化输出断言收窄为模型实例）；库噪音（LangGraph invoke 重载对部分键 State 输入过严 → 配置级关闭 call-overload 并注明理由）。
+
+### 6.9 插件化架构（加分项 C）
+
+子 Agent 支持动态发现机制：① 自动扫描注册——`discover()` 扫描 `plugins/` 目录，每个插件声明 `INTENT + DESCRIPTION + run(query)->str`；② 渐进式披露——意图识别阶段用 **AST 解析**只读插件元数据（不执行模块代码）；③ 懒加载——派发时才 `exec_module` + 缓存。演示四幕：发现（零加载）→ 懒加载（哨兵日志）→ **热插拔**（运行中新增插件，主管自动认识新意图，零代码改动）→ 边界。动态性的代价：意图类别从静态 `Literal` 变为运行时校验。
 
 ## 7. 核心示例（演示三类案例）
 
@@ -240,9 +253,9 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 |---|---|---|
 | A 两层记忆架构 | ✅ 完整 | 短期（最近 6 轮对话注入）+ 长期（偏好/历史/常驻城市）+ **追加/覆盖区分** |
 | B 调度优化 | ✅ 完整 | 按任务类型动态路由 + 多请求 Send 并行执行 + 先收集信息再规划（要素提取） |
-| C 插件化、模块化架构 | ◐ 部分 | Worker 独立文件 + importlib 加载、懒加载不涉及（未用的 Worker 不实例化） |
+| C 插件化、模块化架构 | ✅ 完整 | 插件注册中心：动态发现（目录扫描）+ 渐进式披露（AST 元数据）+ 懒加载 + 热插拔演示 |
 | D 工程稳定性 | ◐ 部分 | 网络重试+降级（_get_json）、结构化输出兜底方案、异常文案友好、**mypy 类型检查 0 警告** |
-| E 评测与测试 | ◐ 部分 | 每课独立测试用例（意图路由 8/8、知识问答 6/6、联网 5/5、端到端 7/7、并行调度 4/4），见各 homework 文件 |
+| E 评测与测试 | ◐ 部分 | 每课独立测试用例（意图路由 8/8、知识问答 6/6、联网 5/5、端到端 7/7、并行调度 4/4、插件演示 4/4），见各 homework 文件 |
 | F 可视化界面 | ✖ 未做 | 留作后续优化（当前为终端交互） |
 
 ## 10. 已知问题或后续优化方向
