@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第五课：行程规划工人做实——两阶段管线</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="lesson-head">
+  <p class="lesson-kicker">Lesson 5 / 行程规划（基础项 A）</p>
+  <h1>把「行程规划」工人做实：两阶段管线</h1>
+  <p class="lesson-sub">这是你作业的评分核心——价值产出者。做完这课，你的系统第一次给出真正有用的答案。</p>
+</header>
+
+<div class="box">
+  <p class="box-title">和你的使命的关系</p>
+  <p>第一课我们纠正过一个误区：<strong>行程规划 Agent 是核心价值产出者，不能用程序替代</strong>。第四课的桩节点只是占位；这一课把它做实——用户说一句差旅需求，系统真的排出一份行程。你离「能演示 3 类案例」又近了一大步。</p>
+</div>
+
+<h2>架构：worker 内部也是一条流水线</h2>
+
+<pre><code>用户原话
+  │  ① 要素提取（LLM，结构化输出）
+  ▼
+TripRequest { 出发地 / 目的地 / 日期 / 天数 / 住宿偏好 / 预算 }
+  │  ② 行程生成（LLM，结构化输出）
+  ▼
+ItineraryPlan { 逐日安排（交通/住宿/活动/备注）+ 总结 }
+  │  格式化
+  ▼
+用户可读的行程文本</code></pre>
+
+<p>注意：作业把「要素提取」列为独立 Agent。我们<b>先做在 worker 内部</b>——它和行程生成是一对强耦合的步骤，拆出去只会徒增上下文搬运（第一课教训）。等以后要素提取真的要被别的 Agent 复用，再拆成独立节点/Agent 也不迟（这就是「深模块」：先做内聚，再考虑拆）。</p>
+
+<h2>核心代码（已实测，两段行程都合理）</h2>
+
+<h3>① 两阶段各自的 schema 和提示词</h3>
+
+<pre><code>class TripRequest(BaseModel):
+    from_city: str; to_city: str
+    start_date: str          # 没给日期 → 模型填"待定"
+    duration_days: int
+    hotel_pref: str          # 没有 → "无"
+    budget_pref: str         # 没有 → "中等"
+
+class ItineraryPlan(BaseModel):
+    days: list[DayPlan]      # 每项：date/transport/hotel/activities/notes
+    summary: str             # 给用户看的中文总结</code></pre>
+
+<p>两段都用 <code>method="json_mode"</code> + 键名写死 + 花括号转义——第三课攒下的可用配置直接复用。<b>这就是做课程的好处：工具沉淀成模板，后面每个 Agent 都用同一套。</b></p>
+
+<h3>② 一个容易踩的坑：prompt | model 组合</h3>
+
+<pre><code># ❌ 分开定义后直接 invoke dict——报错 Invalid input type
+extract_model = llm.with_structured_output(TripRequest, method="json_mode")
+extract_model.invoke({"input": ...})   # 裸模型不认 dict！
+
+# ✅ 必须组合成链
+extract_model = extract_prompt | llm.with_structured_output(TripRequest, method="json_mode")
+extract_model.invoke({"input": ...})   # prompt 链才认 {"input": ...}</code></pre>
+
+<p>这个 bug 我写示例代码时当场踩过。记住：<code>with_structured_output</code> 之前要先接一个 prompt（或用别的方式把消息准备好）。</p>
+
+<h3>③ worker 节点：两次 LLM 调用串起来</h3>
+
+<pre><code>def itinerary(state):
+    req = extract_model.invoke({"input": state["user_input"]})   # ① 提取
+    plan = plan_model.invoke({                                    # ② 生成
+        "trip_json": req.model_dump_json(),   # 提取结果作为生成阶段上下文
+        "user_input": state["user_input"],
+    })
+    return {"answer": format_plan(plan)}      # 返回用户可读文本</code></pre>
+
+<p>注意返回值：worker 写给用户的是<b>格式化文本</b>（<code>format_plan</code>），不是 JSON。JSON 是内部管道语言，用户看到的是人话。</p>
+
+<div class="box warn">
+  <p class="box-title">诚实的质量声明</p>
+  <p>模型排出的班次号（如「G31 次 08:30」）是<b>参考方案</b>，不是真实可预订班次——它会根据常识编造。真实产品里，行程生成后要接<b>校验层</b>：查差旅政策（RAG）、查实时班次（ToolNode/联网）。这正是你作业「加分项」的落点，也是后面课程的内容。现在先别让它骗了你自己：演示时可以说「这是参考行程」。</p>
+</div>
+
+<h2>练一练</h2>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">1. 行程规划 worker 内部的两阶段是？</p>
+  <button class="quiz-opt" data-correct="true">提取+生成</button>
+  <button class="quiz-opt" data-correct="false">分类+调度</button>
+  <button class="quiz-opt" data-correct="false">检索+排序</button>
+  <button class="quiz-opt" data-correct="false">记忆+回复</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">2. 两阶段之间传什么？</p>
+  <button class="quiz-opt" data-correct="true">结构化要素</button>
+  <button class="quiz-opt" data-correct="false">原始文本</button>
+  <button class="quiz-opt" data-correct="false">用户编号</button>
+  <button class="quiz-opt" data-correct="false">空值</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">3. 提示词里为什么要写死键名？</p>
+  <button class="quiz-opt" data-correct="true">保证键正确</button>
+  <button class="quiz-opt" data-correct="false">加快推理</button>
+  <button class="quiz-opt" data-correct="false">减少成本</button>
+  <button class="quiz-opt" data-correct="false">无需原因</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">4. 行程里的班次号（如 G31）该当什么？</p>
+  <button class="quiz-opt" data-correct="true">参考方案</button>
+  <button class="quiz-opt" data-correct="false">真实预订</button>
+  <button class="quiz-opt" data-correct="false">政策依据</button>
+  <button class="quiz-opt" data-correct="false">无需确认</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="box good">
+  <p class="box-title">动手任务（本课战利品 = 基础项 A 核心）</p>
+  <p>① 跑一遍 <code>python homework/0005_itinerary.py</code>，看两段行程<br>
+  ② 换 <strong>2 句你自己的差旅需求</strong>：不同目的地、天数、预算偏好（比如「10月8日从广州到北京开会4天，住经济型」）<br>
+  ③ 故意给一句模糊的：「我下周出差」——看要素提取怎么处理缺项（start_date 填什么？duration_days 填什么？）<br>
+  ④ 把 ②③ 的输出贴回来<br><br>
+  卡住 10 分钟就来问。</p>
+</div>
+
+<h2>进阶阅读（第一手来源）</h2>
+
+<p><a href="https://docs.langchain.com/oss/python/langgraph/graph-api">LangGraph Graph API</a>（节点/状态）；第三课笔记里的 <code>with_structured_output</code> 用法（langchain-openai 1.4.2 的 json_mode）。</p>
+
+<div class="box good">
+  <p class="box-title">有任何不清楚的地方，直接问我</p>
+  <p>要素提取缺项处理不满意？行程生成质量怪？贴输入输出给我。</p>
+</div>
+
+<footer>
+  <p><a href="../reference/langgraph-cheatsheet.html">LangGraph 速查表</a> · <a href="../reference/glossary.html">术语表</a> · <a href="../MISSION.md">使命</a> · 课程 0005</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

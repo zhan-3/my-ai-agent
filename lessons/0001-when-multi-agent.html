@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第一课：什么时候才需要多 Agent？</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="lesson-head">
+  <p class="lesson-kicker">Lesson 1 / 多 Agent 设计</p>
+  <h1>什么时候才需要多 Agent？</h1>
+  <p class="lesson-sub">核心问题：你的作业清单上列了 8 个角色——它们真的都该存在吗？（基础项其实只要 5 个以上）</p>
+</header>
+
+<div class="box">
+  <p class="box-title">和你的使命的关系</p>
+  <p>你要学会的是<b>设计</b>多 Agent 系统。设计的第一件事不是"怎么搭"，而是<b>判断要不要拆</b>。这一课给你一把尺子——用三个条件去量你的差旅助手，每个角色能不能站住脚，一量便知。</p>
+</div>
+
+<h2>先记住一个反直觉的事实</h2>
+
+<p>多 Agent 不是"更高级"，而是"更贵"。<a href="https://claude.com/blog/building-multi-agent-systems-when-and-how-to-use-them">Anthropic 的实测</a>显示：多 Agent 实现通常比单 Agent 方案多花 <strong>3–10 倍 token</strong>——上下文在多个 Agent 间复制、Agent 之间的协调消息、交接时的总结，都在烧钱。</p>
+
+<blockquote class="box warn">
+  <p class="box-title">血泪教训（原文引述）</p>
+  <p>Anthropic 见过团队花几个月搭出精巧的多 Agent 架构，最后发现<strong>改进单 Agent 的提示词就达到了同样效果</strong>。</p>
+</blockquote>
+
+<p>所以官方建议的第一原则是：<a href="https://www.anthropic.com/engineering/building-effective-agents">"从最简单能用的方案开始，只有证据支持时才增加复杂度"</a>。<b>拆 Agent 必须有理由，而且必须是它解决不了的真实约束。</b></p>
+
+<h2>三个"值得拆"的条件</h2>
+
+<p>Anthropic 在多篇官方文章中反复确认：多 Agent 只在三种情况下稳定胜过单 Agent。</p>
+
+<div class="cards">
+  <div class="card">
+    <p class="card-no">条件 ①</p>
+    <h4>上下文污染</h4>
+    <p>子任务产生大量高体积、但大部分与主任务无关的上下文，挤爆主上下文、拖垮推理。隔离出去，让它自己处理完再回报一个小结果。</p>
+  </div>
+  <div class="card">
+    <p class="card-no">条件 ②</p>
+    <h4>并行化</h4>
+    <p>任务可以并行，需要覆盖更大的搜索空间。注意：好处是<b>更全面</b>，不是更快——总时间通常反而更长。</p>
+  </div>
+  <div class="card">
+    <p class="card-no">条件 ③</p>
+    <h4>专门化</h4>
+    <p>工具超过约 20 个时选择退化；行为模式互相冲突（客服要耐心、审查要挑剔）；领域知识太多会压垮通用 Agent。</p>
+  </div>
+</div>
+
+<h3>把三条件变成决策框架</h3>
+
+<ol>
+  <li><strong>存在真实约束吗？</strong> 上下文受限、可并行、需要专门化——三条里至少一条成立，才谈得上拆。</li>
+  <li><strong>按"上下文"拆，不是按"任务类型"拆。</strong> 原文原话："分组依据是任务需要什么上下文，而不是任务是什么类型。"（<a href="https://claude.com/blog/building-multi-agent-systems-when-and-how-to-use-them">Anthropic</a>）</li>
+  <li><strong>有清晰的验证点吗？</strong> 子 Agent 能在不搬走全部上下文的情况下交付可验证的结果。</li>
+</ol>
+
+<p>术语对照：一个中心 Agent 负责拆任务、派人、汇总，就是 <strong>编排者-工人（orchestrator-workers）</strong>模式，也叫 <strong>主管（supervisor）</strong>模式——你的作业里，这就是"调度 Agent"。见<a href="../reference/glossary.html">术语表</a>。</p>
+
+<h2>练一练</h2>
+
+<p>第一组：概念检查。每道题先凭记忆答，再看解析。</p>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">1. 多 Agent 系统平均比单 Agent 多花多少 token？</p>
+  <button class="quiz-opt" data-correct="false">一倍左右</button>
+  <button class="quiz-opt" data-correct="true">三到十倍</button>
+  <button class="quiz-opt" data-correct="false">没有差异</button>
+  <button class="quiz-opt" data-correct="false">无法比较</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">2. 下列哪项是「值得拆成多 Agent」的正当理由？</p>
+  <button class="quiz-opt" data-correct="false">代码更美观</button>
+  <button class="quiz-opt" data-correct="false">模型能力弱</button>
+  <button class="quiz-opt" data-correct="false">用户数量多</button>
+  <button class="quiz-opt" data-correct="true">上下文污染</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">3. 工具太多会拖累工具选择，通常达到多少？</p>
+  <button class="quiz-opt" data-correct="true">二十个以上</button>
+  <button class="quiz-opt" data-correct="false">十个左右</button>
+  <button class="quiz-opt" data-correct="false">两个左右</button>
+  <button class="quiz-opt" data-correct="false">零个也可</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">4. 拆 Agent 时，应主要按什么分组？</p>
+  <button class="quiz-opt" data-correct="false">按任务类型</button>
+  <button class="quiz-opt" data-correct="true">按所需上下文</button>
+  <button class="quiz-opt" data-correct="false">按人数数量</button>
+  <button class="quiz-opt" data-correct="false">按代码目录</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="box good">
+  <p class="box-title">第二组：真实设计练习（本次的"战利品"）</p>
+  <p>作业全文给了 8 个角色（基础项要求至少 5 个，最低建议：意图识别 + 调度 + 要素提取 + 知识/RAG + 行程规划）。对每个角色写出两句话：<br>
+  ① 三个条件里，哪个为它站台？为什么？<br>
+  ② 如果站不住，你会怎么处理——合并？降级成工具？</p>
+</div>
+
+<table style="width:100%; border-collapse:collapse; font-size:.92rem;">
+  <thead>
+    <tr style="border-bottom:2px solid var(--ink); text-align:left;">
+      <th style="padding:.4rem;">作业角色</th>
+      <th style="padding:.4rem;">我的判断（先自己写，再展开对照）</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr style="border-bottom:1px solid var(--line);"><td style="padding:.4rem;">意图识别 Intention</td><td style="padding:.4rem;"></td></tr>
+    <tr style="border-bottom:1px solid var(--line);"><td style="padding:.4rem;">调度 Orchestration</td><td style="padding:.4rem;"></td></tr>
+    <tr style="border-bottom:1px solid var(--line);"><td style="padding:.4rem;">要素提取 Event Collection</td><td style="padding:.4rem;"></td></tr>
+    <tr style="border-bottom:1px solid var(--line);"><td style="padding:.4rem;">偏好 Preference</td><td style="padding:.4rem;"></td></tr>
+    <tr style="border-bottom:1px solid var(--line);"><td style="padding:.4rem;">记忆查询 Memory Query</td><td style="padding:.4rem;"></td></tr>
+    <tr style="border-bottom:1px solid var(--line);"><td style="padding:.4rem;">知识 / RAG</td><td style="padding:.4rem;"></td></tr>
+    <tr style="border-bottom:1px solid var(--line);"><td style="padding:.4rem;">联网查询 Information Query</td><td style="padding:.4rem;"></td></tr>
+    <tr><td style="padding:.4rem;">行程规划 Itinerary Planning</td><td style="padding:.4rem;"></td></tr>
+  </tbody>
+</table>
+
+<details>
+  <summary>参考答案（写完再展开）</summary>
+  <p><strong>调度 Orchestration</strong> —— 不用辩护：它就是编排者-工人模式里的"编排者"，是整个架构的骨架，不是可拆可不拆的部分。</p>
+  <p><strong>记忆查询 / 知识 RAG</strong> —— <b>上下文污染</b>站台：检索结果是典型的高体积、大部分与主问题无关的上下文，隔离出去最划算。这是全作业里最站得住的两个角色。</p>
+  <p><strong>意图识别 Intention</strong> —— <b>系统提示专门化</b>站台：分类需要单一、严格的指令模式。但它和调度有重叠风险——意图识别只回答"用户想要什么"，调度回答"流程怎么走"，边界要划清。</p>
+  <p><strong>要素提取 Event Collection</strong> —— <b>上下文隔离</b>勉强站台：输出是结构化小结果。但它很可能被调度 Agent 的一个工具替代，先做工具，出现污染再升格。</p>
+  <p><strong>偏好 Preference</strong> —— 基本站不住：本质是一次读写偏好存储。先做成函数/工具，别急着独立成 Agent。</p>
+  <p><strong>联网查询 Information Query</strong> —— <b>专门化（工具集）</b>勉强站台：联网/天气/交通是一组清晰的工具。但它很可能只是"调度 Agent 的一堆工具"——先把查询做成工具，等工具超过约 20 个再拆出来独立。</p>
+  <p><strong>行程规划 Itinerary Planning</strong> —— <b>专门化（领域知识 + 结构化输出）</b>稳稳站台：它要生成结构化行程、引用差旅政策依据，是作业评分重点（结果可读性、设计合理性），而且是<b>基础项最低建议之一</b>——必须保留，别合并。</p>
+  <p><strong>合并建议</strong>：基础项只要求 5 个以上。偏好 + 记忆查询 + 知识 RAG 三个"检索记忆类"可以先合并成一个 Agent（内部用工具路由），等真出现上下文污染再拆；联网查询先做工具。你的"最低配置"可以是：意图识别 + 调度 + 要素提取（可并入调度）+ 检索记忆 Agent + 行程规划。这个练习训练的是你的设计判断力——每个角色你都要能说出它存在的理由。</p>
+</details>
+
+<h2>读完这一课，你带走了什么</h2>
+
+<ul>
+  <li>一把尺子：<strong>上下文污染 / 并行化 / 专门化</strong>，三个条件缺一不可谈拆分</li>
+  <li>一条铁律：<strong>从最简单的方案开始</strong>，多 Agent 是 3–10 倍 token 的昂贵选择</li>
+  <li>一个立刻能用的输出：对作业 8 个角色的"辩护词"或"合并提议"</li>
+</ul>
+
+<h2>进阶阅读（第一手来源）</h2>
+
+<p>本课知识全部来自这篇，建议精读（英文，可配翻译）：<br>
+<a href="https://claude.com/blog/building-multi-agent-systems-when-and-how-to-use-them">Anthropic: Building multi-agent systems — When and how to use them</a></p>
+
+<div class="box good">
+  <p class="box-title">有任何不清楚的地方，直接问我</p>
+  <p>我是你的老师。对"上下文污染"没感觉？对哪个角色该不该拆拿不准？把问题丢给我，我会用这套词汇给你讲透。</p>
+</div>
+
+<footer>
+  <p><a href="../reference/glossary.html">术语表</a> · <a href="../MISSION.md">使命</a> · 课程 0001</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

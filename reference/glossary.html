@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>术语表 · 多 Agent 系统</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="lesson-head">
+  <p class="lesson-kicker">Reference · 术语表</p>
+  <h1>多 Agent 系统 · 术语表</h1>
+  <p class="lesson-sub">所有课程遵守这套词汇。增补新词时保持格式。</p>
+</header>
+
+<p><strong>Agent（智能体）</strong> —— 一个 LLM 实例 + 工具 + 执行循环，能自主决定如何完成一个任务。区别于只"回答问题"的模型底座。</p>
+
+<p><strong>多 Agent 系统（Multi-Agent System）</strong> —— 多个 LLM 实例、各自独立的对话上下文，通过<strong>代码</strong>协调协作的架构。每个 Agent 负责任务的一个切片。来源：<a href="https://claude.com/blog/building-multi-agent-systems-when-and-how-to-use-them">Anthropic, When and how to use them</a>。</p>
+
+<p><strong>工作流（Workflow）</strong> —— LLM 和工具通过<strong>预先定义的代码路径</strong>编排的系统；流程固定，模型不控制路径。来源：<a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic, Building Effective Agents</a>。</p>
+
+<p><strong>主管（Supervisor）</strong> —— 一种多 Agent 模式：一个中心 Agent 决定"下一步交给谁"，其余 Agent 是被它调度的工人。等价于编排者-工人模式。</p>
+
+<p><strong>编排者-工人（Orchestrator-Workers）</strong> —— 中心 LLM 动态拆解任务、委派给工人 LLM、汇总结果的模式。适合"无法预判子任务"的复杂任务。来源：Anthropic, Building Effective Agents。</p>
+
+<p><strong>上下文污染（Context Pollution）</strong> —— 子任务产生大量高体积但大多与主任务无关的上下文，挤占主上下文、拖累推理质量。这是拆 Agent 的第一正当理由。</p>
+
+<p><strong>并行化（Parallelization）</strong> —— 多个 Agent 并行探索更大搜索空间。好处是<strong>全面性</strong>（thoroughness），不是速度——总 token 和时间通常更多。</p>
+
+<p><strong>专门化（Specialization）</strong> —— 不同任务配不同工具集 / 系统提示 / 领域知识。信号：工具超过约 20 个时选择退化；行为模式互相冲突时。</p>
+
+<p><strong>工具（Tool）</strong> —— Agent 可以调用的外部能力（函数调用、检索、查库）。工具是给"大脑"装上的"手脚"。</p>
+
+<p><strong>RAG（检索增强生成，Retrieval-Augmented Generation）</strong> —— 先从知识库检索相关内容，再交给模型生成的模式。作业里回答差旅政策问题用它。</p>
+
+<p><strong>状态（State）</strong> —— LangGraph 图里所有节点共享的数据结构（TypedDict）。每个 key 有独立的 reducer 决定如何应用更新。来源：<a href="https://docs.langchain.com/oss/python/langgraph/graph-api">LangGraph Graph API 文档</a>。</p>
+
+<p><strong>节点（Node）</strong> —— 图里的一个普通 Python 函数：接收当前 state，做计算或副作用，返回<strong>部分状态更新</strong>。可以含 LLM，也可以只有纯代码。</p>
+
+<p><strong>边（Edge）</strong> —— 决定下一步执行哪个节点：<code>add_edge</code> 固定跳转，<code>add_conditional_edges</code> 用路由函数根据 state 决定去向。入口是虚拟节点 START，出口是 END。</p>
+
+<p><strong>归约器（Reducer）</strong> —— 定义某个 state key 的更新方式。默认 reducer 是「覆盖旧值」；消息列表用 <code>add_messages</code> 做追加。</p>
+
+<p><strong>ToolNode</strong> —— langgraph.prebuilt 提供的预制节点，负责执行模型发起的工具调用（含并行执行与错误处理）。标准 ReAct 场景官方推荐直接用 <code>create_agent</code>。我们第九课手写：条件边判断最后一条消息有 tool_calls → 进 ToolNode；否则结束。</p>
+
+<p><strong>工具调用（Tool Calling / Function Calling）</strong> —— LLM 在回答时自主决定调用外部函数的机制：模型输出结构化指令（用哪个工具、传什么参数），由宿主程序执行并把结果回填，形成 ReAct 循环。步骤：@tool 定义（docstring 是给 LLM 的说明书）→ bind_tools 挂载 → ToolNode 执行。需要模型支持（v4-flash tools+auto ✅ / 强制 tool_choice ❌）。</p>
+
+<p><strong>ReAct 循环</strong> —— 模型思考 → 决定调用工具 → ToolNode 执行 → 结果回填 → 模型再思考，直到模型认为完成。是多 Agent 里每个子 Agent 内部的基本循环。</p>
+
+<p><strong>上下文（Context）</strong> —— 模型一次推理能看到的全部信息（对话历史、工具结果、系统提示）。多 Agent 设计的核心维度。</p>
+
+<p><strong>桩（Stub）</strong> —— 先返回占位结果的节点/函数，不接真逻辑，用来验证架构骨架（路由、state 传递）是否正确。骨架跑通后再逐个「做实」。工程上叫先桩后实。</p>
+
+<p><strong>要素提取（Event Collection）</strong> —— 从用户输入中结构化抽取任务要素（出发地、目的地、日期、天数、偏好等）。作业里是独立角色；本课程先做在行程规划 worker 内部（深模块：内聚优先，需要复用再拆）。</p>
+
+<p><strong>记忆（Memory）</strong> —— 系统的长期状态：用户偏好、历史行程等跨对话保留的数据。写入（偏好落库、行程归档）与读取（历史查询、生成时注入偏好）构成记忆闭环。真实产品用数据库/向量库 + user_id 隔离；本课程先用 JSON 文件演示概念。</p>
+
+<p><strong>结构漂移（Schema Drift）</strong> —— json_mode 等宽松结构化输出下，模型因上下文/发挥变化而改变输出结构（如字段变成嵌套对象），导致解析失败。对策：提示词钉死字段形状 + 上下文变更后重新验证。</p>
+
+<p><strong>分块（Chunking）</strong> —— RAG 中把长文档切成检索单元的步骤。分块策略直接决定检索质量：标题要和内容同块（纯标题短块会被 BM25 优待但无信息量）；块长需要平衡（太碎丢上下文，太大撑爆提示词）。</p>
+
+<p><strong>BM25</strong> —— 经典关键词检索打分算法（Elasticsearch 默认）。三个升级 vs 简单词频：词频归一化（短块不吃亏）、IDF（惩罚常见词、突出独特词）、块长归一化（长块不占便宜）。</p>
+
+<p><strong>查询改写（Query Rewriting）</strong> —— RAG 工程手法：用 LLM 把用户问句改写成检索关键词（含同义词），弥合「问法」与「文档用词」的差异。如「多长时间内提交」→「时限 天数 期限」。向量检索下通常不再需要（embedding 天然懂语义）。</p>
+
+<p><strong>短期记忆（Short-term / Working Memory）</strong> —— 单个会话（thread）内的消息历史，随会话走。LangGraph 官方用 checkpointer 持久化、thread ID 隔离恢复；我们手写 JSON 版。关键：注入要截断最近 N 轮（hot path 权衡），别把完整长历史全塞上下文（超窗口/干扰/变慢变贵）。</p>
+
+<p><strong>长期记忆（Long-term Memory）</strong> —— 跨会话/跨线程共享，随时可召回：用户偏好、历史行程、常驻城市、出差习惯。官方用 store（namespace/key 组织 JSON + 语义搜索）；我们存 JSON 文件。管理方式分 Profile（单文档持续更新）和 Collection（窄记忆集合）。</p>
+
+<p><strong>追加/覆盖（Append vs Update）</strong> —— 记忆写入语义区分：「我喜欢住汉庭」是新增（追加）；「我现在常住上海」是更新（覆盖同类别旧条目）。用 is_update 标记，防止记忆无限膨胀和冲突。</p>
+
+<p><strong>Hot Path</strong> —— 在 agent 每次运行的推理路径上做记忆检索/写入。优点是实时、透明；代价是增加延迟、token 成本和复杂度。工程建议：检索克制（截断）、写入可选 background（异步、定时）分离主链路。</p>
+
+<p><strong>总装（Assembly / Integration）</strong> —— 多 Agent 系统开发后期把各 worker 模块组合成完整系统的过程。要点：①每个 worker 独立验证过；②接口契约统一（如统一「输入 state → 输出 answer」）；③总装文件只做「导入 + 挂图」，拓扑稳定、worker 可逐个替换。</p>
+
+<p><strong>向量检索（Vector Retrieval）</strong> —— embedding 把文本映射为向量，语义相近的文本向量方向接近，用余弦相似度检索。相比关键词检索能理解语义（「延长出差时间」≠「长时间不用电脑」），但依赖 embedding API/模型且命中不可解释。真实产品常做关键词+向量混合检索。</p>
+
+<p><strong>向量数据库（Vector Database）</strong> —— 专门存向量并提供相似度检索的系统。嵌入式代表 chromadb（磁盘持久化、HNSW 近似最近邻、元数据过滤）；分布式代表 milvus/qdrant。相比 numpy 数组：持久化、标准 API、可增删改。</p>
+
+<p><strong>embedding（嵌入）</strong> —— 把文本/词映射成稠密向量的过程。模型在海量语料中学习「语义相近的文本向量接近」。本课程用阿里 text-embedding-v3（1024 维）。</p>
+
+<footer>
+  <p>本表由教学工作区维护。词条定义有出处时一律附来源链接。</p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第七课：知识问答（RAG）——让系统查资料回答政策问题</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="lesson-head">
+  <p class="lesson-kicker">Lesson 7 / 知识问答（基础项）</p>
+  <h1>RAG：让系统「查资料」回答政策问题</h1>
+  <p class="lesson-sub">用户问「报销要在多长时间内提交」，系统真的从政策文档里检索出「30 个自然日」并引用回答。这是作业基础项的核心能力。</p>
+</header>
+
+<div class="box">
+  <p class="box-title">和你的使命的关系</p>
+  <p>作业要求系统能回答企业差旅政策问题（报销、预订、标准、紧急情况）。知识库是 <code>docs/documents/</code> 下的 8 份文档，共约 2.7 万字——<b>塞不进上下文，也不能让模型瞎编</b>，所以必须检索：只把相关片段给模型。这就是 RAG。</p>
+</div>
+
+<h2>RAG 四步</h2>
+
+<pre><code>① 索引构建（一次性）：8 份文档 → 分块(chunk) → 每块建词频索引
+② 检索：问题 → 分词 → BM25 打分 → 相关 top-k 块
+③ 增强：把命中的块拼进提示词（带来源标注）
+④ 生成：LLM 只依据给定资料回答；资料没有就明说</code></pre>
+
+<p>真实产品用<b>向量检索</b>（embedding + 相似度）。你的中转站不支持 embedding（实测 404），所以本课用<b>关键词检索（BM25）</b>——教学上反而更清晰：检索机制看得见摸得着，且「索引与查询分离」的思路完全一致。</p>
+
+<h2>本课最宝贵的部分：4 轮调试，每轮一个真问题</h2>
+
+<h3>第 1 轮：简单词频打分 → 短块吃亏，长文霸榜</h3>
+<p>「报销」在 04_faq 的大段落里出现 5-6 次，压过了 02 文档里真正写着「30 个自然日」的小块。升级 <b>BM25</b>（搜索引擎 Elasticsearch 的标准算法），三个升级：</p>
+<ul>
+  <li><b>词频归一化</b>：短块不吃亏</li>
+  <li><b>IDF</b>：惩罚「报销」这种到处都有的词，突出「时限」这种独特词</li>
+  <li><b>块长归一化</b>：长块不占便宜</li>
+</ul>
+
+<h3>第 2 轮：分块策略——标题和内容要同块</h3>
+<p>「三、住宿标准」是 8 字的纯标题块，被块长归一化优待，压过了真正含「500 元/晚」的内容块 → 模型拿到空标题，说「内容为空」。修复：<b>短块与下一块合并</b>（标题+内容进同一块）。<b>分块（chunking）直接决定检索质量</b>，这是 RAG 工程的基本功。</p>
+
+<h3>第 3 轮：停用词 bug + 来源去重</h3>
+<pre><code>STOPWORDS = set("了在是要…")      # ❌ 这是字符集合！
+'什么'、'应该' 这些【词】根本没被过滤
+STOPWORDS = set("…什么 应该 多长…".split())   # ✅ 按词定义</code></pre>
+<p>这个 bug 让「无论遇到<b>什么</b>紧急情况」的环保文档躺枪。另外加了<b>来源去重</b>（同一文档最多取 3 块），否则一个文档霸占全部名额。</p>
+
+<h3>第 4 轮：查询改写——问法与文档用词对不上</h3>
+<p>用户问「报销要在<b>多长时间内</b>提交」，文档写「30 个<b>自然日</b>内/时<b>限</b>」——关键词一个都对不上。解法是 <b>Query Rewriting</b>：用 LLM 把问句改写成检索关键词（含同义词）：</p>
+<pre><code>"报销要在多长时间内提交" → "发票 提交 时限 天数 期限"</code></pre>
+<p>改完后命中 02 文档「常规报销时限」块，答出 30 个自然日 + 一周内 + 逾期处理，完整准确。</p>
+
+<div class="box warn">
+  <p class="box-title">诚实的质量声明：关键词检索的语义天花板</p>
+  <p>「临时需要延长出差<b>时间</b>」的问题因为含「时间」一词得分反超「30 个自然日」——<b>关键词匹配不了语义</b>。向量检索（embedding 相似度）+ 重排（rerank）能解决；你的中转站当前不支持，写作业文档时把这个「为什么先用关键词、升级路径是什么」讲清楚，是加分项。</p>
+</div>
+
+<h2>核心代码</h2>
+
+<pre><code>def build_bm25(chunks):          # 索引构建：每块词频表 + 全局文档频率 df
+def bm25(query, chunks, tf_list, df, N):   # 打分：IDF × 词频归一化 × 块长归一化
+def knowledge_qa(query):
+    q = rewrite_model.invoke({"query": query}).content   # ① 查询改写
+    hits = bm25(q, ...)                                  # ② 检索
+    context = "".join(f"--- 来源 {stem} ---\n{text}" ...) # ③ 增强
+    return llm.invoke({"context": context, "query": query})  # ④ 生成</code></pre>
+
+<p>注意：知识问答节点输出<b>用户可读文本</b>，不需要 json_mode——不是所有节点都要结构化输出（第三课说的：按需使用）。</p>
+
+<h2>练一练</h2>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">1. RAG 的 R（Retrieve）指的是？</p>
+  <button class="quiz-opt" data-correct="true">检索相关片段</button>
+  <button class="quiz-opt" data-correct="false">重写问题</button>
+  <button class="quiz-opt" data-correct="false">回复用户</button>
+  <button class="quiz-opt" data-correct="false">记录日志</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">2. 为什么不能把 8 份文档全塞进上下文？</p>
+  <button class="quiz-opt" data-correct="true">太长且噪音多</button>
+  <button class="quiz-opt" data-correct="false">检索更快</button>
+  <button class="quiz-opt" data-correct="false">答案更准</button>
+  <button class="quiz-opt" data-correct="false">无需原因</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">3. BM25 比简单词频打分强在哪？</p>
+  <button class="quiz-opt" data-correct="true">IDF 惩罚常见词</button>
+  <button class="quiz-opt" data-correct="false">速度更快</button>
+  <button class="quiz-opt" data-correct="false">代码更短</button>
+  <button class="quiz-opt" data-correct="false">支持图片</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">4. 用户问「多长时间」文档写「时限」，检索不到，解法是？</p>
+  <button class="quiz-opt" data-correct="true">查询改写</button>
+  <button class="quiz-opt" data-correct="false">加大 k</button>
+  <button class="quiz-opt" data-correct="false">换模型</button>
+  <button class="quiz-opt" data-correct="false">重训</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="box good">
+  <p class="box-title">动手任务（本课战利品 = 政策问答能力）</p>
+  <p>① 跑一遍 <code>python homework/0007_rag.py</code>，注意看每题的「检索词」和「命中来源」<br>
+  ② 问 <strong>2 个你自己的政策问题</strong>（比如「机票要提前几天订？」「住宿超标怎么办？」）<br>
+  ③ 挑战一个<b>文档里没有</b>的问题（比如「出差可以带宠物吗？」）——看它是否诚实说「资料中没有提到」而不是瞎编<br>
+  ④ 把 ②③ 的输出贴回来（含检索词和命中源）<br><br>
+  卡住 10 分钟就来问。</p>
+</div>
+
+<h2>进阶阅读（第一手来源）</h2>
+
+<p><a href="https://docs.langchain.com/oss/python/langchain/how_to/retrieval">LangChain 检索文档</a>；BM25 算法细节可查维基 <a href="https://en.wikipedia.org/wiki/Okapi_BM25">Okapi BM25</a>；Anthropic 的 <a href="https://www.anthropic.com/engineering/building-effective-agents">Building Effective Agents</a> 里也有检索/上下文管理章节。</p>
+
+<div class="box good">
+  <p class="box-title">有任何不清楚的地方，直接问我</p>
+  <p>检索词不理想？命中源不对？贴问题给我看。</p>
+</div>
+
+<footer>
+  <p><a href="../reference/langgraph-cheatsheet.html">LangGraph 速查表</a> · <a href="../reference/glossary.html">术语表</a> · <a href="../MISSION.md">使命</a> · 课程 0007</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

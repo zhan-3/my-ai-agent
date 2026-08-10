@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LangGraph 速查表</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="lesson-head">
+  <p class="lesson-kicker">Reference · 速查表</p>
+  <h1>LangGraph 五件套速查</h1>
+  <p class="lesson-sub">代码均已在本仓库 venv（langgraph 1.2.10）实测通过。核心心智模型：<strong>节点干活，边决定下一步去哪</strong>。</p>
+</header>
+
+<h2>最小图（纯代码，无 LLM）</h2>
+<pre><code>from typing import TypedDict, Annotated
+from langgraph.graph import StateGraph, START, END, add_messages
+from langchain_core.messages import AnyMessage
+
+class State(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]  # 消息自动追加
+    city: str                                            # 默认：覆盖
+
+def identify(state):      # 节点 = 普通函数：收 state，返回部分更新
+    return {"city": "北京"}
+
+def greet(state):
+    return {"city": state["city"] + "→你好"}
+
+graph = StateGraph(State)
+graph.add_node(identify)        # 不命名 = 默认用函数名
+graph.add_node(greet)
+graph.add_edge(START, "identify")
+graph.add_edge("identify", "greet")
+graph.add_edge("greet", END)
+app = graph.compile()           # 编译：结构检查、checkpointer 挂这里
+result = app.invoke({"messages": [], "city": ""})
+print(result["city"])           # 北京→你好</code></pre>
+
+<h2>条件边（两种写法）</h2>
+<pre><code># 写法一：路由函数直接返回节点名
+graph.add_conditional_edges("classify",
+    lambda s: "beijing" if s["city"] == "北京" else "other")
+
+# 写法二：路由函数返回值 → 映射字典
+graph.add_conditional_edges("classify",
+    lambda s: "A" if s["city"] == "北京" else "B",
+    {"A": "beijing", "B": "other"})</code></pre>
+
+<h2>ReAct 循环骨架（模型 + 工具）</h2>
+<pre><code>from langgraph.prebuilt import ToolNode
+
+# 1) 模型绑定工具（langchain 里）
+#    model = llm.bind_tools(tools)
+# 2) 节点：调用模型（输出可能带 tool_calls）
+# 3) 节点：ToolNode(tools) 执行模型要求的工具
+# 4) 条件边：模型说还要调工具 → 回模型节点；说完了 → 结束
+
+# 标准 ReAct 场景官方推荐直接用：
+from langchain.agents import create_agent
+# create_agent(model, tools, prompt=...) 内部封装了上面的循环</code></pre>
+
+<h2>五个必记要点</h2>
+<ol>
+  <li><strong>State</strong>：TypedDict；每个 key 有独立 reducer；<strong>默认 reducer 是覆盖</strong>；消息用 <code>add_messages</code> 追加；预制 <code>MessagesState</code>（只有一个 messages key）</li>
+  <li><strong>Node</strong>：普通 Python 函数，返回<strong>部分状态更新</strong>即可，不用返回整个 State</li>
+  <li><strong>Edge</strong>：<code>add_edge</code> 固定跳转；<code>add_conditional_edges</code> 用路由函数（收 state、返回下一节点名）；入口是虚拟节点 <code>START</code>，出口 <code>END</code></li>
+  <li><strong>运行</strong>：<code>compile()</code> → <code>invoke(初始状态)</code>；递归上限默认 1000 步（超了抛 GraphRecursionError）</li>
+  <li><strong>工具</strong>：<code>ToolNode(tools)</code> 处理模型发出的工具调用（含并行、错误处理）；追求精细控制才手写图，标准 ReAct 用 <code>create_agent</code></li>
+</ol>
+
+<h2>和作业架构的对应关系</h2>
+<pre><code>拆出来的每个角色   →   图里的一个节点（node）
+调度 Agent         →   条件边（add_conditional_edges）
+行程要素提取       →   一个节点：LLM 结构化输出，写进 state
+知识/RAG 检索      →   一个节点：调检索工具，结果写进 state
+行程规划           →   一个节点：拿齐 state 后生成最终行程</code></pre>
+
+<footer>
+  <p>来源：<a href="https://docs.langchain.com/oss/python/langgraph/graph-api">LangGraph Graph API overview（官方）</a> + 本仓库实测。</p>
+</footer>
+
+</body>
+</html>

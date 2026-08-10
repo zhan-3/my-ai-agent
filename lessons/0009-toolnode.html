@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第九课：联网查询——LangGraph ToolNode</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="lesson-head">
+  <p class="lesson-kicker">Lesson 9 / 联网查询（基础项）</p>
+  <h1>让 Agent 学会用工具：ToolNode 与 ReAct 循环</h1>
+  <p class="lesson-sub">差旅助手要查天气、查汇率——这些数据不在文档里、不在模型脑子里，只能实时去取。这课让 LLM 学会「调用工具」，也是你的最后一个基础项 worker。</p>
+</header>
+
+<div class="box">
+  <p class="box-title">和你的使命的关系</p>
+  <p>「工具」是 Agent 区别于聊天机器人的核心能力：<b>模型无法预测的事实（天气/汇率/航班），只能靠工具实时获取</b>。这课的机制（工具定义 → 挂载 → 执行循环）在真实产品里用来接航班查询、酒店预订、打车叫单等一切外部系统。</p>
+</div>
+
+<h2>为什么要「工具」？</h2>
+
+<p>前面课程的 LLM 只会「想」（生成文本）。但有些信息它不可能知道：<br>
+<b>「北京今天多少度？」</b>——训练数据截止于某个日期，今天是实时事实。<br>
+<b>「1 美元等于多少人民币？」</b>——汇率每分钟在变。</p>
+
+<p>所以要让 LLM <b>调用外部函数</b>去取真数据。这就是工具（Tool / Function Calling）。</p>
+
+<h2>三步接一个工具</h2>
+
+<pre><code># ① 定义工具：@tool 把普通函数变成工具
+#    docstring 是给 LLM 看的「使用说明书」——写清参数含义
+@tool
+def get_weather(city: str) -> str:
+    """查询指定城市的当前天气。city：城市名，如「北京」「上海」"""
+    ...调用天气 API，返回文本...
+
+# ② 挂载：把工具清单绑定给 LLM，LLM 回答时自主决定是否调用
+llm_with_tools = llm.bind_tools([get_weather, get_currency_rate])
+
+# ③ 执行：ToolNode 是 langgraph 现成的「工具执行节点」
+tool_node = ToolNode([get_weather, get_currency_rate])</code></pre>
+
+<h2>图结构：ReAct 循环</h2>
+
+<pre><code>       ┌────────────────────────────┐
+       │                            ▼
+   entry → agent(LLM+工具) ──条件边──→ tools(ToolNode)
+                 │                    │
+                 │ 无 tool_calls       │ 执行完把结果写回消息
+                 ▼                    │
+                END ◄─────────────────┘（回到 agent 再判断）
+
+条件边逻辑：最后一条消息有 tool_calls → 去 tools；否则 → END</code></pre>
+
+<p>这个「思考 → 调工具 → 看结果 → 再思考」的循环叫 <b>ReAct 循环</b>。实测 4/4：天气、汇率都正确触发工具拿真数据；负例（报销时限）正确识别「不需要工具」直接结束。</p>
+
+<h2>工具调用的三要素（deepseek-v4-flash 实测）</h2>
+
+<table>
+  <tr><th>要素</th><th>说明</th><th>我们这课的实证</th></tr>
+  <tr><td>工具清单</td><td>bind_tools 告诉 LLM「你能用这些」</td><td>天气+汇率两个工具</td></tr>
+  <tr><td>参数 schema</td><td>函数签名自动生成 JSON Schema</td><td>LLM 自动填 city="北京"、from/to=USD/CNY</td></tr>
+  <tr><td>执行结果回填</td><td>ToolNode 把结果作为 tool 消息写回</td><td>天气/汇率真数据 → LLM 再组织回答</td></tr>
+</table>
+
+<p class="note">回忆能力矩阵（LR-0004）：v4-flash 是 <b>tools+auto ✅ / 强制 tool_choice ❌</b>——所以让 LLM「自主决定」没问题，但别强求它「必须调某个工具」。</p>
+
+<div class="box warn">
+  <p class="box-title">诚实声明</p>
+  <p>① 用的是免费公开 API：天气 open-meteo（无需 key）、汇率 open.er-api.com——真实产品会用付费聚合天气服务（和风、高德）并接航班/酒店/打车工具<br>
+  ② 工具出错时我们返回了错误文本（LLM 会转述）——真实产品要有重试/降级策略<br>
+  ③ 当前只查「当前天气」，没有未来预报、没有目的地推荐（后续可加）</p>
+</div>
+
+<h2>练一练</h2>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">1. 为什么天气、汇率这类问题必须用工具？</p>
+  <button class="quiz-opt" data-correct="true">模型无法预测实时事实</button>
+  <button class="quiz-opt" data-correct="false">模型不会算数</button>
+  <button class="quiz-opt" data-correct="false">提示词写不下</button>
+  <button class="quiz-opt" data-correct="false">文档里查不到</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">2. @tool 函数的 docstring 是给谁看的？</p>
+  <button class="quiz-opt" data-correct="true">LLM（使用说明书）</button>
+  <button class="quiz-opt" data-correct="false">编译器</button>
+  <button class="quiz-opt" data-correct="false">用户</button>
+  <button class="quiz-opt" data-correct="false">数据库</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">3. ReAct 循环中，什么时候回到 tools 节点？</p>
+  <button class="quiz-opt" data-correct="true">LLM 消息带 tool_calls 时</button>
+  <button class="quiz-opt" data-correct="false">每次都要</button>
+  <button class="quiz-opt" data-correct="false">工具出错时</button>
+  <button class="quiz-opt" data-correct="false">用户提问时</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">4. 谁决定「调哪个工具、传什么参数」？</p>
+  <button class="quiz-opt" data-correct="true">LLM（在 bind_tools 的工具清单内自主选）</button>
+  <button class="quiz-opt" data-correct="false">程序员硬编码</button>
+  <button class="quiz-opt" data-correct="false">用户手动指定</button>
+  <button class="quiz-opt" data-correct="false">随机</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="box good">
+  <p class="box-title">动手任务：你自己加一个工具</p>
+  <p>open-meteo 还有免费的<b>空气质量 API</b>（air quality）。任务：<br>
+  ① 在 <code>homework/0009_web.py</code> 里照着 get_weather 的样子加 <code>get_air_quality(city)</code><br>
+  ② 接口：<code>https://air-quality-api.open-meteo.com/v1/air-quality?latitude=..&amp;longitude=..&amp;current=pm2_5,pm10,aqi</code>（经纬度照抄 get_weather 的地理编码那两行）<br>
+  ③ 加进 tools 清单，测试「北京空气怎么样？」<br>
+  ④ 把新工具代码和测试输出贴回来</p>
+</div>
+
+<h2>进阶阅读</h2>
+
+<p><a href="https://langchain-ai.github.io/langgraph/concepts/agentic_concepts/#tool-calling">LangGraph 官方：Tool Calling 概念</a>；<a href="https://open-meteo.com/en/docs">open-meteo 免费天气 API 文档</a>。</p>
+
+<footer>
+  <p><a href="../reference/langgraph-cheatsheet.html">LangGraph 速查表</a> · <a href="../reference/glossary.html">术语表</a> · <a href="../MISSION.md">使命</a> · 课程 0009</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

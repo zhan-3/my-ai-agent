@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第二课：LangGraph 五件套——把"一个 Agent"搭起来</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="lesson-head">
+  <p class="lesson-kicker">Lesson 2 / LangGraph 实操</p>
+  <h1>LangGraph 五件套：把「一个 Agent」真正搭起来</h1>
+  <p class="lesson-sub">上节课你学会了判断拆不拆；这节课学把它变成代码的原子构件。</p>
+</header>
+
+<div class="box">
+  <p class="box-title">和你的使命的关系</p>
+  <p>你要独立设计并实现差旅多 Agent 系统。LangGraph 里的一切都建立在<b>五个构件</b>上：状态、节点、边、工具、运行。把它们吃透，你作业里「拆出来的每个角色」就只是<b>图里的一个节点</b>，「调度」就只是一条<b>条件边</b>——这是你从设计通往代码的桥。</p>
+</div>
+
+<h2>心智模型：一张图</h2>
+
+<p>LangGraph 把 Agent 建模成<b>图</b>，官方原话是：<em>「节点干活，边决定下一步去哪」（Nodes and Edges are nothing more than functions—they can contain an LLM or just good ol' code）</em>。<a href="https://docs.langchain.com/oss/python/langgraph/graph-api">来源：LangGraph Graph API 官方文档</a>。</p>
+
+<ul>
+  <li><strong>State（状态）</strong> —— 一张共享的数据结构（TypedDict），所有节点都读它、更新它</li>
+  <li><strong>Node（节点）</strong> —— 一个普通 Python 函数：收当前状态，返回部分更新</li>
+  <li><strong>Edge（边）</strong> —— 决定下一个执行哪个节点：固定跳转或条件路由</li>
+  <li><strong>ToolNode（工具）</strong> —— 执行模型发起的工具调用</li>
+  <li><strong>编译与运行</strong> —— <code>compile()</code> 成应用，<code>invoke()</code> 跑起来</li>
+</ul>
+
+<h2>五件套逐个拆开</h2>
+
+<h3>① State：先定义图里传什么</h3>
+
+<p>State 是一个 <code>TypedDict</code>。<strong>每个 key 有自己独立的「归约器」（reducer）</strong>，决定多个节点都改这个 key 时怎么合并：</p>
+
+<ul>
+  <li><strong>默认 reducer = 覆盖</strong>：后写的值替换先写的值（官方称 default reducer 丢弃旧值保留新值）</li>
+  <li><strong>消息列表用 <code>add_messages</code></strong>：自动<strong>追加</strong>而不是覆盖</li>
+  <li>预制 <code>MessagesState</code>：只有一个 <code>messages</code> key 的现成 State，可继承加字段</li>
+</ul>
+
+<h3>② Node：一个节点就是一个函数</h3>
+
+<p>节点接收当前 state，返回<strong>部分更新</strong>——不用返回整个 State，只返回你要改的 key 就行。节点里可以调 LLM，也可以只写纯代码。没给节点起名时，默认用函数名当节点名。</p>
+
+<h3>③ Edge：固定跳与条件路由</h3>
+
+<p><code>add_edge(A, B)</code> 是固定跳转。关键的是 <code>add_conditional_edges(节点, 路由函数)</code>：路由函数接收 state，返回<strong>下一个节点的名字</strong>（也可以配一个「返回值→节点名」的映射字典）。入口是虚拟节点 <code>START</code>，出口是 <code>END</code>。</p>
+
+<h3>④ 工具：模型要调工具，谁来执行</h3>
+
+<p>模型说「我要调 weather()」时，<code>ToolNode</code> 负责真的去执行，并把结果以 ToolMessage 回填给模型。它自动处理并行执行和错误。标准 ReAct 循环（思考→调工具→看结果→再思考）官方推荐直接用 <code>create_agent</code> 一步到位；需要精细控制（比如我们作业的多 Agent 调度）才手写图。</p>
+
+<h3>⑤ 运行：compile 与 invoke</h3>
+
+<p><code>app = graph.compile()</code> 做结构检查（比如有没有孤儿节点），然后 <code>app.invoke(初始状态)</code> 跑完整张图，返回<b>最终完整状态</b>。默认递归上限 1000 步。</p>
+
+<h2>一个实测过的完整例子</h2>
+
+<p>下面这段代码我在你的环境（langgraph 1.2.10）里跑过，输出 <code>北京→你好</code>。先把它读熟，它就是你的模板：</p>
+
+<pre><code>from typing import TypedDict, Annotated
+from langgraph.graph import StateGraph, START, END, add_messages
+from langchain_core.messages import AnyMessage
+
+class State(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]  # 消息自动追加
+    city: str                                            # 默认：覆盖
+
+def identify(state):      # 节点：收 state，返回部分更新
+    return {"city": "北京"}
+
+def greet(state):
+    return {"city": state["city"] + "→你好"}
+
+graph = StateGraph(State)
+graph.add_node(identify)
+graph.add_node(greet)
+graph.add_edge(START, "identify")
+graph.add_edge("identify", "greet")
+graph.add_edge("greet", END)
+app = graph.compile()
+result = app.invoke({"messages": [], "city": ""})
+print(result["city"])</code></pre>
+
+<h2>练一练</h2>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">1. 节点函数执行完，需要返回什么？</p>
+  <button class="quiz-opt" data-correct="true">部分状态更新</button>
+  <button class="quiz-opt" data-correct="false">完整最终状态</button>
+  <button class="quiz-opt" data-correct="false">下一个节点名</button>
+  <button class="quiz-opt" data-correct="false">所有消息列表</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">2. 默认 reducer 下，同一 key 被多次更新会怎样？</p>
+  <button class="quiz-opt" data-correct="false">新旧值拼起来</button>
+  <button class="quiz-opt" data-correct="true">后值覆盖先值</button>
+  <button class="quiz-opt" data-correct="false">合并两个字典</button>
+  <button class="quiz-opt" data-correct="false">直接抛出异常</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">3. 条件边的路由函数应该返回什么？</p>
+  <button class="quiz-opt" data-correct="false">一个布尔值</button>
+  <button class="quiz-opt" data-correct="true">下一节点名</button>
+  <button class="quiz-opt" data-correct="false">全部的状态</button>
+  <button class="quiz-opt" data-correct="false">模型的回复</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">4. 给 messages 追加新消息而不是覆盖，怎么做？</p>
+  <button class="quiz-opt" data-correct="false">默认覆盖即可</button>
+  <button class="quiz-opt" data-correct="false">每次手动合并</button>
+  <button class="quiz-opt" data-correct="true">使用追加函数</button>
+  <button class="quiz-opt" data-correct="false">无需任何处理</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="box good">
+  <p class="box-title">动手任务（本课战利品）：自己写一条条件边</p>
+  <p>把上面的例子改造成「条件路由」版：<br>
+  ① 加一个节点 <code>classify</code>（纯代码也行），state 里加一个 <code>route</code> key<br>
+  ② 建两个问候节点 <code>beijing</code>、<code>other</code>，各自返回不同的问候语<br>
+  ③ 用 <code>add_conditional_edges</code> 把 classify 接到两个问候节点上（城市是"北京"走 beijing，否则走 other）<br>
+  ④ 分别用 <code>invoke({"city": "北京"})</code> 和 <code>invoke({"city": "杭州"})</code> 跑两次，把输出贴回来给我看<br><br>
+  写不出来没关系——卡住 10 分钟就来问我，我会带你走。</p>
+</div>
+
+<h2>进阶阅读（第一手来源）</h2>
+
+<p><a href="https://docs.langchain.com/oss/python/langgraph/graph-api">LangGraph Graph API overview（官方文档）</a> —— 本课全部 API 事实的来源，精读一遍对理解「为什么 LangGraph 这样设计」帮助很大。</p>
+
+<div class="box good">
+  <p class="box-title">有任何不清楚的地方，直接问我</p>
+  <p>reducer 想不通？条件边路由函数纠结返回值？把代码贴给我，我逐行给你讲。</p>
+</div>
+
+<footer>
+  <p><a href="../reference/langgraph-cheatsheet.html">LangGraph 速查表</a> · <a href="../reference/glossary.html">术语表</a> · <a href="../MISSION.md">使命</a> · 课程 0002</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

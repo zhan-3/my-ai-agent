@@ -1,0 +1,172 @@
+"""第九课：联网查询 worker —— LangGraph ToolNode（ReAct 循环）
+跑法：python homework/0009_web.py
+依赖：无新依赖。天气用 open-meteo（免费无需 key），汇率用 open.er-api.com（免费无需 key）
+
+教学点（这课的新机制）：
+- @tool 装饰器：函数 → 工具（docstring 是给 LLM 看的说明书，必须写清参数含义）
+- llm.bind_tools([...])：给 LLM 挂上工具清单，LLM 在回答时自主决定「要不要调工具、调哪个、传什么参」
+- ToolNode：langgraph.prebuilt 提供的现成工具执行节点
+- ReAct 循环：agent 节点 → (LLM 想调工具?) → tools 节点 → 回 agent → …直到 LLM 认为信息够了直接回答
+"""
+import os
+import time
+import json
+import requests
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+from langchain_core.messages import SystemMessage
+from pydantic import SecretStr
+from langgraph.prebuilt import ToolNode
+from langgraph.graph import StateGraph, END
+from langgraph.graph.message import add_messages
+from typing import Annotated
+from typing_extensions import TypedDict
+
+load_dotenv()
+
+llm = ChatOpenAI(
+    model=os.environ["DEEPSEEK_MODEL"],
+    base_url=os.environ["DEEPSEEK_BASE_URL"],
+    api_key=SecretStr(os.environ["DEEPSEEK_API_KEY"]),
+    temperature=0,
+    extra_body={"thinking": {"type": "disabled"}},
+)
+
+# ---- 网络工具：代理 + 重试（免费 API 不稳定，工程上必须健壮）----
+
+def _proxies():
+    """从环境变量读代理（如 Clash 127.0.0.1:7897）；无代理环境返回 None 即直连"""
+    proxies = {}
+    for scheme in ("http", "https"):
+        url = os.environ.get(f"{scheme.upper()}_PROXY") or os.environ.get(f"{scheme}_proxy")
+        if url:
+            proxies[scheme] = url
+    return proxies or None
+
+def _get_json(url, params=None, headers=None, retries=2):
+    """GET + 解析 JSON + 自动重试（默认重试 2 次，每次间隔 1 秒）"""
+    last = None
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=15, proxies=_proxies())
+            return r.json()
+        except Exception as e:
+            last = e
+            time.sleep(1)
+    raise RuntimeError(f"请求失败（已重试 {retries} 次）：{url}") from last
+
+# ---- 1. 定义工具（@tool：函数 → 工具）----
+
+@tool
+def get_weather(city: str) -> str:
+    """查询指定城市的当前天气。city：城市名，如「北京」「上海」「杭州」"""
+    try:
+        # ① 地理编码：城市名 → 经纬度（OSM Nominatim，免费，要求带 User-Agent）
+        geo = _get_json("https://nominatim.openstreetmap.org/search",
+                        params={"q": city, "format": "json", "limit": 1, "accept-language": "zh"},
+                        headers={"User-Agent": "xiao-wen-travel-assistant/1.0"})
+        if not geo:
+            return f"未找到城市：{city}"
+        lat = geo[0]["lat"]
+        lon = geo[0]["lon"]
+        # ② 天气：open-meteo forecast（免费无需 key）
+        cur = _get_json("https://api.open-meteo.com/v1/forecast",
+                        params={"latitude": lat, "longitude": lon,
+                                "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m",
+                                "timezone": "auto"})["current"]
+        wmo = {0: "晴", 1: "大部晴朗", 2: "多云", 3: "阴", 45: "雾", 48: "雾凇",
+               51: "小毛毛雨", 53: "毛毛雨", 55: "大毛毛雨", 61: "小雨", 63: "中雨",
+               65: "大雨", 71: "小雪", 73: "中雪", 75: "大雪",
+               80: "小阵雨", 81: "中阵雨", 82: "大阵雨", 95: "雷暴", 96: "雷暴伴冰雹",
+               99: "雷暴伴大冰雹"}
+        desc = wmo.get(cur["weather_code"], f"天气代码{cur['weather_code']}")
+        return (f"{city}当前天气：{desc}，气温 {cur['temperature_2m']}°C，"
+                f"湿度 {cur['relative_humidity_2m']}%，风速 {cur['wind_speed_10m']} km/h")
+    except Exception as e:
+        return f"查询天气失败（服务可能不稳定，请稍后再试）：{type(e).__name__}"
+
+@tool
+def get_currency_rate(from_currency: str, to_currency: str) -> str:
+    """查询两种货币的实时汇率。参数为三位货币代码：USD 美元、CNY 人民币、EUR 欧元、JPY 日元、GBP 英镑、HKD 港币"""
+    try:
+        # 取 1 USD = X 全量表，交叉换算出任意币种对（一次请求即可）
+        data = _get_json("https://api.exchangerate-api.com/v4/latest/USD")
+        rates = data["rates"]
+        fc, tc = from_currency.upper(), to_currency.upper()
+        if fc not in rates or tc not in rates:
+            return f"不支持的货币代码：{from_currency}/{to_currency}"
+        rate = (1.0 / rates[fc]) * rates[tc]   # 1 单位 from = ? to
+        return f"当前汇率：1 {fc} = {rate:.4f} {tc}"
+    except Exception as e:
+        return f"查询汇率失败（服务可能不稳定，请稍后再试）：{type(e).__name__}"
+
+@tool
+def get_air_quality(city: str) -> str:
+    """查询指定城市的当前空气质量。city：城市名，如「北京」「上海」「杭州」"""
+    try:
+        # ① 地理编码：和 get_weather 一致，走 nominatim（城市名 → 经纬度）
+        geo = _get_json("https://nominatim.openstreetmap.org/search",
+                        params={"q": city, "format": "json", "limit": 1, "accept-language": "zh"},
+                        headers={"User-Agent": "xiao-wen-travel-assistant/1.0"})
+        if not geo:
+            return f"未找到城市：{city}"
+        lat, lon = geo[0]["lat"], geo[0]["lon"]
+        # ② 空气质量：air-quality-api 只收经纬度（不认城市名）
+        cur = _get_json("https://air-quality-api.open-meteo.com/v1/air-quality",
+                        params={"latitude": lat, "longitude": lon,
+                                "current": "pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,ozone,sulphur_dioxide",
+                                "timezone": "auto"})["current"]
+        return (f"{city}当前空气质量：PM2.5 {cur['pm2_5']} μg/m³，PM10 {cur['pm10']} μg/m³，"
+                f"CO {cur['carbon_monoxide']} μg/m³")
+    except Exception as e:
+        return f"查询空气质量失败（服务可能不稳定，请稍后再试）：{type(e).__name__}"
+
+tools = [get_weather, get_currency_rate, get_air_quality]
+# ---- 2. 图：agent(LLM+工具) ⇄ tools(ToolNode) 的 ReAct 循环 ----
+
+class State(TypedDict):
+    messages: Annotated[list, add_messages]   # add_messages：消息累加（不是覆盖）
+
+def agent_node(state: State):
+    """LLM 决定：直接回答 or 调用工具。返回新消息（可能带 tool_calls）"""
+    return {"messages": [llm_with_tools.invoke(state["messages"])]}
+
+tool_node = ToolNode(tools)                   # 执行 LLM 请求的工具，结果作为 tool 消息返回
+
+def route_after_agent(state: State):
+    """条件边：最后一条消息有 tool_calls → 去 tools 执行；否则 → 结束"""
+    last = state["messages"][-1]
+    return "tools" if last.tool_calls else END
+
+graph = StateGraph(State)
+graph.add_node("agent", agent_node)
+graph.add_node("tools", tool_node)
+graph.add_conditional_edges("agent", route_after_agent, {"tools": "tools", END: END})
+graph.set_entry_point("agent")
+app = graph.compile()
+
+llm_with_tools = llm.bind_tools(tools)
+
+SYSTEM = SystemMessage(content=(
+    "你是晓问差旅助手的「联网查询」模块，负责回答需要实时信息的问题。"
+    "涉及天气、汇率等实时数据时，必须调用对应工具获取真实数据，再基于结果回答；"
+    "与实时信息无关的问题，直接说明这不属于联网查询范围。"))
+
+def ask(question: str):
+    print("=" * 56)
+    print("用户：", question)
+    result = app.invoke({"messages": [SYSTEM, ("human", question)]})
+    for m in result["messages"]:
+        if m.type == "ai" and m.tool_calls:
+            tc = m.tool_calls[0]
+            print(f"  ↳ LLM 决定调用工具：{tc['name']}({tc['args']})")
+        elif m.type == "tool":
+            print(f"  ↳ 工具返回：{str(m.content)[:90]}")
+    print("回答：", result["messages"][-1].content)
+
+if __name__ == "__main__":
+    ask("北京今天天气怎么样？")
+    ask("我要去美国出差，现在 1 美元能换多少人民币？")
+    ask("帮我看看东京今天的天气适合穿什么")
+    ask("报销要在多长时间内提交？")     # 负例：非实时问题，应拒绝

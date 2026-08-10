@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第十三课：类型检查优化——22 个警告归零（工程质量）</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="lesson-head">
+  <p class="lesson-kicker">Lesson 13 / 工程质量</p>
+  <h1>mypy 类型检查：从 22 个警告到 0，还抓到一个真 Bug</h1>
+  <p class="lesson-sub">作业评分点 7.4「工程质量」要求代码可维护。这课用 <b>mypy</b> 扫全项目——关键是学会区分<b>真问题</b>和<b>库类型标注噪音</b>，别为了消警告乱改代码。</p>
+</header>
+
+<h2>第一课：类型检查的价值 = 抓回归</h2>
+
+<p>扫描 11 个文件，22 个警告。最有价值的发现不是警告本身，而是一个<b>真 Bug</b>：</p>
+
+<pre><code># homework/0006_memory.py
+from memory_store import (add_preference, ...)   # ❌ 此函数早已改名！
+
+# memory_store 里它已变成：
+def add_or_update_preference(category, content, is_update=False): ...
+</code></pre>
+
+<div class="box warn">
+  <p class="box-title">教训：改名后必须全局搜引用 + 回归验证</p>
+  <p>第十一课把 <code>add_preference</code> 升级成 <code>add_or_update_preference</code>（加 is_update），但 0006 还在 import 旧名字——<b>一跑就会 ImportError</b>。为什么没被发现？因为改名后再没跑过 0006。mypy 一跑就报 <code>Module "memory_store" has no attribute "add_preference"</code>。<b>改名/重构后，全局搜索旧名字 + 重新跑所有引用它的测试</b>——这是类型检查最值钱的地方。</p>
+</div>
+
+<h2>22 个警告分三类</h2>
+
+<table>
+  <tr><th>类别</th><th>数量</th><th>处理</th></tr>
+  <tr><td><b>真 Bug</b>（0006 旧函数名）</td><td>1</td><td>改 import + 调用，回归验证 ✅</td></tr>
+  <tr><td><b>防御性改进</b>：raise 可能为 None、importlib spec 可能为 None、结构化输出结果收窄为模型实例</td><td>4</td><td><code>if spec is None: raise ImportError</code>、<code>assert isinstance(r, PreferenceRecord)</code>、<code>raise RuntimeError(...) from last</code></td></tr>
+  <tr><td><b>变量注解</b>：<code>para = []</code> → <code>para: list[str] = []</code></td><td>6</td><td>补注解（真实小改进）</td></tr>
+  <tr><td><b>库噪音</b>：LangGraph invoke 重载过严（×7）、jieba 无类型 stub</td><td>8+</td><td>配置级关闭 call-overload（注明理由）；jieba 单处 ignore</td></tr>
+</table>
+
+<h2>噪音 vs 真问题：怎么判断</h2>
+
+<pre><code># 噪音示例：LangGraph Pregel.invoke 的重载对「部分键 State 输入」过严
+# demo 合法地只传部分 state 键（recent/subtasks 由节点补），mypy 却要求全量
+app.invoke({"messages": [...], "user_input": t, "recent": recent})
+# → 运行时完全正常。配置级关闭，不逐处 ignore（避免代码噪音）：
+# pyproject.toml [tool.mypy]
+# disable_error_code = ["call-overload"]   # 注释写明理由</code></pre>
+
+<div class="box good">
+  <p class="box-title">判断原则</p>
+  <p>① 警告指向「运行时会崩/可能崩」→ 真问题，改代码。<br>
+  ② 警告指向「库自己的类型标注缺陷」→ 噪音，配置级关闭或单处 ignore，<b>并写明理由</b>。<br>
+  ③ 只为了消警告而加 <code># type: ignore</code> 不写理由 → 掩盖问题，禁止。<br>
+  <b>结果：<code>mypy homework/</code> → Success, no issues found in 11 source files</b></p>
+</div>
+
+<h2>练一练</h2>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">1. 这课类型检查抓到的最有价值的真 Bug 是？</p>
+  <button class="quiz-opt" data-correct="true">0006 还在 import 已改名的 add_preference（一跑就 ImportError）</button>
+  <button class="quiz-opt" data-correct="false">某个变量没写注解</button>
+  <button class="quiz-opt" data-correct="false">LangGraph 的 invoke 用错了</button>
+  <button class="quiz-opt" data-correct="false">jieba 库坏了</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">2. 「改名后必须做什么」？</p>
+  <button class="quiz-opt" data-correct="true">全局搜索旧名字 + 重新跑所有引用它的测试</button>
+  <button class="quiz-opt" data-correct="false">只改定义处就行</button>
+  <button class="quiz-opt" data-correct="false">加个兼容包装即可，不用查引用</button>
+  <button class="quiz-opt" data-correct="false">不测试，等报错</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="box good">
+  <p class="box-title">动手任务</p>
+  <p>① 跑 <code>uv run mypy homework/</code> 确认 0 警告<br>
+  ② 故意改回一行（把 0006 的 import 改回 add_preference），看 mypy 报什么——体验「类型检查抓回归」<br>
+  ③ 改回来后提交（不要留坏代码）</p>
+</div>
+
+<h2>下一步</h2>
+
+<p>加分项进度：A 两层记忆 ✅｜B 调度优化 ✅｜C 插件化 ◐｜D 稳定性 ◐（+mypy 0 警告）｜E 测试 ◐｜F 可视化 ✖。候选：行程校验层、sqlite、演示录屏收尾、打包提交。</p>
+
+<footer>
+  <p><a href="../reference/langgraph-cheatsheet.html">LangGraph 速查表</a> · <a href="../reference/glossary.html">术语表</a> · <a href="../MISSION.md">使命</a> · 课程 0013</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

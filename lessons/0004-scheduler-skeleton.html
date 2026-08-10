@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第四课：调度骨架——主管-工人架构落地</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="lesson-head">
+  <p class="lesson-kicker">Lesson 4 / 多 Agent 骨架</p>
+  <h1>调度骨架：把「主管-工人」架构真正长出来</h1>
+  <p class="lesson-sub">这一课，你的系统第一次成为「多 Agent」：一个主管（意图识别）指挥六个工人。</p>
+</header>
+
+<div class="box">
+  <p class="box-title">和你的使命的关系</p>
+  <p>作业要求「≥5 个 Agent」的多 Agent 架构。第一课你学会了判断为什么拆，第三课你做出了第一个真 LLM 节点（意图识别），这一课把它们<b>串成一张会调度的图</b>：主管读意图、按规则把人交给正确的工人——这就是作业里的 <b>Orchestration 调度 Agent</b> 落地的形态。</p>
+</div>
+
+<h2>架构总览</h2>
+
+<pre><code>                 ┌──────────── 行程规划 · itinerary ────┐
+                 ├──────────── 偏好记录 · preference ───┤
+用户输入 → 意图识别(主管) ─┼── 历史查询 · history ────┤→ 返回答案
+    (LLM)      │            ├── 知识问答 · knowledge ───┤
+                 └──────────── 联网查询 · web ────────┘
+</code></pre>
+
+<p>这就是<b>主管-工人模式</b>（Anthropic 分类里的 Orchestrator-Workers）：中心 Agent（意图识别）决定「交给谁」，六个工人各管一摊。注意：<strong>工人之间不互相调用、不知道彼此存在</strong>——协调完全靠主管 + 条件边，这就是「用代码协调」的含义。</p>
+
+<h2>核心代码（已实测，6/6 路由正确）</h2>
+
+<h3>① 主管节点：照旧是真 LLM</h3>
+
+<p>就是第三课那个 <code>classify_intent</code>，返回 <code>intent</code> 和 <code>reason</code> 写入 state。它是图里唯一「有大脑」的调度者。</p>
+
+<h3>② 六个工人：先做「桩」（stub）</h3>
+
+<pre><code>def itinerary_stub(state):
+    return {"answer": f"【行程规划·桩】我会为用户安排行程：{state['user_input']}（下节课做实）"}</code></pre>
+
+<p><strong>桩节点</strong>是工程上的重要手法：工人先不接 LLM、只返回占位文字，让<b>骨架先跑通</b>——路由对不对、state 传没传对，全链路能立刻验证，代价只有几行代码。等骨架稳了，再逐个把工人「做实」。</p>
+
+<h3>③ 条件边：主管怎么「分单」</h3>
+
+<pre><code>graph.add_conditional_edges(
+    "classify_intent",                 # 主管节点
+    lambda s: s["intent"],             # 路由函数：读 state 里的意图
+    {
+        "行程规划": "itinerary",        # 映射表：意图 → 工人节点
+        "偏好记录": "preference",
+        "历史查询": "history",
+        "知识问答": "knowledge",
+        "联网查询": "web",
+        "其他": "other",
+    },
+)</code></pre>
+
+<p>第二课学的两种条件边写法在这里用上了<b>映射字典版</b>——因为意图是枚举值，一一对应最清晰。</p>
+
+<div class="box warn">
+  <p class="box-title">映射表必须全覆盖</p>
+  <p>路由函数返回的每个可能值都得在映射表里有一条。漏了一个，LangGraph 会直接抛 <code>KeyError</code>——你的意图枚举和映射表是<b>一份要同步维护的契约</b>。以后加新意图，两个地方都要改。</p>
+</div>
+
+<h2>练一练</h2>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">1. 主管节点执行完返回什么？</p>
+  <button class="quiz-opt" data-correct="true">部分更新</button>
+  <button class="quiz-opt" data-correct="false">完整状态</button>
+  <button class="quiz-opt" data-correct="false">下一节点名</button>
+  <button class="quiz-opt" data-correct="false">最终答案</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">2. 条件边按什么决定交给谁？</p>
+  <button class="quiz-opt" data-correct="true">意图值</button>
+  <button class="quiz-opt" data-correct="false">用户编号</button>
+  <button class="quiz-opt" data-correct="false">消息数量</button>
+  <button class="quiz-opt" data-correct="false">随机数</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">3. 工人先做成「桩」的意义？</p>
+  <button class="quiz-opt" data-correct="true">先验证骨架</button>
+  <button class="quiz-opt" data-correct="false">减少代码量</button>
+  <button class="quiz-opt" data-correct="false">替代写测试</button>
+  <button class="quiz-opt" data-correct="false">提升运行速度</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">4. 映射表漏了某个意图值会怎样？</p>
+  <button class="quiz-opt" data-correct="true">直接报错</button>
+  <button class="quiz-opt" data-correct="false">走默认节点</button>
+  <button class="quiz-opt" data-correct="false">跳过该节点</button>
+  <button class="quiz-opt" data-correct="false">自动合并</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="box good">
+  <p class="box-title">动手任务（本课战利品 = 作业的调度骨架）</p>
+  <p>① 跑一遍 <code>python homework/0004_scheduler.py</code>，确认六类意图各就各位<br>
+  ② 往测试列表里加 <strong>2 句你自己的话</strong>（其中一句故意模糊，比如「帮我看看出差的事」），看模型把模糊句分去哪——注意观察 reason<br>
+  ③ 挑一个桩节点，把它的返回文案改成你自己的<br>
+  ④ 把新增两句话的输出贴回来<br><br>
+  卡住 10 分钟就来问。</p>
+</div>
+
+<h2>进阶阅读（第一手来源）</h2>
+
+<p><a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic, Building Effective Agents</a> —— 主管-工人模式的原始出处；<a href="https://claude.com/blog/building-multi-agent-systems-when-and-how-to-use-them">Anthropic, When and how to use them</a> —— 什么时候才值得拆（回顾第一课）。</p>
+
+<div class="box good">
+  <p class="box-title">有任何不清楚的地方，直接问我</p>
+  <p>条件边报 KeyError？不知道自己的话该归哪类？贴代码和输出给我。</p>
+</div>
+
+<footer>
+  <p><a href="../reference/langgraph-cheatsheet.html">LangGraph 速查表</a> · <a href="../reference/glossary.html">术语表</a> · <a href="../MISSION.md">使命</a> · 课程 0004</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
