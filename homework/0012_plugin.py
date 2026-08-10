@@ -28,6 +28,8 @@ llm = ChatOpenAI(
     base_url=os.environ["DEEPSEEK_BASE_URL"],
     api_key=SecretStr(os.environ["DEEPSEEK_API_KEY"]),
     temperature=0,
+    max_retries=2,   # 工程稳定性：LLM 失败自动重试 2 次（加分项 D）
+    timeout=30,      # 工程稳定性：30s 无响应即放弃（加分项 D）
     extra_body={"thinking": {"type": "disabled"}},
 )
 

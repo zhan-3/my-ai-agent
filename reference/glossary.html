@@ -72,6 +72,14 @@
 
 <p><strong>Hot Path</strong> —— 在 agent 每次运行的推理路径上做记忆检索/写入。优点是实时、透明；代价是增加延迟、token 成本和复杂度。工程建议：检索克制（截断）、写入可选 background（异步、定时）分离主链路。</p>
 
+<p><strong>熔断（Circuit Breaker）</strong> —— 上游持续失败时的保护机制，三态：closed（正常）→ open（熔断打开，后续请求快速失败、零耗时）→ half_open（恢复期试探放行一个请求，成功则复位）。与重试互补：重试应对偶发故障，熔断应对持续故障。</p>
+
+<p><strong>重试（Retry）</strong> —— 调用失败后隔一段时间再试，指数退避（0.5s→1s→2s）；LangChain ChatOpenAI 内置 max_retries。</p>
+
+<p><strong>超时控制（Timeout）</strong> —— 请求超过时限即放弃（ChatOpenAI timeout 参数），防止上游无响应时调用方无限等待。</p>
+
+<p><strong>健康检查（Health Check）</strong> —— 系统自检：.env 配置完整性 / 向量索引存在 / 记忆可写 / 插件目录 / 日志可写，部署前跑一次。</p>
+
 <p><strong>插件化（Plugin / Dynamic Discovery）</strong> —— 子 Agent 动态发现机制：目录扫描自动注册（discover）、渐进式披露（意图识别阶段用 AST 只读插件元数据、不执行代码）、懒加载（派发时才 exec_module + 缓存）、热插拔（运行中新增插件主管自动认识新意图，零代码改动）。插件公约：INTENT + DESCRIPTION + run(query)-&gt;str。代价：意图类别无法静态类型化，靠运行时校验兑底。</p>
 
 <p><strong>总装（Assembly / Integration）</strong> —— 多 Agent 系统开发后期把各 worker 模块组合成完整系统的过程。要点：①每个 worker 独立验证过；②接口契约统一（如统一「输入 state → 输出 answer」）；③总装文件只做「导入 + 挂图」，拓扑稳定、worker 可逐个替换。</p>

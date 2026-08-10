@@ -1,0 +1,16 @@
+2026-08-10 21:22:23,904 INFO langchain_openai.chat_models._client_utils langchain-openai detected HTTP_PROXY, HTTPS_PROXY, http_proxy, https_proxy and no explicit `http_socket_options` / `http_client` / `http_async_client` / `openai_proxy`; skipping the custom `httpx` transport so httpx's env-proxy auto-detection applies. Pass `http_socket_options=[...]` to opt back into kernel-level TCP keepalive tuning on top of the env proxy.
+2026-08-10 21:22:24,348 WARNING stability 调用失败（第 1/2 次），0.3s 后重试：网络闪断（模拟）
+2026-08-10 21:22:24,649 WARNING stability 调用失败（第 2/2 次），0.6s 后重试：网络闪断（模拟）
+2026-08-10 21:22:25,249 WARNING stability 熔断打开：连续失败 3 次，1.5s 内快速失败
+2026-08-10 21:22:26,850 INFO stability 熔断恢复期：半开试探（放行一个请求）
+2026-08-10 21:22:26,850 WARNING stability 熔断打开：连续失败 4 次，1.5s 内快速失败
+2026-08-10 21:22:27,888 ERROR stability 异常兜底触发：'classify_intent' 失败：'recent'
+2026-08-10 21:22:50,842 INFO langchain_openai.chat_models._client_utils langchain-openai detected HTTP_PROXY, HTTPS_PROXY, http_proxy, https_proxy and no explicit `http_socket_options` / `http_client` / `http_async_client` / `openai_proxy`; skipping the custom `httpx` transport so httpx's env-proxy auto-detection applies. Pass `http_socket_options=[...]` to opt back into kernel-level TCP keepalive tuning on top of the env proxy.
+2026-08-10 21:22:51,098 WARNING stability 调用失败（第 1/2 次），0.3s 后重试：网络闪断（模拟）
+2026-08-10 21:22:51,398 WARNING stability 调用失败（第 2/2 次），0.6s 后重试：网络闪断（模拟）
+2026-08-10 21:22:51,999 WARNING stability 熔断打开：连续失败 3 次，1.5s 内快速失败
+2026-08-10 21:22:53,599 INFO stability 熔断恢复期：半开试探（放行一个请求）
+2026-08-10 21:22:53,600 WARNING stability 熔断打开：连续失败 4 次，1.5s 内快速失败
+2026-08-10 21:22:54,650 INFO httpx HTTP Request: POST https://api.pateway.ai/v1/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-08-10 21:22:54,932 INFO httpx HTTP Request: POST https://api.pateway.ai/v1/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-08-10 21:22:54,932 ERROR stability 异常兜底触发：'classify_intent' 失败：Error code: 401 - {'error': 'Invalid API Key'}

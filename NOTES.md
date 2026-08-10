@@ -52,6 +52,7 @@
 - 2026-08-10：第十三课已交付（用户选「类型检查警告优化」）：uv add --dev mypy + pyproject 配置；22 警告→0（真 Bug×1：0006 import 已改名的 add_preference 导致 ImportError；防御改进×4；变量注解×6；库噪音 call-overload 配置级关闭+jieba 单处 ignore）；0006 修复后回归、0010/0011 回归全绿；README §2/§6.8/§9 已更新；LR-0014 已写；lesson 0013 已开
 - 2026-08-10：第十三课补充（用户追问「不必要的 type ignore 去掉了没」）：21 处 ignore 清理→仅剩 1 处（jieba import-untyped，必要且带理由）；全部用真实代码替代——assert isinstance 收窄结构化输出（0003/0004/0005/0006/0010/0011）、_load 加 spec None 检查（0010 同步 0011）、常驻城市 hc 变量收窄 Optional；mypy 仍 0 警告；回归全绿（0005/0003 冒烟、0010 全量 7 用例、0011 并行）
 - 2026-08-10：第十四课已交付（用户问「加分项 C 可行吗」→ 详细讲方案 → 先提交 git ba6ad56 再动手）：plugins/ 三插件（policy/weather/stats）+ homework/plugin_registry.py（discover/AST 元数据/load_plugin）+ 0012_plugin.py（插件式主管四幕演示）；热插拔演示成功（运行中新增插件主管自动认识新意图）；踩坑：@tool 后取 .func、return 换行拼接需括号；mypy homework+plugins 16 文件 0 错误；**加分项 C 完成**；README §2/§6.9/目录/§9 已更新；LR-0015 已写；lesson 0014 已开；术语表补「插件化」；插件化成果待 git 提交
-- 加分项全景：A ✅ 两层记忆｜B ✅ 调度优化｜C ✅ 插件化｜D ◐（+mypy 0）｜E ◐｜F ✖
-- 学生待办：0014 任务（写第 5 个插件测热插拔）、0013/0012 任务、README 过目+录屏
+- 2026-08-10：第十五课已交付（用户选「继续 D」→ 精读要求六项 → 实现稳定性层）：homework/stability.py（with_retry 指数退避 / CircuitBreaker 三态 / safe_call 兑底 / logger 双写 / health_check 五项）+ 0013_stability.py 四幕（重试 / 熔断 / 真实故障注入坏 key→401 裸崩 vs 281ms 降级 / 健康检查全 ✅）；0010/0011/0012 llm 加 max_retries=2 + timeout=30（0011 importlib 复用 0010 自动继承）；发现：模型链构造时捕获 llm，monkeypatch 无效→稳定性层必须包调用点；mypy 18 文件 0 错误；0010 回归全绿；**加分项 D 完成**；README §2/§6.10/目录/§9 D→✅；LR-0016 + lesson 0015 已开；术语表补熔断/重试/超时/健康检查；待 git 提交
+- 加分项全景：A ✅ 两层记忆｜B ✅ 调度优化｜C ✅ 插件化｜D ✅ 工程稳定性｜E ◐｜F ✖
+- 学生待办：0015 任务（熔断参数改 2/0.5 观察）、0014 插件任务、README 过目+录屏
 - 候选：行程校验层、sqlite、演示录屏收尾、打包提交

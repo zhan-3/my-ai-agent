@@ -28,6 +28,7 @@
 | 包管理 | uv | 依赖锁定（pyproject.toml + uv.lock） |
 | 类型检查 | mypy（dev 依赖） | 全项目 0 警告（22→0），见 §6.8 |
 | 插件机制 | 自研插件注册中心 | 动态发现/懒加载/渐进式披露（加分项 C），见 §6.9 |
+| 稳定性层 | 自研 + LangChain 内置 | 重试/超时/熔断/兑底/日志/健康检查（加分项 D），见 §6.10 |
 
 ## 3. 系统架构
 
@@ -98,6 +99,7 @@ python homework/0008_rag_vector.py # 知识问答（向量检索升级版）
 python homework/0009_web.py        # 联网查询（工具调用）
 python homework/0011_scheduler.py  # 调度优化：多请求并行执行
 python homework/0012_plugin.py     # 插件化架构：动态发现/懒加载/热插拔（四幕演示）
+python homework/0013_stability.py  # 工程稳定性：重试/熔断/故障注入/健康检查（四幕演示）
 ```
 
 > 首次运行 `0010_system.py` 中知识问答会构建向量索引（一次性，约 386 个文本块），之后复用磁盘索引，秒级返回。
@@ -116,7 +118,9 @@ homework/
   0010_system.py        ★ 完整系统（6 Worker 全做实）
   0011_scheduler.py     ★ 调度优化（Send 并行执行，复用 0010 worker）
   0012_plugin.py        ★ 插件化演示（插件式主管 + 四幕：发现/懒加载/热插拔/边界）
+  0013_stability.py     ★ 稳定性演示（重试/熔断/真实故障注入/健康检查）
   plugin_registry.py    插件注册中心（discover / AST 元数据 / load_plugin）
+  stability.py          稳定性层（with_retry / CircuitBreaker / safe_call / health_check）
   memory_store.py       记忆存储层（短期 + 长期，可替换实现）
 
 plugins/                插件目录（每个插件 = INTENT + DESCRIPTION + run()）
@@ -182,6 +186,10 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 ### 6.9 插件化架构（加分项 C）
 
 子 Agent 支持动态发现机制：① 自动扫描注册——`discover()` 扫描 `plugins/` 目录，每个插件声明 `INTENT + DESCRIPTION + run(query)->str`；② 渐进式披露——意图识别阶段用 **AST 解析**只读插件元数据（不执行模块代码）；③ 懒加载——派发时才 `exec_module` + 缓存。演示四幕：发现（零加载）→ 懒加载（哨兵日志）→ **热插拔**（运行中新增插件，主管自动认识新意图，零代码改动）→ 边界。动态性的代价：意图类别从静态 `Literal` 变为运行时校验。
+
+### 6.10 工程稳定性（加分项 D）
+
+六件套：① LLM 重试——ChatOpenAI `max_retries=2`（内置）+ 自定义 `with_retry` 指数退避；② 超时控制——`timeout=30`；③ 熔断——`CircuitBreaker` 三态（closed→open→half_open），连续失败 3 次打开、恢复期半开试探，后续请求零耗时快速失败；④ 异常兑底——`safe_call()` 任何异常返回友好降级文案，系统不崩；⑤ 日志——logging 双写 stdout + `data/stability.log`；⑥ 健康检查——`health_check()` 自检 .env/向量索引/记忆/插件/日志五项。演示含**真实故障注入**：坏 API key 下裸调用 401 崩溃 vs 稳定性层 281ms 优雅降级。
 
 ## 7. 核心示例（演示三类案例）
 
@@ -254,8 +262,8 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 | A 两层记忆架构 | ✅ 完整 | 短期（最近 6 轮对话注入）+ 长期（偏好/历史/常驻城市）+ **追加/覆盖区分** |
 | B 调度优化 | ✅ 完整 | 按任务类型动态路由 + 多请求 Send 并行执行 + 先收集信息再规划（要素提取） |
 | C 插件化、模块化架构 | ✅ 完整 | 插件注册中心：动态发现（目录扫描）+ 渐进式披露（AST 元数据）+ 懒加载 + 热插拔演示 |
-| D 工程稳定性 | ◐ 部分 | 网络重试+降级（_get_json）、结构化输出兜底方案、异常文案友好、**mypy 类型检查 0 警告** |
-| E 评测与测试 | ◐ 部分 | 每课独立测试用例（意图路由 8/8、知识问答 6/6、联网 5/5、端到端 7/7、并行调度 4/4、插件演示 4/4），见各 homework 文件 |
+| D 工程稳定性 | ✅ 完整 | 六件套：LLM 重试（max_retries+指数退避）/ 超时控制 / 熔断三态 / 异常兜底 / 日志 / 健康检查；含真实故障注入演示（坏 key → 裸调用 401 崩溃 vs 优雅降级） |
+| E 评测与测试 | ◐ 部分 | 每课独立测试用例（意图路由 8/8、知识问答 6/6、联网 5/5、端到端 7/7、并行调度 4/4、插件演示 4/4、稳定性四幕），见各 homework 文件 |
 | F 可视化界面 | ✖ 未做 | 留作后续优化（当前为终端交互） |
 
 ## 10. 已知问题或后续优化方向
