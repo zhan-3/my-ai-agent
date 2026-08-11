@@ -34,7 +34,10 @@ dev = [
 
 [tool.mypy]
 python_version = "3.11"
-files = ["homework"]
+files = ["homework", "tests"]
+# tests 运行时靠 conftest 把 homework/ 加进 sys.path（数字开头文件不能直接 import），
+# mypy 用同样的路径声明解析 memory_store / plugin_registry / stability
+mypy_path = ["homework"]
 check_untyped_defs = true
 # LangGraph Pregel.invoke 的重载对「部分键 State 输入」过严（demo 合法传部分键），
 # 全局关闭该错误码；其余错误码保持开启。

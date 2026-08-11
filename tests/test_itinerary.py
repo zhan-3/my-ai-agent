@@ -5,6 +5,8 @@ import os
 sys_path = os.path.join(os.path.dirname(__file__), "..", "homework")
 _spec = importlib.util.spec_from_file_location(
     "itinerary_mod", os.path.join(sys_path, "0005_itinerary.py"))
+if _spec is None or _spec.loader is None:
+    raise ImportError("加载失败：0005_itinerary.py")
 _itinerary = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_itinerary)
 
