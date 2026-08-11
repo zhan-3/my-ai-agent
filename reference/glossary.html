@@ -72,6 +72,10 @@
 
 <p><strong>Hot Path</strong> —— 在 agent 每次运行的推理路径上做记忆检索/写入。优点是实时、透明；代价是增加延迟、token 成本和复杂度。工程建议：检索克制（截断）、写入可选 background（异步、定时）分离主链路。</p>
 
+<p><strong>Web 界面（Web UI）</strong> —— 把 Agent 从终端搬到浏览器：后端（FastAPI）复用完整 Agent 系统零重写，前端（原生 HTML/JS）聊天气泡/建议 chips/打字机；接口 /api/chat + /healthz + /docs（自动文档）。</p>
+
+<p><strong>多级降级（Graceful Degradation）</strong> —— 主依赖不可用时逐级降级：本地内置数据（城市经纬度表）→ 免费外部 API → 友好错误文案，保证核心功能尽可能可用；「能本地化的绝不依赖网络」。</p>
+
 <p><strong>单元测试（Unit Test）</strong> —— 测单个模块/函数的纯逻辑，不依赖外部服务（LLM/网络/数据库），快、稳、离线可跑；依赖用 mock/monkeypatch 隔离。</p>
 
 <p><strong>集成测试（Integration Test）</strong> —— 测模块+真实依赖（真实 LLM/API）的协作行为，验证「模型真能做到」；慢且花钱，显式标记（pytest -m integration）才跑。</p>

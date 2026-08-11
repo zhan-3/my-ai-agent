@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第十七课：可视化 Web 界面——让回答不只停留在终端（加分项 F）</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="lesson-head">
+  <p class="lesson-kicker">Lesson 17 / 可视化界面</p>
+  <h1>把终端里的 Agent 变成网页产品</h1>
+  <p class="lesson-sub">加分项 F：写个可访问的 <b>Web 界面</b>，产品化项目，让回答不只停留在终端。这课用 <b>FastAPI + 原生 HTML/JS</b> 把 0010 的完整系统包成聊天产品——零构建、离线可用、自动 /docs。</p>
+</header>
+
+<div class="box">
+  <p class="box-title">架构：后端复用 0010，一行 Agent 逻辑不重写</p>
+  <pre><code>浏览器 ──→ GET  /           前端页面（单文件 HTML + JS）
+        ──→ POST /api/chat   {user_input, session_id}
+              └─→ 0010 的完整主管图（六 worker）
+                  ├─ 短期记忆注入（invoke 前 format_recent_messages(6)）
+                  ├─ 写回（invoke 后 add_message ×2，hot path）
+                  └─ {answer, intent, reason}
+        ──→ GET  /healthz   健康检查（配合加分项 D）
+        ──→ GET  /docs      FastAPI 自动交互式文档</code></pre>
+</div>
+
+<h2>为什么选 FastAPI + 原生 JS</h2>
+
+<table>
+  <tr><th>方案</th><th>代价</th><th>结论</th></tr>
+  <tr><td>React/Vue 前端</td><td>node 构建链、离线不可用</td><td>✗ 过重</td></tr>
+  <tr><td>Streamlit/Gradio</td><td>样式受限、演示感弱</td><td>△ 可用但不像产品</td></tr>
+  <tr><td><b>FastAPI + 原生 HTML/JS</b></td><td>零构建、离线、自动 /docs</td><td>✓ 正好</td></tr>
+</table>
+
+<p>FastAPI 自带交互式 API 文档（/docs）——演示时一开就有，还能讲「自动文档」这个点。</p>
+
+<h2>记忆闭环：和 0010 demo 完全一致</h2>
+
+<p>Web 界面不是新写一个系统，而是把 demo 的对话循环搬进 API：</p>
+
+<pre><code># 0010 demo（终端）                       # 0014 webapp（Web）
+recent = format_recent_messages(6)  →     r = app_graph.invoke({...})
+r = app.invoke({...})                →     add_message("user", text)
+add_message("user", t)               →     add_message("assistant", r["answer"])
+add_message("assistant", r["answer"])</code></pre>
+
+<p>所以「那上海呢」的指代消解、常驻城市补全，在网页上<b>原样生效</b>——因为逻辑没动，只换了壳。</p>
+
+<h2>前端三件小事</h2>
+
+<ol>
+  <li><b>建议 chips</b>：预设 5 个演示问题，点一下就发——演示时不用打字</li>
+  <li><b>打字机效果</b>：逐字渲染回答（setTimeout 8ms/字），有「在思考」的产品感</li>
+  <li><b>XSS 转义</b>：<code>esc()</code> 把 <code>&lt;&gt;&amp;</code> 转义再进 innerHTML——任何用户输入都渲染成文本</li>
+</ol>
+
+<h2>真实工程课：地理编码服务挂了怎么办</h2>
+
+<p>Web 联调时发现 <b>nominatim 挂了</b>（curl 空响应）→ 天气查询全部失败。这不是 F 的问题，是 0009 的隐患暴露了。解法——<b>多级降级</b>：</p>
+
+<pre><code>_geocode(city):
+    if city in CITY_COORDS:      # ① 本地内置中国差旅城市表（零依赖、永远可用）
+        return CITY_COORDS[city]
+    geo = _get_json(nominatim)   # ② 未收录城市才走外部 API（兜底）</code></pre>
+
+<p>20 个中国差旅城市经纬度写死进代码——比任何外部 API 都快且稳，还免限流。这就是稳定性思维：<b>能本地化的绝不依赖网络</b>。</p>
+
+<h2>实测（TestClient + 真实浏览器）</h2>
+
+<table>
+  <tr><th>请求</th><th>意图</th><th>结果</th></tr>
+  <tr><td>北京今天天气怎么样</td><td>联网查询</td><td>✅ 小毛毛雨 30°C（本地表，无 nominatim）</td></tr>
+  <tr><td>那上海呢</td><td>联网查询</td><td>✅ 指代消解（短期记忆）</td></tr>
+  <tr><td>帮我规划10月8日去北京开会4天</td><td>行程规划</td><td>✅ 常驻城市补全上海 + 完整行程</td></tr>
+  <tr><td>我上次的行程是什么</td><td>历史查询</td><td>✅ 读到刚生成的行程（长期记忆）</td></tr>
+</table>
+
+<p>演示截图 5 张（playwright 无头浏览器）已生成到 <code>docs/screenshots/</code>，就是作业 8.1 要的提交材料。</p>
+
+<h2>练一练</h2>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">1. Web 界面为什么能直接继承「指代消解」能力？</p>
+  <button class="quiz-opt" data-correct="true">逻辑没动只换了壳：API 里跑的仍是 0010 的完整主管图 + 同样的记忆闭环</button>
+  <button class="quiz-opt" data-correct="false">Web 前端自己实现了指代消解</button>
+  <button class="quiz-opt" data-correct="false">浏览器有记忆</button>
+  <button class="quiz-opt" data-correct="false">碰巧能用</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">2. 为什么内置城市经纬度表而不是只依赖 nominatim？</p>
+  <button class="quiz-opt" data-correct="true">外部免费 API 不稳定还会限流；本地表零依赖、永远可用、还更快——能本地化的绝不依赖网络</button>
+  <button class="quiz-opt" data-correct="false">nominatim 收费</button>
+  <button class="quiz-opt" data-correct="false">表更准确</button>
+  <button class="quiz-opt" data-correct="false">没区别</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="box good">
+  <p class="box-title">动手任务</p>
+  <p>① 跑 <code>uv run python homework/0014_webapp.py</code><br>
+  ② 浏览器打开 <code>http://127.0.0.1:8000</code> 点 chips 聊几轮<br>
+  ③ 打开 <code>http://127.0.0.1:8000/docs</code> 看自动文档<br>
+  ④ 给 0014 加一个新意图演示（如发「这个暑假去哪里玩」看边界兜底）</p>
+</div>
+
+<h2>加分项收官</h2>
+
+<p>A ✅ 两层记忆｜B ✅ 调度优化｜C ✅ 插件化｜D ✅ 稳定性｜E ✅ 测试｜<b>F ✅ 可视化界面</b>——六个加分项全满。剩下：录屏 + 打包 + 提交邮件。</p>
+
+<footer>
+  <p><a href="../reference/langgraph-cheatsheet.html">LangGraph 速查表</a> · <a href="../reference/glossary.html">术语表</a> · <a href="../MISSION.md">使命</a> · 课程 0017</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

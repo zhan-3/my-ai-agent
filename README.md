@@ -103,6 +103,8 @@ python homework/0012_plugin.py     # 插件化架构：动态发现/懒加载/�
 python homework/0013_stability.py  # 工程稳定性：重试/熔断/故障注入/健康检查（四幕演示）
 uv run pytest                  # 自动化测试：单元层 26 个（无 LLM，秒级）
 uv run pytest -m integration   # 自动化测试：集成层 8 个（真实 LLM，约 1 分钟）
+uv run python homework/0014_webapp.py    # 可视化 Web 界面（加分项 F）→ http://127.0.0.1:8000
+uv run python scripts/screenshot_demo.py # 无头浏览器生成演示截图 → docs/screenshots/
 ```
 
 > 首次运行 `0010_system.py` 中知识问答会构建向量索引（一次性，约 386 个文本块），之后复用磁盘索引，秒级返回。
@@ -122,8 +124,15 @@ homework/
   0011_scheduler.py     ★ 调度优化（Send 并行执行，复用 0010 worker）
   0012_plugin.py        ★ 插件化演示（插件式主管 + 四幕：发现/懒加载/热插拔/边界）
   0013_stability.py     ★ 稳定性演示（重试/熔断/真实故障注入/健康检查）
+  0014_webapp.py        ★ 可视化 Web 界面（FastAPI 后端，复用 0010 完整系统）
   plugin_registry.py    插件注册中心（discover / AST 元数据 / load_plugin）
   stability.py          稳定性层（with_retry / CircuitBreaker / safe_call / health_check）
+  static/index.html     Web 前端（聊天气泡 + 建议 chips + 打字机，无外部 CDN）
+
+scripts/                工具脚本
+  screenshot_demo.py     无头浏览器演示截图 → docs/screenshots/
+
+docs/screenshots/        演示截图 6 张（作业 8.1 提交材料：首页/行程/天气/指代消解/知识问答/历史）
 
 tests/                  自动化测试（加分项 E，pytest）
   conftest.py           记忆隔离到 tmp_path（绝不碰真实数据）
@@ -181,7 +190,7 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 
 ### 6.5 联网查询：工具调用 + 重试降级
 
-`@tool`（docstring 即 LLM 说明书）→ `bind_tools` → `ToolNode` → 条件边 ReAct 循环。能力矩阵实证：本模型**只支持 auto 模式**（强制 tool_choice 不可用），负例能正确拒绝调用工具。网络层：统一 `requests`、读取环境变量代理、自动重试 2 次 + 降级错误文案（免费 API 不稳定，实测多次）。
+`@tool`（docstring 即 LLM 说明书）→ `bind_tools` → `ToolNode` → 条件边 ReAct 循环。能力矩阵实证：本模型**只支持 auto 模式**（强制 tool_choice 不可用），负例能正确拒绝调用工具。网络层：统一 `requests`、读取环境变量代理、自动重试 2 次 + 降级错误文案（免费 API 不稳定，实测多次）。Web 联调时发现 nominatim 地理编码不可用 → 内置 20 城经纬度表（零依赖永远可用）+ nominatim 兑底（未收录城市才走外部 API），多级降级「能本地化的绝不依赖网络」。
 
 ### 6.6 工程组装：先桩后实 + 模块化
 
@@ -206,6 +215,10 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 ### 6.11 评测与测试（加分项 E）
 
 分层测试（pytest 9）：单元层 26 个无 LLM（记忆读写/追加覆盖、行程缺失检查/结果格式、插件注册中心、熔断/重试/兑底）秒级离线可跑；集成层 8 个真实模型（意图识别 7 用例含边界 + 端到端两层记忆闭环）用 `-m integration` 显式跑。关键做法：conftest 记忆隔离到 tmp_path（不碰真实数据）、参数化用例表、**「加载即爆炸」假插件实证 AST 渐进披露零执行**。
+
+### 6.12 可视化 Web 界面（加分项 F）
+
+FastAPI + uvicorn 后端复用 0010 完整系统（Agent 逻辑零重写），原生 HTML/JS 前端（聊天气泡 + 建议 chips + 打字机效果 + XSS 转义，无外部 CDN 离线可用）。接口：GET /（页面）、POST /api/chat（走完整主管图 + 两层记忆闭环）、GET /healthz（配合加分项 D）、GET /docs（自动文档）。Web 联调时发现 nominatim 地理编码服务不可用 → 内置 20 城经纬度表（零依赖永远可用）+ nominatim 兑底，多级降级。演示截图 6 张（playwright 无头浏览器，真实运行）见 docs/screenshots/。
 
 ## 7. 核心示例（演示三类案例）
 
@@ -280,7 +293,7 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 | C 插件化、模块化架构 | ✅ 完整 | 插件注册中心：动态发现（目录扫描）+ 渐进式披露（AST 元数据）+ 懒加载 + 热插拔演示 |
 | D 工程稳定性 | ✅ 完整 | 六件套：LLM 重试（max_retries+指数退避）/ 超时控制 / 熔断三态 / 异常兜底 / 日志 / 健康检查；含真实故障注入演示（坏 key → 裸调用 401 崩溃 vs 优雅降级） |
 | E 评测与测试 | ✅ 完整 | 分层自动化测试 34 个：单元层 26（记忆/行程/插件/稳定性，无 LLM）+ 集成层 8（意图识别 7 用例含边界、端到端记忆闭环）；`uv run pytest` / `-m integration` |
-| F 可视化界面 | ✖ 未做 | 留作后续优化（当前为终端交互） |
+| F 可视化界面 | ✅ 完整 | FastAPI + 原生 JS Web 界面（聊天气泡/chips/打字机），复用 0010 完整系统零重写；演示截图 6 张见 docs/screenshots/ |
 
 ## 10. 已知问题或后续优化方向
 

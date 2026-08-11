@@ -58,18 +58,37 @@ def _get_json(url, params=None, headers=None, retries=2):
 
 # ---- 1. 定义工具（@tool：函数 → 工具）----
 
+# 中国常用差旅城市经纬度表（本地内置，零依赖、永远可用）
+# 真实产品可换数据库/地理编码服务；此处用于免去 geocoding API 依赖与限流
+CITY_COORDS = {
+    "北京": (39.9042, 116.4074), "上海": (31.2304, 121.4737), "广州": (23.1291, 113.2644),
+    "深圳": (22.5431, 114.0579), "杭州": (30.2741, 120.1551), "成都": (30.5728, 104.0668),
+    "武汉": (30.5928, 114.3055), "西安": (34.3416, 108.9398), "南京": (32.0603, 118.7969),
+    "苏州": (31.2989, 120.5853), "重庆": (29.5630, 106.5516), "天津": (39.3434, 117.3616),
+    "长沙": (28.2282, 112.9388), "青岛": (36.0671, 120.3826), "厦门": (24.4798, 118.0894),
+    "郑州": (34.7466, 113.6254), "沈阳": (41.8057, 123.4315), "大连": (38.9140, 121.6147),
+    "昆明": (25.0389, 102.7183), "哈尔滨": (45.8038, 126.5350),
+}
+
+
+def _geocode(city: str) -> tuple[float, float]:
+    """城市名 → 经纬度：优先本地表（零依赖），未收录才走 Nominatim（免费但限流）"""
+    if city in CITY_COORDS:
+        return CITY_COORDS[city]
+    geo = _get_json("https://nominatim.openstreetmap.org/search",
+                    params={"q": city, "format": "json", "limit": 1, "accept-language": "zh"},
+                    headers={"User-Agent": "xiao-wen-travel-assistant/1.0"})
+    if not geo:
+        raise ValueError(f"未找到城市：{city}")
+    return float(geo[0]["lat"]), float(geo[0]["lon"])
+
+
 @tool
 def get_weather(city: str) -> str:
     """查询指定城市的当前天气。city：城市名，如「北京」「上海」「杭州」"""
     try:
-        # ① 地理编码：城市名 → 经纬度（OSM Nominatim，免费，要求带 User-Agent）
-        geo = _get_json("https://nominatim.openstreetmap.org/search",
-                        params={"q": city, "format": "json", "limit": 1, "accept-language": "zh"},
-                        headers={"User-Agent": "xiao-wen-travel-assistant/1.0"})
-        if not geo:
-            return f"未找到城市：{city}"
-        lat = geo[0]["lat"]
-        lon = geo[0]["lon"]
+        # ① 地理编码：本地城市表优先，未收录城市走 OSM Nominatim
+        lat, lon = _geocode(city)
         # ② 天气：open-meteo forecast（免费无需 key）
         cur = _get_json("https://api.open-meteo.com/v1/forecast",
                         params={"latitude": lat, "longitude": lon,
