@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第十六课：评测与测试——pytest 自动化回归（加分项 E）</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="lesson-head">
+  <p class="lesson-kicker">Lesson 16 / 评测与测试</p>
+  <h1>把「打印看结果」升级成「自动化回归」</h1>
+  <p class="lesson-sub">加分项 E 三要求：<b>典型用例 · 对意图/记忆/RAG/规划验证 · 自动化回归测试</b>。这课用 pytest 把之前散在各 homework 的验证用例<b>固化</b>成测试套件——以后改任何代码，一条命令就知道有没有改坏。</p>
+</header>
+
+<div class="box">
+  <p class="box-title">分层测试：快慢分离，互不拖累</p>
+  <table>
+    <tr><th>层</th><th>内容</th><th>耗时</th><th>命令</th></tr>
+    <tr><td>单元层（26 个）</td><td>记忆读写/追加覆盖、缺失检查、结果格式、插件注册中心、熔断/重试/兜底</td><td>秒级</td><td><code>uv run pytest</code></td></tr>
+    <tr><td>集成层（8 个）</td><td>意图识别 7 用例（含边界）、端到端两层记忆闭环</td><td>约 1 分钟</td><td><code>uv run pytest -m integration</code></td></tr>
+  </table>
+  <p>分层逻辑：<b>单元层无 LLM</b>——快、稳、免费、离线可跑；<b>集成层真 LLM</b>——验证「模型真能做到」，显式 <code>-m integration</code> 才跑。</p>
+</div>
+
+<h2>测试数据隔离：绝不碰真实记忆</h2>
+
+<p>记忆测试如果读写 <code>data/memory.json</code>，跑完测试你的真实记忆就没了。conftest 里用 autouse fixture 把 <code>MEMORY_PATH</code> 指到 pytest 的 <code>tmp_path</code>：</p>
+
+<pre><code>@pytest.fixture(autouse=True)
+def _isolate_memory(tmp_path, monkeypatch):
+    import memory_store
+    monkeypatch.setattr(memory_store, "MEMORY_PATH", tmp_path / "memory.json")
+    yield</code></pre>
+
+<p><code>monkeypatch</code> 自动在测试后还原——这是 pytest 的隔离三件套（tmp_path / monkeypatch / fixture）。</p>
+
+<h2>参数化：一份用例表，批量跑</h2>
+
+<pre><code>CASES = [
+    ("10月8日去北京开会4天", "行程规划"),
+    ...
+    ("我想去三亚度假两周", "其他"),      # 产品边界：个人休闲 → 其他
+]
+
+@pytest.mark.parametrize("text,expected", CASES)
+def test_intent_classification(text, expected):
+    r = _sys.intent_model.invoke({"recent": "", "input": text})
+    assert r.intent == expected</code></pre>
+
+<p>7 个用例一个参数列表搞定；失败时 pytest 精确告诉你「哪个输入 → 期望什么 → 实际得到什么」。</p>
+
+<h2>最有心机的测试：证明「零加载」</h2>
+
+<p>插件注册中心的渐进式披露（AST 不执行代码）怎么测？写一个<b>「加载即爆炸」的假插件</b>：如果 discover 执行了它，测试当场炸——而 discover 能读到它的元数据，说明 AST 解析正常：</p>
+
+<pre><code>(tmp_path / "boom.py").write_text(
+    "raise RuntimeError('discover 不应该执行插件代码！')\n"
+    "INTENT = '爆炸'\nDESCRIPTION = 'x'\n", encoding="utf-8")
+found = reg.discover()
+assert found[0]["INTENT"] == "爆炸"   # 读到元数据，但代码从未执行 ✓</code></pre>
+
+<h2>测试踩坑：真实 API 约束 vs 测试假设（3 个）</h2>
+
+<table>
+  <tr><th>坑</th><th>真相</th></tr>
+  <tr><td><code>TripRequest(**base)</code> 校验失败</td><td>pydantic 字段是<b>必填</b>的（hotel_pref/budget_pref 没有默认值）——读模型定义，别猜</td></tr>
+  <tr><td>断言 rec["is_update"] 失败</td><td><code>add_or_update_preference</code> 返回的 dict <b>没有</b> is_update 键——验证行为用 get_preferences 查询，别假设返回结构</td></tr>
+  <tr><td>熔断 sleep 后 state 没变</td><td><code>is_open</code> 是 @property——<b>访问它才触发状态迁移</b>（惰性）。sleep 后要先访问再断言</td></tr>
+</table>
+
+<p>这 3 个坑本身就是教训：<b>测试的假设必须来自真实接口，不是你以为的接口</b>。</p>
+
+<h2>实测</h2>
+
+<table>
+  <tr><th>层</th><th>结果</th></tr>
+  <tr><td>单元层</td><td>26 passed（记忆 5 / 行程 5 / 插件 4 / 稳定性 6 / 其他）</td></tr>
+  <tr><td>集成层</td><td>8 passed（意图 7 用例含边界 + 端到端两层记忆闭环）</td></tr>
+</table>
+
+<h2>练一练</h2>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">1. 单元层和集成层为什么分开？</p>
+  <button class="quiz-opt" data-correct="true">单元层无 LLM：快、稳、免费、离线；集成层真模型：验证行为，慢且花钱，显式才跑</button>
+  <button class="quiz-opt" data-correct="false">集成层更高级，单元层没用</button>
+  <button class="quiz-opt" data-correct="false">为了少写代码</button>
+  <button class="quiz-opt" data-correct="false">pytest 不支持一起跑</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="quiz-q">2. 「加载即爆炸」插件测的是什么？</p>
+  <button class="quiz-opt" data-correct="true">渐进式披露：discover 只做 AST 解析读元数据，绝不执行插件代码</button>
+  <button class="quiz-opt" data-correct="false">插件的报错处理</button>
+  <button class="quiz-opt" data-correct="false">pytest 的错误报告</button>
+  <button class="quiz-opt" data-correct="false">文件写入权限</button>
+  <p class="quiz-note"></p>
+  <p class="quiz-score"></p>
+</div>
+
+<div class="box good">
+  <p class="box-title">动手任务</p>
+  <p>① 跑 <code>uv run pytest</code>（单元层 26 个）<br>
+  ② 跑 <code>uv run pytest -m integration</code>（集成层 8 个，真 LLM）<br>
+  ③ 故意改坏一行（如 <code>_missing</code> 里删掉「目的城市」检查），重跑 <code>uv run pytest tests/test_itinerary.py</code>——看测试怎么抓住你</p>
+</div>
+
+<h2>下一步</h2>
+
+<p>加分项进度：A ✅｜B ✅｜C ✅｜D ✅｜E ✅｜F ✖。剩下：演示录屏 + 打包提交（提交硬要求）。</p>
+
+<footer>
+  <p><a href="../reference/langgraph-cheatsheet.html">LangGraph 速查表</a> · <a href="../reference/glossary.html">术语表</a> · <a href="../MISSION.md">使命</a> · 课程 0016</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

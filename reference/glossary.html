@@ -72,6 +72,14 @@
 
 <p><strong>Hot Path</strong> —— 在 agent 每次运行的推理路径上做记忆检索/写入。优点是实时、透明；代价是增加延迟、token 成本和复杂度。工程建议：检索克制（截断）、写入可选 background（异步、定时）分离主链路。</p>
 
+<p><strong>单元测试（Unit Test）</strong> —— 测单个模块/函数的纯逻辑，不依赖外部服务（LLM/网络/数据库），快、稳、离线可跑；依赖用 mock/monkeypatch 隔离。</p>
+
+<p><strong>集成测试（Integration Test）</strong> —— 测模块+真实依赖（真实 LLM/API）的协作行为，验证「模型真能做到」；慢且花钱，显式标记（pytest -m integration）才跑。</p>
+
+<p><strong>参数化（Parametrize）</strong> —— pytest 一份用例表批量跑同一断言（@pytest.mark.parametrize），失败时精确定位「哪个输入→期望→实际」。</p>
+
+<p><strong>数据隔离（Test Isolation）</strong> —— 测试绝不碰真实数据：conftest 里 monkeypatch 把存储路径指向 tmp_path，跑完自动还原。</p>
+
 <p><strong>熔断（Circuit Breaker）</strong> —— 上游持续失败时的保护机制，三态：closed（正常）→ open（熔断打开，后续请求快速失败、零耗时）→ half_open（恢复期试探放行一个请求，成功则复位）。与重试互补：重试应对偶发故障，熔断应对持续故障。</p>
 
 <p><strong>重试（Retry）</strong> —— 调用失败后隔一段时间再试，指数退避（0.5s→1s→2s）；LangChain ChatOpenAI 内置 max_retries。</p>

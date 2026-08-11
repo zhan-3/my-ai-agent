@@ -29,6 +29,7 @@
 | 类型检查 | mypy（dev 依赖） | 全项目 0 警告（22→0），见 §6.8 |
 | 插件机制 | 自研插件注册中心 | 动态发现/懒加载/渐进式披露（加分项 C），见 §6.9 |
 | 稳定性层 | 自研 + LangChain 内置 | 重试/超时/熔断/兑底/日志/健康检查（加分项 D），见 §6.10 |
+| 测试框架 | pytest 9 + pytest.mark | 分层测试 34 个：单元 26（无 LLM）+ 集成 8（真实模型），见 §6.11 |
 
 ## 3. 系统架构
 
@@ -100,6 +101,8 @@ python homework/0009_web.py        # 联网查询（工具调用）
 python homework/0011_scheduler.py  # 调度优化：多请求并行执行
 python homework/0012_plugin.py     # 插件化架构：动态发现/懒加载/热插拔（四幕演示）
 python homework/0013_stability.py  # 工程稳定性：重试/熔断/故障注入/健康检查（四幕演示）
+uv run pytest                  # 自动化测试：单元层 26 个（无 LLM，秒级）
+uv run pytest -m integration   # 自动化测试：集成层 8 个（真实 LLM，约 1 分钟）
 ```
 
 > 首次运行 `0010_system.py` 中知识问答会构建向量索引（一次性，约 386 个文本块），之后复用磁盘索引，秒级返回。
@@ -121,6 +124,15 @@ homework/
   0013_stability.py     ★ 稳定性演示（重试/熔断/真实故障注入/健康检查）
   plugin_registry.py    插件注册中心（discover / AST 元数据 / load_plugin）
   stability.py          稳定性层（with_retry / CircuitBreaker / safe_call / health_check）
+
+tests/                  自动化测试（加分项 E，pytest）
+  conftest.py           记忆隔离到 tmp_path（绝不碰真实数据）
+  test_memory.py        记忆：追加/覆盖/常驻城市/历史/常用目的地
+  test_itinerary.py     缺失检查 + 结果可读性格式
+  test_plugin.py        插件注册中心（含「加载即爆炸」零执行验证）
+  test_stability.py     熔断三态/重试/兑底
+  test_intent.py        （集成）意图识别 7 用例含边界
+  test_endtoend.py      （集成）两层记忆闭环
   memory_store.py       记忆存储层（短期 + 长期，可替换实现）
 
 plugins/                插件目录（每个插件 = INTENT + DESCRIPTION + run()）
@@ -190,6 +202,10 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 ### 6.10 工程稳定性（加分项 D）
 
 六件套：① LLM 重试——ChatOpenAI `max_retries=2`（内置）+ 自定义 `with_retry` 指数退避；② 超时控制——`timeout=30`；③ 熔断——`CircuitBreaker` 三态（closed→open→half_open），连续失败 3 次打开、恢复期半开试探，后续请求零耗时快速失败；④ 异常兑底——`safe_call()` 任何异常返回友好降级文案，系统不崩；⑤ 日志——logging 双写 stdout + `data/stability.log`；⑥ 健康检查——`health_check()` 自检 .env/向量索引/记忆/插件/日志五项。演示含**真实故障注入**：坏 API key 下裸调用 401 崩溃 vs 稳定性层 281ms 优雅降级。
+
+### 6.11 评测与测试（加分项 E）
+
+分层测试（pytest 9）：单元层 26 个无 LLM（记忆读写/追加覆盖、行程缺失检查/结果格式、插件注册中心、熔断/重试/兑底）秒级离线可跑；集成层 8 个真实模型（意图识别 7 用例含边界 + 端到端两层记忆闭环）用 `-m integration` 显式跑。关键做法：conftest 记忆隔离到 tmp_path（不碰真实数据）、参数化用例表、**「加载即爆炸」假插件实证 AST 渐进披露零执行**。
 
 ## 7. 核心示例（演示三类案例）
 
@@ -263,7 +279,7 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 | B 调度优化 | ✅ 完整 | 按任务类型动态路由 + 多请求 Send 并行执行 + 先收集信息再规划（要素提取） |
 | C 插件化、模块化架构 | ✅ 完整 | 插件注册中心：动态发现（目录扫描）+ 渐进式披露（AST 元数据）+ 懒加载 + 热插拔演示 |
 | D 工程稳定性 | ✅ 完整 | 六件套：LLM 重试（max_retries+指数退避）/ 超时控制 / 熔断三态 / 异常兜底 / 日志 / 健康检查；含真实故障注入演示（坏 key → 裸调用 401 崩溃 vs 优雅降级） |
-| E 评测与测试 | ◐ 部分 | 每课独立测试用例（意图路由 8/8、知识问答 6/6、联网 5/5、端到端 7/7、并行调度 4/4、插件演示 4/4、稳定性四幕），见各 homework 文件 |
+| E 评测与测试 | ✅ 完整 | 分层自动化测试 34 个：单元层 26（记忆/行程/插件/稳定性，无 LLM）+ 集成层 8（意图识别 7 用例含边界、端到端记忆闭环）；`uv run pytest` / `-m integration` |
 | F 可视化界面 | ✖ 未做 | 留作后续优化（当前为终端交互） |
 
 ## 10. 已知问题或后续优化方向
