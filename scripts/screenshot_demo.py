@@ -1,9 +1,8 @@
 """无头浏览器演示截图（演示材料）
 
 跑法：uv run python scripts/screenshot_demo.py（需 webapp 已启动）
-产出：docs/screenshots/ 下 5 张演示截图
+产出：docs/screenshots/ 下 6 张演示截图
 """
-import os
 import sys
 import time
 from pathlib import Path
@@ -30,10 +29,9 @@ def wait_reply(page, timeout_ms=60000):
 
 
 def main() -> None:
-    chrome = os.path.expanduser(
-        "~/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome")
+    # 用 Playwright 自动发现已装浏览器（不再硬编码 chromium 版本路径）
     with sync_playwright() as p:
-        browser = p.chromium.launch(executable_path=chrome)
+        browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1000, "height": 760})
         page.goto(BASE)
         page.wait_for_selector(".chips .chip")

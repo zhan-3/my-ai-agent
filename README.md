@@ -25,12 +25,12 @@
 | 包管理 | uv | 依赖锁定（pyproject.toml + uv.lock） |
 | 类型检查 | mypy（dev 依赖） | 全项目 0 警告 |
 | 插件机制 | 子 Agent 注册中心 | 动态发现/懒加载/渐进式披露（内置+外部） |
-| 稳定性层 | 自研 + LangChain 内置 | 重试/超时/熔断/兑底/日志/健康检查 |
+| 稳定性层 | 自研 + LangChain 内置 | 重试/超时/熔断/兜底/日志/健康检查 |
 | 测试框架 | pytest 9 + pytest.mark | 分层测试 67 个：单元 53（无 LLM）+ 集成 14（真实模型） |
 
 ## 3. 系统架构
 
-```
+```text
                           ┌─────────────────────────────┐
                           │   用户输入（自然语言）         │
                           └──────────────┬──────────────┘
@@ -73,7 +73,7 @@
 | Memory Query Agent 记忆查询 | `agents/history_agent.py` | 返回历史行程 | 长期记忆 |
 | Knowledge/RAG Agent 知识问答 | `agents/knowledge_agent.py` | 政策库语义检索 + 生成 | embedding + Chroma |
 | Information Query Agent 联网查询 | `agents/web_agent.py` | 天气/汇率/空气质量 | ToolNode + ReAct 循环 |
-| 边界兑底 Agent | `agents/other_agent.py` | 非差旅问题拒绝 | 词汇表校验兑底归「其他」 |
+| 边界兜底 Agent | `agents/other_agent.py` | 非差旅问题拒绝 | 词汇表校验兜底归「其他」 |
 | 外部扩展子 Agent ★ | `plugins/stats.py` | 差旅统计（注册表自动发现并入） | discover + 懒加载 |
 
 ## 5. 运行方式说明
@@ -108,7 +108,7 @@ uv run python scripts/delivery.py all   # 交付三连：门禁(pytest+mypy+冒�
 
 ### 目录结构
 
-```
+```text
 .
 ├── README.md                    # 项目说明（本文件）
 ├── CONTEXT.md                   # 领域术语表（主管/子 Agent/注册中心…）
@@ -212,7 +212,7 @@ text-embedding-v3 + Chroma 余弦检索 top-5，命中块拼进提示词生成�
 
 ### 6.5 联网查询
 
-`@tool` → `bind_tools` → `ToolNode` ReAct 循环。免费 API 自动重试 2 次 + 降级文案；内置 20 城经纬度表，未收录城市走 OSM Nominatim 兑底。
+`@tool` → `bind_tools` → `ToolNode` ReAct 循环。免费 API 自动重试 2 次 + 降级文案；内置 20 城经纬度表，未收录城市走 OSM Nominatim 兜底。
 
 ### 6.6 调度优化
 
@@ -234,7 +234,7 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 
 ### 案例一：行程规划（含偏好记忆闭环）
 
-```
+```text
 用户：我不吃辣，住宿喜欢安静
 意图：偏好记录
 → ✅ 已新增偏好：餐饮｜不吃辣
@@ -250,7 +250,7 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 
 ### 案例二：偏好记忆 / 历史记忆
 
-```
+```text
 用户：我现在常住上海
 意图：偏好记录 → ✅ 已更新偏好：常驻城市｜上海（覆盖而非追加）
 
@@ -260,7 +260,7 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 
 ### 案例三：知识问答 + 信息查询
 
-```
+```text
 用户：出差住宿标准是什么？
 意图：知识问答 → 向量检索命中政策文档：
   一线城市（北上广深）不超过500元/晚；二线不超过400元/晚；三线及以下不超过300元/晚；
@@ -273,7 +273,7 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 
 ### 案例四：调度优化（多请求并行）
 
-```
+```text
 用户：帮我查下出差住宿标准是什么，顺便看看北京今天天气怎么样
 意图：知识问答（包含两个请求）
 拆分为 2 个子任务（并行执行）：
