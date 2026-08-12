@@ -16,6 +16,7 @@ from xiao_wen import memory as ms  # noqa: E402
 ms.MEMORY_PATH = Path(tempfile.mkdtemp()) / "memory.json"
 
 from xiao_wen import system as sys_mod  # noqa: E402
+from xiao_wen.session import chat  # noqa: E402
 
 if "--import-only" in sys.argv:
     print("✓ xiao_wen.system 完整系统可加载（离线自检）")
@@ -29,12 +30,8 @@ CASES = [
 ]
 print("▶ 演示冒烟（真 LLM）")
 for text, expected in CASES:
-    recent = ms.format_recent_messages(6)
-    r = sys_mod.app.invoke(
-        {"messages": [("human", text)], "user_input": text, "recent": recent})
-    assert r["intent"] == expected, f"{text}: 意图 {r['intent']} ≠ {expected}"
-    assert r["answer"].strip(), f"{text}: 回答为空"
-    ms.add_message("user", text)
-    ms.add_message("assistant", r["answer"])
-    print(f"  ✓ {expected}: {r['answer'][:44]}")
+    r = chat(text)
+    assert r.intent == expected, f"{text}: 意图 {r.intent} ≠ {expected}"
+    assert r.answer.strip(), f"{text}: 回答为空"
+    print(f"  ✓ {expected}: {r.answer[:44]}")
 print("✓ 冒烟通过")

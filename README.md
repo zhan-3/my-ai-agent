@@ -109,6 +109,10 @@ src/xiao_wen/               ★ 成品包（正式命名，src 布局）
   __init__.py              包元信息
   system.py                ★ 完整系统（主管图 + 6 Worker 全做实，主入口）
   scheduler.py             ★ 调度优化（Send 并行执行，复用 system worker）
+  llm.py                   ★ 模型单一接缝（懒构造 + 缺失变量快速失败 + 熔断守卫）
+  session.py               ★ 会话循环收口（读最近对话 → 注入 → invoke → 写回两轮）
+  intent.py                ★ 意图识别单一来源（六意图 + 多意图拆分）
+  trip_planner.py          ★ 行程规划管线（提取→补全→缺项→生成→写回）
   memory.py                两层记忆（短期消息 + 长期偏好/行程，JSON 持久化）
   rag.py                   知识问答（向量检索 + Chroma，dashscope embedding）
   web.py                   联网查询（ToolNode + ReAct：天气/汇率/空气质量）

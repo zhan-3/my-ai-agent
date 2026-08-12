@@ -85,3 +85,25 @@ def test_safe_call_returns_fallback():
         return "正常"
 
     assert safe_call(ok, "fallback") == "正常"
+
+
+def test_health_check_memory_default_single_source(tmp_path, monkeypatch):
+    """健康检查写出的空记忆结构必须与 memory._default() 单一来源一致（C7 防漂移）"""
+    import json as _json
+
+    from xiao_wen import memory as ms, stability as st
+    monkeypatch.setattr(st, "DATA_DIR", tmp_path)
+    st.health_check()
+    written = _json.loads((tmp_path / "memory.json").read_text(encoding="utf-8"))
+    assert written == ms._default()
+
+
+def test_health_check_env_report_keys_follow_seam(monkeypatch):
+    """环境配置项覆盖 llm 接缝的 REQUIRED_ENV_VARS + embedding 变量（单一来源）"""
+    from xiao_wen import llm as llm_seam, stability as st
+    from xiao_wen.rag import _EMBED_ENV_VAR
+    report = st.health_check()
+    row = next(r for r in report if r["项"] == "环境配置")
+    for v in llm_seam.REQUIRED_ENV_VARS:
+        assert v in row["详情"]
+    assert _EMBED_ENV_VAR in row["详情"]

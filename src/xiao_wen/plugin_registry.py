@@ -9,8 +9,8 @@ import ast
 import importlib.util
 from pathlib import Path
 
-# 项目根目录 = src/xiao_wen/ 上溯三级（src → 项目根）
-ROOT = Path(__file__).resolve().parents[2]
+from xiao_wen import ROOT
+
 PLUGIN_DIR = ROOT / "plugins"
 
 _loaded: dict[str, object] = {}

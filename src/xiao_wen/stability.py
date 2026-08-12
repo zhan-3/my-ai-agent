@@ -9,13 +9,14 @@
     answer = safe_call(call_llm, "⚠️ 服务暂时不可用，请稍后再试")
 """
 import functools
+import json
 import logging
 import os
 import time
-from pathlib import Path
+
+from xiao_wen import ROOT
 
 # ---- 日志记录（stdout + data/stability.log 双写） ----
-ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -109,11 +110,12 @@ def health_check() -> list[dict]:
     load_dotenv()
     report: list[dict] = []
 
-    # ① .env 关键配置
-    cfg = {"DEEPSEEK_API_KEY": "存在" if os.getenv("DEEPSEEK_API_KEY") else "缺失",
-           "DEEPSEEK_BASE_URL": "存在" if os.getenv("DEEPSEEK_BASE_URL") else "缺失",
-           "DEEPSEEK_MODEL": os.getenv("DEEPSEEK_MODEL") or "缺失",
-           "DASHSCOPE_API_KEY": "存在" if os.getenv("DASHSCOPE_API_KEY") else "缺失"}
+    # ① .env 关键配置（变量名单一来源：llm 接缝 REQUIRED_ENV_VARS + rag embedding）
+    from xiao_wen import llm as llm_seam
+    from xiao_wen.rag import _EMBED_ENV_VAR
+    cfg = {v: ("存在" if os.getenv(v) else "缺失") for v in llm_seam.REQUIRED_ENV_VARS}
+    cfg["DEEPSEEK_MODEL"] = os.getenv("DEEPSEEK_MODEL") or "缺失"
+    cfg[_EMBED_ENV_VAR] = "存在" if os.getenv(_EMBED_ENV_VAR) else "缺失"
     report.append({"项": "环境配置", "状态": "✅" if "缺失" not in cfg.values() else "⚠️",
                    "详情": str(cfg)})
 
@@ -122,12 +124,13 @@ def health_check() -> list[dict]:
     report.append({"项": "向量索引", "状态": "✅" if chroma_dir.exists() else "⚠️",
                    "详情": f"{chroma_dir} {'存在（已持久化）' if chroma_dir.exists() else '缺失，需先构建向量索引（rag 模块）'}"})
 
-    # ③ 记忆文件可读可写（缺失时写入合法空结构，避免 touch 出空文件导致后续读崩）
+    # ③ 记忆文件可读可写（缺失时写入合法空结构，结构与 memory._default() 单一来源，防漂移）
+    from xiao_wen.memory import _default as memory_default
     mem = DATA_DIR / "memory.json"
     writable = True
     try:
         if not mem.exists():
-            mem.write_text('{"preferences": [], "itineraries": [], "messages": []}',
+            mem.write_text(json.dumps(memory_default(), ensure_ascii=False),
                            encoding="utf-8")
         else:
             mem.touch(exist_ok=True)

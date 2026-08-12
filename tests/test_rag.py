@@ -33,6 +33,45 @@ def test_merge_tiny_chunks_merges_short():
     assert merged[0][1] == "标题 这是正文内容"
 
 
+# ---------------- 单元层：embedding 鲁棒性（懒校验 + 重试，全本地） ----------------
+
+def test_import_does_not_require_dashscope(monkeypatch):
+    """导入模块不读 env（键值从导入期赋值改为首次调用校验）"""
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    import importlib
+    mod = importlib.reload(rag)
+    assert hasattr(mod, "embed_texts")
+
+
+def test_embed_validation_lists_env_var(monkeypatch):
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="DASHSCOPE_API_KEY"):
+        rag.embed_texts(["查询词"])
+
+
+def test_embed_retries_transient_failure(monkeypatch):
+    """embedding 瞬时失败 → 指数退避重试后成功（不抛给调用方）"""
+    import types
+
+    calls = {"n": 0}
+
+    class FakeTextEmbedding:
+        @staticmethod
+        def call(model=None, input=None, dimension=None):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                return types.SimpleNamespace(status_code=500, code="X", message="限流")
+            return types.SimpleNamespace(
+                status_code=200,
+                output={"embeddings": [{"embedding": [0.1] * 1024}]})
+
+    monkeypatch.setattr(rag.dashscope, "TextEmbedding", FakeTextEmbedding)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "dummy")
+    vecs = rag.embed_texts(["查询词"])
+    assert len(vecs) == 1 and len(vecs[0]) == 1024
+    assert calls["n"] == 3  # 2 次重试后成功
+
+
 # ---------------- 集成层：向量检索（真实 embedding，-m integration） ----------------
 
 @pytest.mark.integration

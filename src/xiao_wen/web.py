@@ -11,27 +11,17 @@
 import os
 import time
 import json
+from functools import lru_cache
 import requests
-from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage
-from pydantic import SecretStr
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from typing import Annotated
 from typing_extensions import TypedDict
 
-load_dotenv()
-
-llm = ChatOpenAI(
-    model=os.environ["DEEPSEEK_MODEL"],
-    base_url=os.environ["DEEPSEEK_BASE_URL"],
-    api_key=SecretStr(os.environ["DEEPSEEK_API_KEY"]),
-    temperature=0,
-    extra_body={"thinking": {"type": "disabled"}},
-)
+from xiao_wen import llm
 
 # ---- 网络工具：代理 + 重试（免费 API 不稳定，工程上必须健壮）----
 
@@ -124,13 +114,8 @@ def get_currency_rate(from_currency: str, to_currency: str) -> str:
 def get_air_quality(city: str) -> str:
     """查询指定城市的当前空气质量。city：城市名，如「北京」「上海」「杭州」"""
     try:
-        # ① 地理编码：和 get_weather 一致，走 nominatim（城市名 → 经纬度）
-        geo = _get_json("https://nominatim.openstreetmap.org/search",
-                        params={"q": city, "format": "json", "limit": 1, "accept-language": "zh"},
-                        headers={"User-Agent": "xiao-wen-travel-assistant/1.0"})
-        if not geo:
-            return f"未找到城市：{city}"
-        lat, lon = geo[0]["lat"], geo[0]["lon"]
+        # ① 地理编码：与 get_weather 共用 _geocode（本地 CITY_COORDS 优先，未收录才走 nominatim）
+        lat, lon = _geocode(city)
         # ② 空气质量：air-quality-api 只收经纬度（不认城市名）
         cur = _get_json("https://air-quality-api.open-meteo.com/v1/air-quality",
                         params={"latitude": lat, "longitude": lon,
@@ -138,6 +123,8 @@ def get_air_quality(city: str) -> str:
                                 "timezone": "auto"})["current"]
         return (f"{city}当前空气质量：PM2.5 {cur['pm2_5']} μg/m³，PM10 {cur['pm10']} μg/m³，"
                 f"CO {cur['carbon_monoxide']} μg/m³")
+    except ValueError:
+        return f"未找到城市：{city}"
     except Exception as e:
         return f"查询空气质量失败（服务可能不稳定，请稍后再试）：{type(e).__name__}"
 
@@ -149,7 +136,7 @@ class State(TypedDict):
 
 def agent_node(state: State):
     """LLM 决定：直接回答 or 调用工具。返回新消息（可能带 tool_calls）"""
-    return {"messages": [llm_with_tools.invoke(state["messages"])]}
+    return {"messages": [_llm_with_tools().invoke(state["messages"])]}
 
 tool_node = ToolNode(tools)                   # 执行 LLM 请求的工具，结果作为 tool 消息返回
 
@@ -165,7 +152,10 @@ graph.add_conditional_edges("agent", route_after_agent, {"tools": "tools", END: 
 graph.set_entry_point("agent")
 app = graph.compile()
 
-llm_with_tools = llm.bind_tools(tools)
+@lru_cache
+def _llm_with_tools():
+    """联网查询 ReAct 的绑定 LLM：懒构建（首次调用才构造），熔断守卫由接缝统一提供"""
+    return llm.get_llm().bind_tools(tools)
 
 SYSTEM = SystemMessage(content=(
     "你是晓问差旅助手的「联网查询」模块，负责回答需要实时信息的问题。"

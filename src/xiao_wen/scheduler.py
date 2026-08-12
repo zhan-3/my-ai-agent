@@ -12,15 +12,11 @@
 单意图路径完全不变（subtasks 为空走原条件边），保证不破坏已验收功能。
 """
 import operator
-from typing import TypedDict, Annotated, Literal
+from typing import TypedDict, Annotated
 
 from langgraph.graph import StateGraph, START, END, add_messages
 from langgraph.types import Send
 from langchain_core.messages import AnyMessage
-from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel
-
-from xiao_wen.memory import add_message, format_recent_messages
 
 # ---- 1. 复用 xiao_wen.system 的六个 worker 节点函数（模块化：调度增强不动 worker） ----
 from xiao_wen import system as base
@@ -40,47 +36,12 @@ class State(TypedDict):
     current_task: dict            # Send 分支内当前子任务
     collected: Annotated[list[dict], operator.add]  # 并行结果收集（归约器拼接）
 
-# ---- 3. 意图识别：支持多意图拆分 ----
-intent_prompt = ChatPromptTemplate.from_messages([
-    ("system", """你是企业差旅助手的意图分类器，输出严格 JSON。规则：
-- 用户请助理安排行程、出差计划 → 行程规划
-- 用户陈述个人偏好（住宿/餐饮/出行风格）→ 偏好记录
-- 用户问历史对话/历史行程 → 历史查询
-- 用户问差旅政策、报销、预订流程 → 知识问答
-- 用户要查实时信息（天气、航班、交通）→ 联网查询
-- 以上都不像 → 其他
-边界：本助手只服务企业差旅。个人休闲/旅游规划、非差旅问题一律归「其他」。
-
-【多意图拆分】一句话里包含多个独立请求时（用"顺便/还有/以及/和"连接），
-把每个独立请求拆成一条 subtasks（各自带 intent 和原文）；单一请求时 subtasks 为空数组 []。
-
-输出键名必须严格为英文：
-- "intent"：主导意图（严格六词之一），多意图时取第一个
-- "reason"：一句话理由
-- "subtasks"：数组，每项键名严格为 intent（六词之一）和 text（该子请求原文）
-示例（单）：{{"intent": "行程规划", "reason": "要求安排出差行程", "subtasks": []}}
-示例（多）：{{"intent": "知识问答", "reason": "包含政策和天气两个请求",
-  "subtasks": [{{"intent": "知识问答", "text": "出差住宿标准是什么"}},
-               {{"intent": "联网查询", "text": "北京今天天气怎么样"}}]}}"""),
-    ("human", "最近对话：\n{recent}\n\n当前用户输入：{input}"),
-])
-
-class SubTask(BaseModel):
-    intent: Literal["行程规划", "偏好记录", "历史查询", "知识问答", "联网查询", "其他"]
-    text: str
-
-class Intent(BaseModel):
-    intent: Literal["行程规划", "偏好记录", "历史查询", "知识问答", "联网查询", "其他"]
-    reason: str
-    subtasks: list[SubTask] = []
-
-intent_model = intent_prompt | base.llm.with_structured_output(Intent, method="json_mode")
+# ---- 3. 意图识别：多意图拆分（单一来源 xiao_wen.intent，C3） ----
+from xiao_wen.intent import classify as _classify
 
 def classify_intent(state):
-    r = intent_model.invoke({"recent": state["recent"], "input": state["user_input"]})
-    assert isinstance(r, Intent)
-    return {"intent": r.intent, "reason": r.reason,
-            "subtasks": [s.model_dump() for s in r.subtasks]}
+    r = _classify(state["recent"], state["user_input"])
+    return {"intent": r.intent, "reason": r.reason, "subtasks": r.subtasks}
 
 # ---- 4. 并行执行：dispatcher（Send fan-out）+ 包装节点 + merge（fan-in） ----
 def make_parallel(worker):
@@ -134,6 +95,7 @@ app = graph.compile()
 
 # ---- 6. 演示：单意图回归 + 多意图并行 ----
 if __name__ == "__main__":
+    from xiao_wen.session import chat
     demo = [
         # ① 单意图回归（subtasks 为空 → 原路由，不破坏）
         "10月8日去北京开会4天",
@@ -147,14 +109,7 @@ if __name__ == "__main__":
     for t in demo:
         print("=" * 60)
         print(f"用户：{t}")
-        recent = format_recent_messages(6)
-        r = app.invoke({"messages": [("human", t)], "user_input": t, "recent": recent})
-        add_message("user", t)
-        print(f"意图：{r['intent']}（{r['reason']}）")
-        subs = r.get("subtasks") or []
-        if subs:
-            print(f"拆分为 {len(subs)} 个子任务（并行执行）：")
-            for s in subs:
-                print(f"  · {s['intent']}｜{s['text']}")
-        print(r["answer"])
-        add_message("assistant", r["answer"])
+        r = chat(t, graph=app)
+        print(f"意图：{r.intent}（{r.reason}）")
+        # 拆分/并行信息体现在合并回答开头（“⚡ 同时为你处理了 N 个请求”）
+        print(r.answer)

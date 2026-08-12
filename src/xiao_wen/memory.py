@@ -13,10 +13,10 @@
 import json
 import time
 from collections import Counter
-from pathlib import Path
 
-# 项目根目录 = src/xiao_wen/ 上溯三级（src → 项目根）
-ROOT = Path(__file__).resolve().parents[2]
+from xiao_wen import ROOT
+
+# 项目根目录（单一来源：xiao_wen.ROOT，C7 收敛）
 MEMORY_PATH = ROOT / "data" / "memory.json"
 
 

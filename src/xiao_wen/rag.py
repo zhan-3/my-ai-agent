@@ -11,19 +11,19 @@
 """
 import os
 import time
-from pathlib import Path
+from functools import lru_cache
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from pydantic import SecretStr
 import dashscope
 from http import HTTPStatus
 import chromadb
 
+from xiao_wen import ROOT, llm
+from xiao_wen.stability import with_retry
+
 load_dotenv()
 
-# 项目根目录 = src/xiao_wen/ 上溯三级（src → 项目根）
-ROOT = Path(__file__).resolve().parents[2]
+# 项目根目录（单一来源：xiao_wen.ROOT，C7 收敛）
 DOCS_DIR = ROOT / "docs" / "documents"
 CHROMA_DIR = ROOT / "data" / "chroma"
 EMB_MODEL = "text-embedding-v3"
@@ -31,27 +31,36 @@ EMB_DIM = 1024
 BATCH = 10          # 每次 API 调用批量 embedding 条数
 COLLECTION = "travel_docs"
 
-# ---- 1. LLM（知识生成，配置同前）----
-llm = ChatOpenAI(
-    model=os.environ["DEEPSEEK_MODEL"],
-    base_url=os.environ["DEEPSEEK_BASE_URL"],
-    api_key=SecretStr(os.environ["DEEPSEEK_API_KEY"]),
-    temperature=0,
-    extra_body={"thinking": {"type": "disabled"}},
-)
+# ---- 1. LLM（知识生成，走单一接缝，懒构建）----
+# ---- 2. dashscope embedding（懒校验 + 重试：导入不读 env，首次调用才校验）----
+_EMBED_ENV_VAR = "DASHSCOPE_API_KEY"
 
-# ---- 2. dashscope embedding ----
-dashscope.api_key = os.environ["DASHSCOPE_API_KEY"]
+
+def _validate_dashscope() -> None:
+    key = os.environ.get(_EMBED_ENV_VAR)
+    if not key:
+        raise RuntimeError(
+            f"缺少 embedding 必需环境变量：{_EMBED_ENV_VAR}（请在 .env 中配置）")
+    dashscope.api_key = key
+
+
+@with_retry(retries=2, base_delay=0.5)
+def _embed_batch(batch: list[str]):
+    """单批 embedding（指数退避重试，容忍免费 API 抖动）"""
+    resp = dashscope.TextEmbedding.call(
+        model=EMB_MODEL, input=batch, dimension=EMB_DIM)
+    if resp.status_code != HTTPStatus.OK:
+        raise RuntimeError(f"embedding 失败: {resp.code} {resp.message}")
+    return resp
+
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """批量调用 text-embedding-v3，返回归一化向量列表"""
+    """批量调用 text-embedding-v3，返回归一化向量列表（首次调用校验 DASHSCOPE_API_KEY）"""
+    _validate_dashscope()
     vecs: list[list[float]] = []
     for i in range(0, len(texts), BATCH):
         batch = texts[i : i + BATCH]
-        resp = dashscope.TextEmbedding.call(
-            model=EMB_MODEL, input=batch, dimension=EMB_DIM)
-        if resp.status_code != HTTPStatus.OK:
-            raise RuntimeError(f"embedding 失败: {resp.code} {resp.message}")
+        resp = _embed_batch(batch)
         vecs.extend(e["embedding"] for e in resp.output["embeddings"])
         time.sleep(0.2)  # 限速，避免触发频率限制
     return vecs
@@ -140,7 +149,9 @@ knowledge_prompt = ChatPromptTemplate.from_messages([
 - 不要编造政策"""),
     ("human", "【参考资料】\n{context}\n\n问题：{query}"),
 ])
-knowledge_model = knowledge_prompt | llm
+@lru_cache
+def _knowledge_model():
+    return knowledge_prompt | llm.get_llm()
 
 def knowledge_qa(query: str) -> str:
     chunks = merge_tiny_chunks(load_chunks())
@@ -151,7 +162,7 @@ def knowledge_qa(query: str) -> str:
     context = "\n\n".join(
         f"--- 来源 {stem} ---\n{text}" for _, stem, text in hits
     )
-    r = knowledge_model.invoke({"context": context, "query": query})
+    r = _knowledge_model().invoke({"context": context, "query": query})
     return f"（向量检索 top-{len(hits)}，来源：{', '.join(s for _, s, _ in hits)}）\n\n{r.content}"
 
 if __name__ == "__main__":

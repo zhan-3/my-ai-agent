@@ -12,23 +12,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel
 
+from xiao_wen import llm
 from xiao_wen.plugin_registry import discover, load_plugin
 
 load_dotenv()
-
-# 主管自己的 LLM 配置（不预加载任何 worker/插件）
-llm = ChatOpenAI(
-    model=os.environ["DEEPSEEK_MODEL"],
-    base_url=os.environ["DEEPSEEK_BASE_URL"],
-    api_key=SecretStr(os.environ["DEEPSEEK_API_KEY"]),
-    temperature=0,
-    max_retries=2,   # 工程稳定性：LLM 失败自动重试 2 次
-    timeout=30,      # 工程稳定性：30s 无响应即放弃
-    extra_body={"thinking": {"type": "disabled"}},
-)
 
 
 class Intent(BaseModel):
@@ -49,7 +38,7 @@ def build_prompt(manifest: list[dict]) -> ChatPromptTemplate:
 
 def supervisor(text: str, manifest: list[dict]) -> str:
     """主管：识别意图 → 运行时校验（动态类别无法静态类型化）→ 懒加载插件 → 派发"""
-    model = build_prompt(manifest) | llm.with_structured_output(Intent, method="json_mode")
+    model = build_prompt(manifest) | llm.get_llm().with_structured_output(Intent, method="json_mode")
     r = model.invoke({"input": text})
     assert isinstance(r, Intent)  # json_mode 结构化输出返回模型实例
     known = {p["INTENT"] for p in manifest}

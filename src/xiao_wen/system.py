@@ -17,30 +17,17 @@
 - hot path 权衡：注入克制（截断最近 6 轮），避免全量历史塞上下文（变慢、变贵、干扰）
 """
 from typing import Any, TypedDict, Annotated, Literal
-import os
-from dotenv import load_dotenv
+from functools import lru_cache
 from langgraph.graph import StateGraph, START, END, add_messages
 from langchain_core.messages import AnyMessage
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field
 
-from xiao_wen.memory import (add_or_update_preference, add_message, add_itinerary,
-                             get_preferences, get_itineraries, get_home_city,
-                             format_recent_messages)
+from xiao_wen import llm
+from xiao_wen.memory import add_or_update_preference, get_itineraries
+from xiao_wen.trip_planner import NeedsInfo, format_plan, plan as _trip_plan
 
-load_dotenv()
-
-# ---- 1. LLM（同一套可用配置） ----
-llm = ChatOpenAI(
-    model=os.environ["DEEPSEEK_MODEL"],
-    base_url=os.environ["DEEPSEEK_BASE_URL"],
-    api_key=SecretStr(os.environ["DEEPSEEK_API_KEY"]),
-    temperature=0,
-    max_retries=2,   # 工程稳定性：LLM 失败自动重试 2 次
-    timeout=30,      # 工程稳定性：30s 无响应即放弃
-    extra_body={"thinking": {"type": "disabled"}},
-)
+# ---- 1. LLM：单一接缝（xiao_wen.llm，懒构造 + 熔断守卫；链在本模块懒构建） ----
 
 # ---- 2. Schema（与 0006 一致） ----
 class PreferenceRecord(BaseModel):
@@ -49,27 +36,7 @@ class PreferenceRecord(BaseModel):
     content: str = Field(description="偏好内容的一句话")
     is_update: bool = Field(default=False, description="True=覆盖同类别旧条目；False=新增")
 
-class TripRequest(BaseModel):
-    from_city: str
-    to_city: str
-    start_date: str
-    duration_days: int
-    hotel_pref: str = Field(description="没有则填'无'")
-    budget_pref: str = Field(description="没有则填'中等'")
-
-class DayPlan(BaseModel):
-    date: str
-    transport: str
-    hotel: str
-    activities: list[str]
-    notes: str
-
-class ItineraryPlan(BaseModel):
-    days: list[DayPlan]
-    summary: str
-    reasons: list[str] = Field(description="安排理由列表，每项一句（政策约束/偏好/交通合理性等）")
-
-# ---- 3. 各阶段提示词（与 0006 一致） ----
+# ---- 3. 偏好提示词（行程规划两阶段提示词已随管线迁入 xiao_wen.trip_planner，ADR-0003） ----
 pref_prompt = ChatPromptTemplate.from_messages([
     ("system", """你是企业差旅助手的偏好提取器，输出严格 JSON。
 从用户原话提取偏好，键名必须严格为英文：
@@ -81,36 +48,9 @@ pref_prompt = ChatPromptTemplate.from_messages([
 更新示例：{{"category": "常驻城市", "content": "上海", "is_update": true}}。"""),
     ("human", "{input}"),
 ])
-pref_model = pref_prompt | llm.with_structured_output(PreferenceRecord, method="json_mode")
-
-extract_prompt = ChatPromptTemplate.from_messages([
-    ("system", """你是企业差旅助手的要素提取器，输出严格 JSON。
-键名必须严格为英文：from_city、to_city、start_date（YYYY-MM-DD，没给日期填"待定"）、
-duration_days（数字）、hotel_pref（没有填"无"）、budget_pref（经济/中等/舒适，没有填"中等"）。
-示例：{{"from_city": "北京", "to_city": "杭州", "start_date": "2026-08-20", "duration_days": 3, "hotel_pref": "无", "budget_pref": "中等"}}"""),
-    ("human", "{input}"),
-])
-extract_model = extract_prompt | llm.with_structured_output(TripRequest, method="json_mode")
-
-plan_prompt = ChatPromptTemplate.from_messages([
-    ("system", """你是资深差旅规划师，输出严格 JSON。基于差旅要素生成企业差旅行程。
-约束：
-- 天数与要素一致；每天包含 transport、hotel、activities、notes 四个字段
-- 交通方式符合城市间距离；活动含公务安排和用餐建议
-- 住宿必须符合用户的【历史偏好】，偏好没提到再按预算安排；酒店给品牌/档位即可
-- reasons：安排理由列表，每项一句，涵盖政策约束、用户偏好、交通合理性，例如："住宿按差旅政策一线城市不超过500元/晚"、"考虑你不吃辣的偏好安排清淡餐饮"
-- summary 是给用户看的中文总结（不含 JSON）
-
-字段形状必须严格如下（都是简单值，禁止嵌套对象！）：
-- transport：一句话字符串，如 "高铁 G31 次 08:00 北京南→12:30 杭州东"
-- hotel：字符串，如 "全季酒店（杭州西湖店）"；最后一天返程写 "无（当晚返程）"
-- activities：字符串数组，每项一句，如 "14:00-17:00 公务：拜访客户公司"、"18:30-20:00 用餐：与客户晚餐"
-- notes：字符串，一两句备注
-
-输出键名严格为英文：days（数组，每项键名 date/transport/hotel/activities/notes）、summary、reasons（字符串数组）。"""),
-    ("human", "差旅要素：{trip_json}\n用户历史偏好：{prefs}\n用户原话：{user_input}"),
-])
-plan_model = plan_prompt | llm.with_structured_output(ItineraryPlan, method="json_mode")
+@lru_cache
+def _pref_model():
+    return pref_prompt | llm.get_llm().with_structured_output(PreferenceRecord, method="json_mode")
 
 # ---- 4. 导入外部 worker 模块（xiao_wen.rag 向量知识问答、xiao_wen.web 联网查询图）----
 from xiao_wen import rag   # rag.knowledge_qa(query) -> str
@@ -125,40 +65,16 @@ class State(TypedDict):
     reason: str
     answer: str
 
-# ---- 6. 主管（真 LLM，与 0006 一致） ----
-intent_prompt = ChatPromptTemplate.from_messages([
-    ("system", """你是企业差旅助手的意图分类器，输出严格 JSON。规则：
-- 用户请助理安排行程、出差计划 → 行程规划
-- 用户陈述个人偏好（住宿/餐饮/出行风格）→ 偏好记录
-- 用户问历史对话/历史行程 → 历史查询
-- 用户问差旅政策、报销、预订流程 → 知识问答
-- 用户要查实时信息（天气、航班、交通）→ 联网查询
-- 以上都不像 → 其他
-一句话里有多个特征时，选主导意图。
-
-边界：本助手只服务企业差旅。个人休闲/旅游规划、非差旅问题一律归「其他」。
-
-输出必须是 JSON 对象，键名必须严格为英文 "intent" 和 "reason"：
-- "intent" 严格是六词之一：行程规划、偏好记录、历史查询、知识问答、联网查询、其他
-- "reason" 一句话理由
-参考最近对话理解省略/指代（如「那上海呢」指上一轮提到的城市）
-示例：{{"intent": "行程规划", "reason": "用户要求安排出差行程"}}。"""),
-    ("human", "最近对话：\n{recent}\n\n当前用户输入：{input}"),
-])
-class Intent(BaseModel):
-    intent: Literal["行程规划", "偏好记录", "历史查询", "知识问答", "联网查询", "其他"]
-    reason: str
-
-intent_model = intent_prompt | llm.with_structured_output(Intent, method="json_mode")
+# ---- 6. 主管：意图分类（单一来源 xiao_wen.intent，真 LLM） ----
+from xiao_wen.intent import Intent, classify as _classify
 
 def classify_intent(state):
-    r = intent_model.invoke({"recent": state["recent"], "input": state["user_input"]})
-    assert isinstance(r, Intent)
+    r = _classify(state["recent"], state["user_input"])
     return {"intent": r.intent, "reason": r.reason}
 
 # ---- 7. 六个 worker（全部做实） ----
 def preference(state):
-    r = pref_model.invoke({"input": state["user_input"]})
+    r = _pref_model().invoke({"input": state["user_input"]})
     assert isinstance(r, PreferenceRecord)
     # 追加/覆盖区分：is_update=True 时替换同类别旧条目（如「我现在常住上海」）
     rec = add_or_update_preference(r.category, r.content, r.is_update)
@@ -174,60 +90,14 @@ def history(state):
         lines.append(f"· {it.get('start_date', '?')} {it.get('from_city', '?')}→{it.get('to_city', '?')}，{it.get('duration_days', '?')}天：{it.get('summary', '')[:40]}")
     return {"answer": "\n".join(lines)}
 
-def format_plan(plan: ItineraryPlan) -> str:
-    lines = [f"📋 {plan.summary}", ""]
-    if plan.reasons:
-        lines.append("💡 安排理由：")
-        for r in plan.reasons:
-            lines.append(f"  · {r}")
-        lines.append("")
-    for d in plan.days:
-        lines.append(f"【{d.date}】")
-        lines.append(f"  交通：{d.transport}")
-        lines.append(f"  住宿：{d.hotel}")
-        for a in d.activities:
-            lines.append(f"  活动：{a}")
-        if d.notes:
-            lines.append(f"  备注：{d.notes}")
-        lines.append("")
-    return "\n".join(lines)
-
-def _missing(req: TripRequest) -> list[str]:
-    """检查必填要素缺失，返回缺失清单（基础项 E：缺失信息提示）"""
-    miss = []
-    if not req.to_city or req.to_city in ("待定", "未知"):
-        miss.append("目的城市")
-    if not req.from_city or req.from_city in ("待定", "未知"):
-        miss.append("出发城市")
-    if req.start_date in ("待定", ""):
-        miss.append("出发日期")
-    if not req.duration_days or req.duration_days <= 0:
-        miss.append("出差天数")
-    return miss
-
 def itinerary(state):
-    req = extract_model.invoke({"input": state["user_input"]})
-    assert isinstance(req, TripRequest)  # with_structured_output(json_mode) 返回模型实例
-    # 常驻城市补全：用户没说出发城市时用长期记忆（「下次直接说去哪别再傻问」）
-    hc = get_home_city()
-    if (not req.from_city or req.from_city in ("待定", "未知")) and hc:
-        req.from_city = hc
-    # 缺失信息检查：要素不全不硬生成，先问用户补（基础项 E）
-    miss = _missing(req)
-    if miss:
+    """行程规划：两阶段管线收口于 xiao_wen.trip_planner.plan（ADR-0003）"""
+    r = _trip_plan(state["user_input"])
+    if isinstance(r, NeedsInfo):
         return {"answer": "⚠️ 还缺一些信息才能帮你安排行程，请补充：\n· "
-                + "\n· ".join(miss)
+                + "\n· ".join(r.missing)
                 + "\n（例如：「10月8日从广州去北京开会4天」）"}
-    prefs = get_preferences()
-    prefs_text = "；".join(f"{p['category']}:{p['content']}" for p in prefs) or "无"
-    plan = plan_model.invoke({
-        "trip_json": req.model_dump_json(),
-        "prefs": prefs_text,
-        "user_input": state["user_input"],
-    })
-    assert isinstance(plan, ItineraryPlan)
-    add_itinerary(req.model_dump(), plan.summary)
-    return {"answer": format_plan(plan)}
+    return {"answer": format_plan(r.plan)}
 
 def knowledge(state):
     """真实现：向量检索知识问答（embedding + chromadb）"""
@@ -270,6 +140,7 @@ app = graph.compile()
 
 # ---- 9. 演示：三类案例端到端 ----
 if __name__ == "__main__":
+    from xiao_wen.session import chat
     demo = [
         # ① 偏好新增（长期记忆写入）
         "我不吃辣，住宿喜欢安静",
@@ -289,11 +160,6 @@ if __name__ == "__main__":
     for t in demo:
         print("=" * 56)
         print(f"用户：{t}")
-        # 短期记忆：每轮 invoke 前注入最近对话（hot path 检索，克制截断）
-        recent = format_recent_messages(6)
-        r = app.invoke({"messages": [("human", t)], "user_input": t, "recent": recent})
-        # 写入短期记忆（hot path 写入）
-        add_message("user", t)
-        print(f"意图：{r['intent']}（{r['reason']}）")
-        print(r["answer"])
-        add_message("assistant", r["answer"])
+        r = chat(t)
+        print(f"意图：{r.intent}（{r.reason}）")
+        print(r.answer)

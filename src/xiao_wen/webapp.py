@@ -7,9 +7,9 @@
 
 设计：
 - 复用 xiao_wen.system 完整系统（六 worker 主管架构），不重写任何 Agent 逻辑
-- 记忆闭环与 system 的 demo 一致：每轮 invoke 前注入短期记忆（recent），
-  invoke 后把 用户/助手 两轮写回（hot path）
-- 会话隔离：内存 dict keyed by session_id（演示级；真实产品换 Redis 即可）
+- 记忆闭环收口于 xiao_wen.session.chat（读 recent → 注入 → invoke → 写回两轮）
+- 异常兜底在 web 层（session 层向上抛）：任何异常给友好降级文案
+- 会话隔离暂缓：session_id 预留，记忆为全局单文件（ADR-0002）
 """
 import os
 
@@ -18,10 +18,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from xiao_wen.memory import add_message, format_recent_messages
-from xiao_wen import system  # 复用完整系统（六 worker 主管架构），不重写 Agent
-
-app_graph = system.app
+from xiao_wen.session import chat as run_chat  # 会话循环收口（复用 system.app）
 
 app = FastAPI(title="晓问 · 差旅出行助手", description="多 Agent 差旅助手 Web 界面")
 
@@ -51,18 +48,8 @@ def chat(req: ChatRequest) -> ChatResponse:
     if not text:
         raise HTTPException(status_code=400, detail="输入不能为空")
     try:
-        # 短期记忆：invoke 前注入最近对话（hot path 检索）
-        recent = format_recent_messages(6)
-        r = app_graph.invoke({
-            "messages": [("human", text)],
-            "user_input": text,
-            "recent": recent,
-        })
-        # 短期记忆：invoke 后写回（hot path 写入）
-        add_message("user", text)
-        add_message("assistant", r["answer"])
-        return ChatResponse(answer=r["answer"], intent=r.get("intent", "?"),
-                            reason=r.get("reason", ""))
+        r = run_chat(text, req.session_id)
+        return ChatResponse(answer=r.answer, intent=r.intent, reason=r.reason)
     except Exception as e:  # noqa: BLE001 —— 稳定性：任何异常都给友好文案
         from xiao_wen.stability import logger
         logger.error("chat 失败（session=%s）：%s", req.session_id, e)
