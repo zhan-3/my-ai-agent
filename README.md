@@ -98,12 +98,14 @@ uv run python -m xiao_wen.rag            # 知识问答（向量检索 + Chroma�
 uv run python -m xiao_wen.scheduler      # 调度优化：多请求并行执行
 uv run python -m xiao_wen.demos.plugin_demo    # 插件化架构：动态发现/懒加载/热插拔（四幕演示）
 uv run python -m xiao_wen.demos.stability_demo # 工程稳定性：重试/熔断/故障注入/健康检查（四幕演示）
-uv run ruff check              # 代码检查（lint，秒级）
+uv run ruff check              # 代码检查（lint，秒级；--fix 自动修复可修项）
+uv run ruff format .           # 代码格式化（统一风格，可加 --check 只检查）
+uv run mypy src/xiao_wen       # 类型检查（0 警告）
 uv run pytest                  # 自动化测试：单元层（无 LLM，秒级）
 uv run pytest -m integration   # 自动化测试：集成层（真实 LLM，约 1 分钟）
 uv run xiao-wen                # 可视化 Web 界面（等价 python -m xiao_wen.webapp）→ http://127.0.0.1:8000
 uv run python scripts/screenshot_demo.py # 无头浏览器生成演示截图 → docs/screenshots/
-uv run python scripts/delivery.py all   # 交付三连：门禁(pytest+mypy+冒烟) → 打包 → 邮件模板
+uv run python scripts/delivery.py all   # 交付三连：门禁(ruff+pytest+mypy+冒烟) → 打包 → 邮件模板
 ```
 
 > 首次运行 `xiao_wen.system` 中知识问答会构建向量索引（一次性，约 500 个文本块，随语料变化），之后复用磁盘索引，秒级返回。
