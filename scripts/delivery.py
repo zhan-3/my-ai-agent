@@ -22,12 +22,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PY = sys.executable
 
-# 打包白名单：显式列出要进包的内容（.env/.venv/data 天然排除）
+# 打包白名单（最终成品）：作业相关内容，显式列出
+# .env/.venv/data/teaching(教学过程)/AGENTS.md/.scratch 天然排除
 WHITELIST = [
     "README.md", "pyproject.toml", "uv.lock",
-    "AGENTS.md", "MISSION.md", "NOTES.md", "RESOURCES.md",
-    "homework", "tests", "plugins", "scripts",
-    "docs", "lessons", "learning-records", "assets", "reference",
+    "homework", "tests", "plugins", "scripts", "docs",
 ]
 SKIP_PART = {"__pycache__", ".pytest_cache", ".mypy_cache", ".venv"}
 

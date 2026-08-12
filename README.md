@@ -10,7 +10,7 @@
 
 差旅场景有明确的**多角色分工**特点：识别用户要什么（意图）→ 决定派谁去做（调度）→ 各专职 Agent 分别处理（规划行程 / 记偏好 / 查历史 / 答政策 / 查实时信息）。本项目把这些能力拆成 6 个可独立开发、独立验证、再组装的工作单元（Worker），由一个 LLM 意图主管统一调度，形成「**主管-工人（Supervisor–Workers）**」多 Agent 架构。
 
-设计主线（先桩后实）：**先搭骨架验证流程，再逐个把 Worker 做实**。每一课的演进都独立留档（见 `learning-records/`），最终系统 6 个 Worker 全部做实，基础项 A–E 全部完成。
+设计主线（先桩后实）：**先搭骨架验证流程，再逐个把 Worker 做实**。每一课的演进都独立留档（见 `teaching/learning-records/`），最终系统 6 个 Worker 全部做实，基础项 A–E 全部完成。
 
 ## 2. 技术栈
 
@@ -314,4 +314,15 @@ FastAPI + uvicorn 后端复用 0010 完整系统（Agent 逻辑零重写），�
 
 ---
 
-*教学项目 · 设计演进全程记录见 `learning-records/`（LR-0001 ~ LR-0011）*
+*教学项目 · 设计演进全程记录见 `teaching/learning-records/`（LR-0001 ~ LR-0019）*
+
+## 项目结构：成品 vs 教学过程
+
+仓库顶层刻意区分两类内容，交付压缩包（`python scripts/delivery.py package`）**只含成品**：
+
+| 目录 | 内容 | 是否进交付包 |
+|---|---|---|
+| `homework/` `tests/` `plugins/` `scripts/` `docs/` | 系统代码 + 测试 + 插件 + 工具 + 知识库/截图 | ✅ 成品 |
+| `README.md` `pyproject.toml` `uv.lock` | 说明 + 依赖锁定 | ✅ 成品 |
+| `teaching/` | 17 课课件、19 条学习记录、术语表、速查表、教学笔记 | ❌ 教学过程 |
+| `AGENTS.md` `.scratch/` | 本仓库 Agent 协作配置与本地 issue tracker | ❌ 内部 |
