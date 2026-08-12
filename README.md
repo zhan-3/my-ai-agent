@@ -76,7 +76,7 @@
 | Knowledge/RAG Agent 知识问答 | `agents/knowledge_agent.py` | 政策库语义检索 + 生成 | embedding + Chroma |
 | Information Query Agent 联网查询 | `agents/web_agent.py` | 天气/汇率/空气质量 | ToolNode + ReAct 循环 |
 | 边界兜底 Agent | `agents/other_agent.py` | 非差旅问题拒绝 | 词汇表校验兜底归「其他」 |
-| 外部扩展子 Agent ★ | `plugins/stats.py` | 差旅统计（注册表自动发现并入） | discover + 懒加载 |
+| 外部扩展子 Agent ★ | `plugins/stats.py` | 差旅画像（次数/总天数/年均/年度趋势/常去城市，注册表自动发现并入） | discover + 懒加载 |
 
 ## 5. 运行方式说明
 

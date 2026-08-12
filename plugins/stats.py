@@ -14,18 +14,39 @@ from xiao_wen.memory import get_itineraries
 
 # ---- 插件元数据 ----
 INTENT = "差旅统计"
-DESCRIPTION = "统计历史出差的目的地、出差次数、常用城市"
+DESCRIPTION = "统计历史出差的目的地、出差次数、常用城市、出差天数"
 
 
 def run(state: dict) -> dict:
-    """统一子 Agent 接口：读长期记忆的历史行程做统计（按会话隔离）"""
+    """统一子 Agent 接口：读长期记忆的历史行程做差旅画像（按会话隔离）
+
+    数据源：facts 里的 to_city / start_date / duration_days（TripRequest 强制字段，
+    旧记录可能缺天数——统计时跳过并在输出诚实标注）。
+    """
     its = get_itineraries(session_id=state.get("session_id", "default"))
     if not its:
         return {"answer": "📭 暂无历史行程记录"}
+
     dests = Counter(i.get("to_city", "未知") for i in its if i.get("to_city") not in ("待定", "未知"))
-    trips = len(its)
     top = dests.most_common(5)
-    lines = [f"📊 差旅统计：共 {trips} 次行程", ""]
+    trips = len(its)
+
+    # 天数统计：仅计入带 duration_days 的行程（旧数据缺失则跳过）
+    days = [int(i["duration_days"]) for i in its if isinstance(i.get("duration_days"), int)]
+    total_days, avg_days = (sum(days), round(sum(days) / len(days), 1)) if days else (0, 0)
+
+    # 年度趋势：start_date 前 4 位分组
+    years = Counter(i.get("start_date", "")[:4] for i in its if i.get("start_date", "")[:4].isdigit())
+
+    lines = [f"📊 差旅画像：共 {trips} 次行程"]
+    if total_days:
+        lines.append(f"  累计出差 {total_days} 天，平均每次 {avg_days} 天")
+    if years:
+        trend = "、".join(f"{y} 年 {n} 次" for y, n in sorted(years.items()))
+        lines.append(f"  年度分布：{trend}")
+    lines.append("")
     lines += [f"  · {city} ×{n} 次" for city, n in top]
+    if days and len(days) < trips:
+        lines.append(f"\n（{trips - len(days)} 条旧记录缺天数，未计入天数统计）")
     lines.append("\n（数据来自长期记忆，按会话隔离）")
     return {"answer": "\n".join(lines)}

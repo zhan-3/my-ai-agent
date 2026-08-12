@@ -64,6 +64,44 @@ def test_load_external_agent_run_contract():
     assert isinstance(out, dict) and "answer" in out
 
 
+def test_stats_agent_trip_portrait(monkeypatch):
+    """差旅统计升级（读已有 duration_days/start_date 字段，零迁移）：
+    出差画像 = 次数 + 总/平均天数 + 年度趋势 + 常去城市 Top"""
+    from xiao_wen import memory
+    from xiao_wen.memory import InMemoryBackend
+
+    monkeypatch.setattr(memory, "_backend", None)
+    memory.set_backend(InMemoryBackend())
+    memory.add_itinerary(
+        {"to_city": "北京", "from_city": "上海", "start_date": "2026-03-10", "duration_days": 4},
+        "去北京开会",
+        session_id="zhang",
+    )
+    memory.add_itinerary(
+        {"to_city": "杭州", "from_city": "上海", "start_date": "2026-08-20", "duration_days": 2},
+        "去杭州出差",
+        session_id="zhang",
+    )
+    memory.add_itinerary(
+        {"to_city": "北京", "from_city": "上海", "start_date": "2025-11-05", "duration_days": 3},
+        "去北京培训",
+        session_id="zhang",
+    )
+    memory.add_itinerary(
+        {"to_city": "深圳", "from_city": "上海", "start_date": "2026-05-01"},  # 旧数据无天数
+        "去深圳出差",
+        session_id="zhang",
+    )
+
+    mod = reg.load_agent("差旅统计")
+    out = mod.run({"user_input": "统计出差", "session_id": "zhang"})
+    ans = out["answer"]
+    assert "4 次" in ans  # 行程次数
+    assert "9 天" in ans  # 总天数 = 4+2+3（旧记录无天数不计入）
+    assert "2026" in ans and "2025" in ans  # 年度趋势
+    assert "北京" in ans  # 常去城市 Top
+
+
 def test_hot_extension_add_is_discovered(tmp_path, monkeypatch):
     """热插拔：运行中新增外部子 Agent → 重新 discover 自动注册（动态发现的灵魂）"""
     monkeypatch.setattr(reg, "AGENT_DIR", tmp_path)
