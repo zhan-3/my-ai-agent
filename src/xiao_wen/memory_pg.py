@@ -35,6 +35,12 @@ CREATE TABLE IF NOT EXISTS itineraries (
     ts TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_itineraries_session ON itineraries(session_id);
+CREATE TABLE IF NOT EXISTS users (
+    id BIGSERIAL PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -133,3 +139,47 @@ class PostgresBackend:
         assert got and got[-1]["content"] == "ping"
         with self._conn() as conn:
             conn.execute("DELETE FROM messages WHERE session_id = %s", ("__health__",))
+
+
+class PostgresUserStore:
+    """认证用户存储：users 表（username 唯一，只存 bcrypt 哈希）
+
+    独立于记忆三域（认证域专属）；短连接 + 幂等建表，与 PostgresBackend 同模式。
+    """
+
+    def __init__(self, url: str) -> None:
+        self._url = url
+        with psycopg.connect(url) as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS users ("
+                " id BIGSERIAL PRIMARY KEY,"
+                " username TEXT NOT NULL UNIQUE,"
+                " password_hash TEXT NOT NULL,"
+                " created_at TEXT NOT NULL)"
+            )
+            conn.commit()
+
+    def register(self, username: str, password_hash: str) -> dict | None:
+        try:
+            with psycopg.connect(self._url) as conn:
+                conn.execute(
+                    "INSERT INTO users (username, password_hash, created_at) VALUES (%s, %s, %s)",
+                    (username, password_hash, time.strftime("%Y-%m-%d %H:%M")),
+                )
+                conn.commit()
+        except psycopg.errors.UniqueViolation:
+            return None
+        return {"username": username, "password_hash": password_hash}
+
+    def get_user(self, username: str) -> dict | None:
+        with psycopg.connect(self._url) as conn:
+            row = conn.execute("SELECT username, password_hash FROM users WHERE username = %s", (username,)).fetchone()
+        if row is None:
+            return None
+        return {"username": row[0], "password_hash": row[1]}
+
+    def clear_all(self) -> None:
+        """清空用户表（测试专用）"""
+        with psycopg.connect(self._url) as conn:
+            conn.execute("DELETE FROM users")
+            conn.commit()

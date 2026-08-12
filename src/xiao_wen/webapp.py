@@ -9,30 +9,54 @@
 - 复用图工厂（graph_builder）调度图（子 Agent 注册表驱动主管架构，多意图并行），不重写任何 Agent 逻辑
 - 记忆闭环收口于 xiao_wen.session.chat（读 recent → 注入 → invoke → 写回两轮）
 - 异常兜底在 web 层（session 层向上抛）：任何异常给友好降级文案
-- 会话隔离暂缓：session_id 预留，记忆为全局单文件（ADR-0002）
+- 认证（ADR-0007）：JWT 无状态认证；会话维度 = 用户身份——/api/chat 从
+  Authorization Bearer 解出用户名作为 session_id，客户端不再自填（用户隔离）
 """
 
 import os
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from xiao_wen import auth
 from xiao_wen.session import chat as run_chat  # 会话循环收口（默认 = 图工厂调度图，多意图并行）
 
 app = FastAPI(title="晓问 · 差旅出行助手", description="多 Agent 差旅助手 Web 界面")
 
 
+class AuthRequest(BaseModel):
+    username: str
+    password: str
+
+
 class ChatRequest(BaseModel):
     user_input: str
-    session_id: str = "default"  # 会话隔离（演示级内存；真实产品换 Redis）
 
 
 class ChatResponse(BaseModel):
     answer: str
     intent: str
     reason: str
+
+
+class AuthResponse(BaseModel):
+    token: str
+    username: str
+
+
+def _current_user(authorization: str | None = None) -> str:
+    """从 Authorization: Bearer <token> 解出用户名（会话维度 = 用户身份，Q4 定案）
+
+    FastAPI 依赖注入没法依赖 Header 条件参数，这里直接手动解析（统一 401 语义）。
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="未登录")
+    user = auth.authenticate(authorization.removeprefix("Bearer ").strip())
+    if user is None:
+        raise HTTPException(status_code=401, detail="登录已失效，请重新登录")
+    return user
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -43,19 +67,47 @@ def index() -> str:
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-def chat(req: ChatRequest) -> ChatResponse:
-    """聊天接口：完整走一遍主管图（含两层记忆闭环）"""
+def chat(req: ChatRequest, authorization: str | None = Header(default=None)) -> ChatResponse:
+    """聊天接口：完整走一遍主管图（含两层记忆闭环）；会话维度 = 登录用户（Q4 强制）"""
+    user = _current_user(authorization)
     text = req.user_input.strip()
     if not text:
         raise HTTPException(status_code=400, detail="输入不能为空")
     try:
-        r = run_chat(text, req.session_id)
+        r = run_chat(text, user)
         return ChatResponse(answer=r.answer, intent=r.intent, reason=r.reason)
     except Exception as e:
         from xiao_wen.stability import logger
 
-        logger.error("chat 失败（session=%s）：%s", req.session_id, e)
+        logger.error("chat 失败（user=%s）：%s", user, e)
         return ChatResponse(answer="⚠️ 服务暂时不可用，请稍后再试。", intent="error", reason=str(e)[:120])
+
+
+# ---- 认证端点（JWT，ADR-0007） ----
+@app.post("/api/auth/register", response_model=AuthResponse)
+def register(req: AuthRequest) -> AuthResponse:
+    """注册并直接登录（返回 token）；用户名冲突 409"""
+    token = auth.register(req.username, req.password)
+    if token is None:
+        if not req.username.strip() or not req.password:
+            raise HTTPException(status_code=400, detail="用户名/密码不能为空")
+        raise HTTPException(status_code=409, detail="用户名已存在")
+    return AuthResponse(token=token, username=req.username.strip())
+
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+def login(req: AuthRequest) -> AuthResponse:
+    """登录：返回 token；用户名/密码错误 401"""
+    token = auth.login(req.username, req.password)
+    if token is None:
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    return AuthResponse(token=token, username=req.username.strip())
+
+
+@app.get("/api/auth/me")
+def me(authorization: str | None = Header(default=None)) -> dict:
+    """校验当前 token → 返回用户名（前端登录态校验用）"""
+    return {"username": _current_user(authorization)}
 
 
 # ---- 前端页面（随文件存放，同目录 static/index.html） ----

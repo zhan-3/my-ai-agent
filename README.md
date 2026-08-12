@@ -20,14 +20,15 @@
 | 大模型 | DeepSeek（OpenAI 兼容接口） | 意图识别、要素提取、行程生成、问答、工具调用 |
 | Embedding | 阿里 DashScope text-embedding-v3（1024 维） | 知识库向量化 |
 | 向量库 | Chroma 1.5.9（磁盘持久化） | 政策文档语义检索 |
-| 记忆存储 | Postgres 后端（`POSTGRES_URL`，psycopg）+ InMemory 演示兜底 | 短期对话 + 长期偏好/历史，**按 session 隔离** |
+| 记忆存储 | Postgres 后端（`POSTGRES_URL`，psycopg）+ InMemory 演示兜底 | 短期对话 + 长期偏好/历史，**按用户隔离** |
+| 认证 | JWT（pyjwt，HS256）+ bcrypt 密码哈希 | 注册/登录端点，会话维度 = 用户身份 |
 | 联网数据 | open-meteo（天气/空气质量）、exchangerate-api（汇率） | 免费公开 API，无需 key |
 | 包管理 | uv | 依赖锁定（pyproject.toml + uv.lock） |
 | 类型检查 | mypy（dev 依赖） | 全项目 0 警告 |
 | 代码检查 | ruff（dev 依赖） | E/F/I/UP/B/SIM 等规则全绿，门禁一部分 |
 | 插件机制 | 子 Agent 注册中心 | 动态发现/懒加载/渐进式披露（内置+外部） |
 | 稳定性层 | 自研 + LangChain 内置 | 重试/超时/熔断/兜底/日志/健康检查 |
-| 测试框架 | pytest 9 + pytest.mark | 分层测试 85 个：单元 70（无 LLM，含 5 个 Postgres 条件跑）+ 集成 15（真实模型） |
+| 测试框架 | pytest 9 + pytest.mark | 分层测试 108 个：单元 93（无 LLM，含 6 个 Postgres 条件跑）+ 集成 15（真实模型） |
 
 ## 3. 系统架构
 
@@ -110,7 +111,8 @@ uv run python scripts/delivery.py all   # 交付三连：门禁(ruff+pytest+mypy
 
 > 持久化记忆（可选）：`docker compose up -d` 起本地 Postgres，然后
 export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
-即可让记忆落盘（会话隔离）；不设则用内存后端（演示，重启即失）。
+即可让记忆落盘（用户隔离）；不设则用内存后端（演示，重启即失）。
+> 认证：打开 Web 界面先注册/登录（JWT）；生产环境务必 `export JWT_SECRET=<长随机串>` 覆盖开发默认密钥。
 
 > 首次运行 `xiao_wen.system` 中知识问答会构建向量索引（一次性，约 500 个文本块，随语料变化），之后复用磁盘索引，秒级返回。
 
@@ -137,12 +139,13 @@ export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 │       ├── llm.py               ★ 模型单一接缝（懒构造 + 熔断守卫代理）
 │       ├── trip_planner.py      ★ 行程规划管线（提取→补全→缺项→生成→写回）
 │       ├── plugin_registry.py   # 子 Agent 注册中心（discover / AST 元数据 / load_agent）
-│       ├── memory.py            # 两层记忆：后端协议（InMemory 兑底 / Postgres 会话隔离）
-│       ├── memory_pg.py         # Postgres 后端（psycopg 三表按 session 过滤）
+│       ├── memory.py            # 两层记忆：后端协议（InMemory 兑底 / Postgres 用户隔离）
+│       ├── memory_pg.py         # Postgres 后端（psycopg 四表含 users，按会话过滤）
+│       ├── auth.py              # 认证（JWT + bcrypt，用户存储 env 分派）
 │       ├── rag.py               # 知识问答（向量检索 + Chroma）
 │       ├── web.py               # 联网查询（ToolNode + ReAct）
 │       ├── stability.py         # 稳定性层（重试/熔断/兜底/健康检查）
-│       ├── webapp.py            # FastAPI Web 界面（复用 system 零重写）
+│       ├── webapp.py            # FastAPI Web 界面（JWT 认证 + 用户隔离）
 │       ├── agents/              # 内置子 Agent 实体（每个 = INTENT + DESCRIPTION + run）
 │       │   ├── itinerary_agent.py   # 行程规划（trip_planner 收口）
 │       │   ├── preference_agent.py  # 偏好记录（追加/覆盖）
@@ -164,6 +167,8 @@ export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 │   ├── test_memory.py           # 记忆：追加/覆盖/常驻城市/历史
 │   ├── test_memory_backend.py   # 后端协议：InMemory 直测 + 会话隔离矩阵 + env 分派
 │   ├── test_memory_pg.py        # （Postgres，条件跑）真库读写 + session 隔离
+│   ├── test_auth.py             # 认证：bcrypt 哈希 / JWT 签验 / 注册登录 / env 分派
+│   ├── test_webapp.py           # webapp 端点：注册/登录/me + 聊天强制用户隔离
 │   ├── test_itinerary.py        # 行程：缺失检查 + 结果格式
 │   ├── test_plugin.py           # 注册中心：发现/懒加载/内置优先/热插拔
 │   ├── test_stability.py        # 熔断三态/重试/兜底
@@ -178,7 +183,7 @@ export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 │
 ├── docs/
 │   ├── layer-map.html           # 代码层映射挂图（运行时 + 脚手架动机）
-│   ├── adr/                     # 架构决策记录（ADR-0001..0006）
+│   ├── adr/                     # 架构决策记录（ADR-0001..0007）
 │   ├── documents/               # 知识库语料（8 份政策文档）
 │   ├── agents/                  # Agent 技能协作文档
 │   └── screenshots/             # 演示截图 6 张
@@ -219,13 +224,13 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 
 text-embedding-v3 + Chroma 余弦检索 top-5，命中块拼进提示词生成答案，无需查询改写。
 
-### 6.4 两层记忆（会话隔离）
+### 6.4 两层记忆（用户隔离）
 
 - **短期**：最近 6 轮对话每轮注入，支持指代消解（「那上海呢」→ 问天气）。
 - **长期**：偏好（追加/覆盖区分）、常驻城市（自动补出发城市）、历史行程。
-- **会话隔离**：所有记忆按 `session_id` 隔离（webapp 每请求携带，默认 `default`）；
-  链路贯穿 webapp → chat → 图 State → 子 Agent → 存储后端。
-- **存储后端**：设 `POSTGRES_URL` 走 Postgres（psycopg 三表，持久化 + 隔离）；
+- **用户隔离**：webapp 层强制——登录后会话维度 = 用户名（JWT 解出，客户端不自填）；
+  链路贯穿 webapp → chat → 图 State → 子 Agent → 存储后端（ADR-0007）。
+- **存储后端**：设 `POSTGRES_URL` 走 Postgres（psycopg 四表含 users，持久化 + 隔离）；
   不设则 InMemory 演示兜底（重启即失）。本地起库：`docker compose up -d`。
 
 ### 6.5 联网查询
@@ -320,7 +325,7 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 | B 调度优化 | ✅ 完整 | 按任务类型动态路由 + 多请求 Send 并行执行 + 先收集信息再规划（要素提取） |
 | C 插件化、模块化架构 | ✅ 完整 | 子 Agent 注册中心：动态发现（目录扫描）+ 自动扫描注册 + 渐进式披露（AST 元数据，意图识别阶段仅加载元数据）+ 懒加载（未使用模块不加载）+ 热插拔演示 |
 | D 工程稳定性 | ✅ 完整 | 六件套：LLM 重试（max_retries+指数退避）/ 超时控制 / 熔断三态 / 异常兜底 / 日志 / 健康检查；含真实故障注入演示（坏 key → 裸调用 401 崩溃 vs 优雅降级） |
-| E 评测与测试 | ✅ 完整 | 分层自动化测试 85 个：单元层 70（记忆/行程/注册中心/稳定性/RAG 分块/图工厂/会话隔离，无 LLM；其中 5 个 Postgres 真库测试需本地容器+`POSTGRES_TEST_URL` 才跑）+ 集成层 15（意图识别 7 用例含边界 + 外部扩展识别 2 + 多意图拆分 2、端到端记忆闭环 + 外部扩展端到端派发 + 多意图并行、向量 RAG 检索）；`uv run pytest` / `-m integration` |
+| E 评测与测试 | ✅ 完整 | 分层自动化测试 108 个：单元层 93（记忆/行程/注册中心/稳定性/RAG 分块/图工厂/会话隔离/认证/webapp 端点，无 LLM；其中 6 个 Postgres 真库测试需本地容器+`POSTGRES_TEST_URL` 才跑）+ 集成层 15（意图识别 7 用例含边界 + 外部扩展识别 2 + 多意图拆分 2、端到端记忆闭环 + 外部扩展端到端派发 + 多意图并行、向量 RAG 检索）；`uv run pytest` / `-m integration` |
 | F 可视化界面 | ✅ 完整 | FastAPI + 原生 JS Web 界面（聊天气泡/chips/打字机），复用 `xiao_wen.system` 完整系统零重写；演示截图 6 张见 docs/screenshots/ |
 
 ## 10. 已知问题或后续优化方向
@@ -329,7 +334,7 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 - 行程中的车次/航班为模型生成的**参考方案**，非真实预订（演示未接票务系统）。
 - 天气/汇率/空气质量来自免费公开 API：① geocoding 子域名曾失效（已换 OSM Nominatim）；② API 不稳定（已加重试+降级，仍可能偶发失败）。
 - 演示模式（未设 `POSTGRES_URL`）记忆为进程内存，**重启即失**；持久化需设 `POSTGRES_URL`（本地 `docker compose up -d`）。
-- 会话隔离按 `session_id` 划分，但无用户认证：谁都能填任意 session_id（生产需接认证后以用户维度隔离）。
+- 认证按用户名隔离（JWT，ADR-0007），但**无角色授权**（无 admin/普通用户之分）——多角色需再接授权层。
 - 向量检索依赖外部 Embedding API，结果不可解释，复杂语义仍有边界。
 
 **后续优化方向**

@@ -34,6 +34,11 @@ def main() -> None:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1000, "height": 760})
         page.goto(BASE)
+        # 认证（ADR-0007）：先注册一个截图专用账号（注册即登录）
+        page.wait_for_selector("#authPanel")
+        page.fill("#authUser", f"screenshot_{int(time.time())}")
+        page.fill("#authPass", "demo123456")
+        page.click("#authRegister")
         page.wait_for_selector(".chips .chip")
         time.sleep(0.6)
         page.screenshot(path=str(OUT / "01-首页.png"))

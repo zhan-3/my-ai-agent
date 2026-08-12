@@ -59,9 +59,24 @@
 <header>
   <h1><span class="dot">晓问</span> · 差旅出行助手</h1>
   <span class="sub">多 Agent 智能出行助手｜六 Worker 主管架构</span>
-  <span class="status"><span class="pulse"></span>在线</span>
+  <span class="status" id="authStatus"><span class="pulse"></span>在线</span>
 </header>
 
+<!-- 登录 / 注册（未认证时显示） -->
+<div id="authPanel" style="display:none; max-width:420px; margin:12vh auto 0; text-align:center;">
+  <h2 style="font-size:20px; margin-bottom:6px;">欢迎使用晓问</h2>
+  <p class="hint" style="margin:8px 0 22px;">登录后按账号隔离记忆（注册即登录）</p>
+  <input id="authUser" placeholder="用户名" style="width:100%; padding:11px 14px; border:1px solid var(--line); border-radius:10px; font-size:14.5px; outline:none; margin-bottom:10px;">
+  <input id="authPass" type="password" placeholder="密码" style="width:100%; padding:11px 14px; border:1px solid var(--line); border-radius:10px; font-size:14.5px; outline:none; margin-bottom:16px;">
+  <div style="display:flex; gap:10px;">
+    <button id="authLogin" style="flex:1; border:none; background:var(--accent); color:#fff; border-radius:10px; padding:11px 0; font-size:14.5px; cursor:pointer;">登录</button>
+    <button id="authRegister" style="flex:1; border:1px solid var(--accent); background:#fff; color:var(--accent); border-radius:10px; padding:11px 0; font-size:14.5px; cursor:pointer;">注册</button>
+  </div>
+  <p id="authError" style="color:var(--accent); font-size:13px; margin-top:12px;"></p>
+</div>
+
+<!-- 聊天主界面（已认证时显示） -->
+<div id="chatApp" style="display:none; height:100%; flex-direction:column;">
 <div id="chat"></div>
 
 <div class="hint">试试问这些：</div>
@@ -73,8 +88,11 @@
     <button id="send">发送</button>
   </div>
 </footer>
+</div>
 
 <script>
+const TOKEN_KEY = "xw_token";
+const USER_KEY = "xw_user";
 const SUGGESTIONS = [
   "帮我规划10月8日去北京开会4天的行程",
   "出差住宿标准是什么",
@@ -82,18 +100,79 @@ const SUGGESTIONS = [
   "我不吃辣，住宿喜欢安静",
   "我上次的行程是什么",
 ];
+
+const AUTH = document.getElementById("authPanel");
+const APP = document.getElementById("chatApp");
+const AUTH_USER = document.getElementById("authUser");
+const AUTH_PASS = document.getElementById("authPass");
+const AUTH_ERR = document.getElementById("authError");
+const AUTH_STATUS = document.getElementById("authStatus");
 const CHAT = document.getElementById("chat");
 const INPUT = document.getElementById("input");
 const SEND = document.getElementById("send");
 
-// 渲染建议 chips
-SUGGESTIONS.forEach(s => {
-  const c = document.createElement("div");
-  c.className = "chip";
-  c.textContent = s;
-  c.onclick = () => { INPUT.value = s; send(); };
-  document.getElementById("chips").appendChild(c);
-});
+function getToken() { return localStorage.getItem(TOKEN_KEY); }
+
+// ---- 认证视图切换 ----
+function showAuth() {
+  AUTH.style.display = "block";
+  APP.style.display = "none";
+  AUTH_STATUS.innerHTML = `<span class="pulse"></span>未登录`;
+  AUTH_STATUS.style.cursor = "pointer";
+}
+function showApp() {
+  AUTH.style.display = "none";
+  APP.style.display = "flex";
+  AUTH_STATUS.innerHTML = `<span class="pulse"></span>${localStorage.getItem(USER_KEY) || ""} ｜ 退出`;
+  AUTH_STATUS.style.cursor = "pointer";
+  AUTH_STATUS.onclick = logout;
+}
+async function authSubmit(mode) {
+  const username = AUTH_USER.value.trim();
+  const password = AUTH_PASS.value;
+  AUTH_ERR.textContent = "";
+  if (!username || !password) { AUTH_ERR.textContent = "用户名和密码不能为空"; return; }
+  const res = await fetch(`/api/auth/${mode}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    AUTH_ERR.textContent = (await res.json()).detail || "失败，请重试";
+    return;
+  }
+  const data = await res.json();
+  localStorage.setItem(TOKEN_KEY, data.token);
+  localStorage.setItem(USER_KEY, data.username);
+  initChat();
+}
+document.getElementById("authLogin").onclick = () => authSubmit("login");
+document.getElementById("authRegister").onclick = () => authSubmit("register");
+AUTH_USER.addEventListener("keydown", e => { if (e.key === "Enter") document.getElementById("authLogin").click(); });
+AUTH_PASS.addEventListener("keydown", e => { if (e.key === "Enter") document.getElementById("authLogin").click(); });
+
+function logout() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+  CHAT.innerHTML = "";
+  showAuth();
+}
+
+// ---- 聊天主逻辑 ----
+function initChat() {
+  showApp();
+  // 渲染建议 chips（只渲染一次）
+  if (!document.getElementById("chips").childElementCount) {
+    SUGGESTIONS.forEach(s => {
+      const c = document.createElement("div");
+      c.className = "chip";
+      c.textContent = s;
+      c.onclick = () => { INPUT.value = s; send(); };
+      document.getElementById("chips").appendChild(c);
+    });
+  }
+  INPUT.focus();
+}
 
 function addMsg(role, text, tag) {
   const div = document.createElement("div");
@@ -133,25 +212,35 @@ async function send() {
   INPUT.value = "";
   SEND.disabled = true;
   addMsg("user", text);
-  const t0 = Date.now();
   try {
     const res = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + getToken(),
+      },
       body: JSON.stringify({ user_input: text }),
     });
+    if (res.status === 401) { logout(); addMsg("ai", "登录已失效，请重新登录。"); return; }
     const data = await res.json();
     await typeAi(data.answer, `意图：${data.intent}`);
   } catch (e) {
     addMsg("ai", "⚠️ 网络错误，请确认后端已启动。");
+  } finally {
+    SEND.disabled = false;
   }
-  SEND.disabled = false;
   INPUT.focus();
 }
 
 INPUT.addEventListener("keydown", e => { if (e.key === "Enter") send(); });
 SEND.onclick = send;
-INPUT.focus();
+
+// 启动：有 token 直接进聊天，否则登录页
+if (getToken()) {
+  initChat();
+} else {
+  showAuth();
+}
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, c =>
