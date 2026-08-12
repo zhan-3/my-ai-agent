@@ -23,13 +23,13 @@
 | Embedding | 阿里 DashScope text-embedding-v3（1024 维） | 知识库向量化 |
 | 向量库 | Chroma 1.5.9（磁盘持久化） | 政策文档语义检索 |
 | 关键词检索 | jieba 分词 + BM25 | 早期方案，检索效果对照 |
-| 记忆存储 | 本地 JSON 文件（`data/memory.json`） | 短期对话 + 长期偏好/历史（分层设计，见 §6.4） |
+| 记忆存储 | 本地 JSON 文件（`data/memory.json`） | 短期对话 + 长期偏好/历史（分层设计） |
 | 联网数据 | open-meteo（天气/空气质量）、exchangerate-api（汇率） | 免费公开 API，无需 key |
 | 包管理 | uv | 依赖锁定（pyproject.toml + uv.lock） |
-| 类型检查 | mypy（dev 依赖） | 全项目 0 警告（22→0），见 §6.8 |
-| 插件机制 | 自研插件注册中心 | 动态发现/懒加载/渐进式披露，见 §6.9 |
-| 稳定性层 | 自研 + LangChain 内置 | 重试/超时/熔断/兑底/日志/健康检查，见 §6.10 |
-| 测试框架 | pytest 9 + pytest.mark | 分层测试 41 个：单元 32（无 LLM）+ 集成 9（真实模型），见 §6.11 |
+| 类型检查 | mypy（dev 依赖） | 全项目 0 警告 |
+| 插件机制 | 自研插件注册中心 | 动态发现/懒加载/渐进式披露 |
+| 稳定性层 | 自研 + LangChain 内置 | 重试/超时/熔断/兑底/日志/健康检查 |
+| 测试框架 | pytest 9 + pytest.mark | 分层测试 31 个：单元 22（无 LLM）+ 集成 9（真实模型） |
 
 ## 3. 系统架构
 
@@ -180,7 +180,7 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 
 - **短期记忆（thread-scoped）**：最近 6 轮对话，每轮推理前注入 → 支持指代消解（「那上海呢」→ 理解是问天气）。注入克制截断，避免长历史塞满上下文（hot path 权衡）。
 - **长期记忆（跨会话）**：偏好（**追加/覆盖区分**：is_update 时替换同类别旧条目）、常驻城市（行程规划自动补出发城市）、历史行程、常用目的地。
-- 官方对应：短期=checkpointer+thread，长期=store。本项目用 JSON 文件演示分层概念，真实产品短期换 Redis/长期换 MySQL（§9）。
+- 官方对应：短期=checkpointer+thread，长期=store。本项目用 JSON 文件演示分层概念，真实产品短期换 Redis/长期换 MySQL。
 
 ### 6.5 联网查询：工具调用 + 重试降级
 
@@ -196,7 +196,7 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 
 ### 6.8 工程质量：类型检查（mypy）
 
-`uv run mypy` → 0 警告（检查 `src/` + `tests/` 20 个文件）。22 个警告分三类处理：真 Bug（0006 曾 import 已改名的 `add_preference`，一跑就 ImportError——改名后必须全局搜引用+回归）；防御性改进（`raise RuntimeError(...) from last`、importlib spec None 检查、结构化输出断言收窄为模型实例）；库噪音（LangGraph invoke 重载对部分键 State 输入过严 → 配置级关闭 call-overload 并注明理由）。
+`uv run mypy` → 0 警告（检查 `src/` + `tests/` 20 个文件）。配置说明：LangGraph `invoke` 重载对部分键 State 输入过严，`call-overload` 在配置级关闭并注明理由。
 
 ### 6.9 插件化架构
 
@@ -272,7 +272,7 @@ FastAPI + uvicorn 后端复用 `xiao_wen.system` 完整系统（Agent 逻辑零�
 
 | 功能 | 能力要求 | 完成情况 |
 |---|---|---|
-| A 多 Agent 基本架构 | ≥5 个分工 Agent | ✅ 6 个 Worker（§4 表），职责边界清晰 |
+| A 多 Agent 基本架构 | ≥5 个分工 Agent | ✅ 6 个 Worker，职责边界清晰 |
 | B 自然语言意图识别 | LLM 语义识别 + 提取关键信息 | ✅ LLM 六分类路由（json_mode），要素提取做实 |
 | C 行程规划主流程 | 识别→抽要素→调子 Agent→生成完整行程 | ✅ 端到端（案例一） |
 | D 基础记忆能力 | 可持续记忆，下一轮能引用 | ✅ 偏好+历史+常驻城市（案例二） |
@@ -286,7 +286,7 @@ FastAPI + uvicorn 后端复用 `xiao_wen.system` 完整系统（Agent 逻辑零�
 | B 调度优化 | ✅ 完整 | 按任务类型动态路由 + 多请求 Send 并行执行 + 先收集信息再规划（要素提取） |
 | C 插件化、模块化架构 | ✅ 完整 | 插件注册中心：动态发现（目录扫描）+ 渐进式披露（AST 元数据）+ 懒加载 + 热插拔演示 |
 | D 工程稳定性 | ✅ 完整 | 六件套：LLM 重试（max_retries+指数退避）/ 超时控制 / 熔断三态 / 异常兜底 / 日志 / 健康检查；含真实故障注入演示（坏 key → 裸调用 401 崩溃 vs 优雅降级） |
-| E 评测与测试 | ✅ 完整 | 分层自动化测试 41 个：单元层 32（记忆/行程/插件/稳定性/RAG 分块与 BM25，无 LLM）+ 集成层 9（意图识别 7 用例含边界、端到端记忆闭环、向量 RAG 检索）；`uv run pytest` / `-m integration` |
+| E 评测与测试 | ✅ 完整 | 分层自动化测试 31 个：单元层 22（记忆/行程/插件/稳定性/RAG 分块，无 LLM）+ 集成层 9（意图识别 7 用例含边界、端到端记忆闭环、向量 RAG 检索）；`uv run pytest` / `-m integration` |
 | F 可视化界面 | ✅ 完整 | FastAPI + 原生 JS Web 界面（聊天气泡/chips/打字机），复用 `xiao_wen.system` 完整系统零重写；演示截图 6 张见 docs/screenshots/ |
 
 ## 10. 已知问题或后续优化方向
