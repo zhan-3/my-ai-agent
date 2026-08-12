@@ -37,7 +37,7 @@
                                          ▼
                           ┌─────────────────────────────┐
                           │  Intention Agent 意图识别     │
-                          │  （LLM 六分类 + json_mode）    │
+                          │  （LLM 动态词汇表 + json_mode） │
                           └──────────────┬──────────────┘
                                          │ 条件边：按意图路由
               ┌──────────────┬───────────┼───────────┬──────────────┐
@@ -55,24 +55,26 @@
     └─────────────────────────────────────────────────┘     └──────────────┘
 ```
 
-意图六分类：`行程规划 / 偏好记录 / 历史查询 / 知识问答 / 联网查询 / 其他`（兜底边界）。产品边界规则：**仅服务企业差旅**，个人休闲旅游等一律归「其他」。
+意图词汇表 = 注册表 manifest **动态生成**：六内置（`行程规划 / 偏好记录 / 历史查询 / 知识问答 / 联网查询 / 其他`）+ 外部扩展（如 `差旅统计`）自动并入——新增子 Agent 主管零改动（见 §6.7）。产品边界规则：**仅服务企业差旅**，个人休闲旅游等一律归「其他」。
 
 > 📌 更完整的代码层映射挂图（运行时 pipeline + 脚手架动机、逐文件速查）见 [docs/layer-map.html](docs/layer-map.html)。
 
 ## 4. Agent 列表与职责说明
 
-系统设计的 8 个角色及其落地：
+系统的角色及其落地（六内置子 Agent 实体 + 外部扩展，由注册表动态发现）：
 
 | 系统角色 | 系统实现 | 职责 | 关键技术 |
 |---|---|---|---|
-| Intention Agent 意图识别 | `classify_intent` 节点 | 六分类 + 理由 | LLM + json_mode 结构化输出 |
-| Orchestration Agent 调度 | 条件边路由 | 按意图把请求分派给对应子 Agent | `add_conditional_edges` |
+| Intention Agent 意图识别 | `classify_intent` 节点（intent.py） | 动态词汇表分类 + 理由 | LLM + json_mode 结构化输出 |
+| Orchestration Agent 调度 | 条件边路由（system.py 注册表驱动组装） | 按意图把请求分派给对应子 Agent | `add_conditional_edges` |
 | Event Collection Agent 要素提取 | 行程子 Agent 第一阶段 | 提取出发/目的/日期/时长/偏好 | LLM 结构化输出 |
-| Preference Agent 偏好 | `preference` 节点 | 偏好写入（追加/覆盖区分） | 长期记忆 |
-| Memory Query Agent 记忆查询 | `history` 节点 | 返回历史行程 | 长期记忆 |
-| Knowledge/RAG Agent 知识问答 | `knowledge` 节点 | 政策库语义检索 + 生成 | embedding + Chroma |
-| Information Query Agent 联网查询 | `web` 节点 | 天气/汇率/空气质量 | ToolNode + ReAct 循环 |
-| Itinerary Planning Agent 行程规划 | `itinerary` 节点 | 生成完整行程 | 两阶段管线 + 偏好注入 |
+| Itinerary Planning Agent 行程规划 | `agents/itinerary_agent.py` | 生成完整行程 | 两阶段管线 + 偏好注入 |
+| Preference Agent 偏好 | `agents/preference_agent.py` | 偏好写入（追加/覆盖区分） | 长期记忆 |
+| Memory Query Agent 记忆查询 | `agents/history_agent.py` | 返回历史行程 | 长期记忆 |
+| Knowledge/RAG Agent 知识问答 | `agents/knowledge_agent.py` | 政策库语义检索 + 生成 | embedding + Chroma |
+| Information Query Agent 联网查询 | `agents/web_agent.py` | 天气/汇率/空气质量 | ToolNode + ReAct 循环 |
+| 边界兑底 Agent | `agents/other_agent.py` | 非差旅问题拒绝 | 词汇表校验兑底归「其他」 |
+| 外部扩展子 Agent ★ | `plugins/stats.py` | 差旅统计（注册表自动发现并入） | discover + 懒加载 |
 
 ## 5. 运行方式说明
 
@@ -258,8 +260,8 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 
 | 功能 | 能力要求 | 完成情况 |
 |---|---|---|
-| A 多 Agent 基本架构 | ≥5 个分工 Agent | ✅ 6 个内置子 Agent（可动态发现实体），职责边界清晰 |
-| B 自然语言意图识别 | LLM 语义识别 + 提取关键信息 | ✅ LLM 六分类路由（json_mode），要素提取做实 |
+| A 多 Agent 基本架构 | ≥5 个分工 Agent | ✅ 6 个内置子 Agent（可动态发现实体）+ 外部扩展动态并入，职责边界清晰 |
+| B 自然语言意图识别 | LLM 语义识别 + 提取关键信息 | ✅ LLM 动态词汇表路由（json_mode），要素提取做实 |
 | C 行程规划主流程 | 识别→抽要素→调子 Agent→生成完整行程 | ✅ 端到端（案例一） |
 | D 基础记忆能力 | 可持续记忆，下一轮能引用 | ✅ 偏好+历史+常驻城市（案例二） |
 | E 结果可读性 | 摘要/每日安排/理由/注意/缺失提示/来源 | ✅ 行程摘要+每日安排+安排理由+备注；要素缺失主动提示；知识问答标注来源文档 |
@@ -285,7 +287,7 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 
 **后续优化方向**
 - 行程校验层：行程生成后过「RAG 政策校验 + 实时班次/天气合理性检查」（把知识 Agent 与联网 Agent 组合）。
-- 调度优化：优先级调度、同优先级并行执行、收集信息后再触发规划。
+- 调度优化：优先级调度、收集信息后再触发规划。
 - 记忆精确化：支持「上次住的什么酒店」级细粒度历史查询（当前按行程摘要级别存储）。
 - 存储升级：短期换 Redis（TTL）、长期换 MySQL/PostgreSQL、检索换 Milvus/Qdrant——存储层已集中到 `xiao_wen/memory.py`，可平替。
 
