@@ -1,0 +1,19 @@
+# 构建上下文排除（镜像只装运行时）
+.git
+.github
+.venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.pi
+.scratch
+.vscode
+.env
+delivery
+docs
+scripts
+tests
+data
+*.log
+__pycache__
+*.pyc

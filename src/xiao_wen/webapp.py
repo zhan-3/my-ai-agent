@@ -133,7 +133,7 @@ def main() -> None:
     print("  API 文档：http://127.0.0.1:8000/docs")
     print("  Ctrl+C 退出")
     print("=" * 56)
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning")
 
 
 if __name__ == "__main__":

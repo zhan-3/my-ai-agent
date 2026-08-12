@@ -109,10 +109,13 @@ uv run python scripts/screenshot_demo.py # 无头浏览器生成演示截图 →
 uv run python scripts/delivery.py all   # 交付三连：门禁(ruff+pytest+mypy+冒烟) → 打包 → 邮件模板
 ```
 
-> 持久化记忆（可选）：`docker compose up -d` 起本地 Postgres，然后
+> 持久化记忆（可选）：`docker compose up -d postgres` 起本地 Postgres，然后
 export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 即可让记忆落盘（用户隔离）；不设则用内存后端（演示，重启即失）。
 > 认证：打开 Web 界面先注册/登录（JWT）；生产环境务必 `export JWT_SECRET=<长随机串>` 覆盖开发默认密钥。
+
+> 生产部署（Docker）：`docker compose up -d --build` 一条命令起全套
+> （app + postgres），API keys 从 `.env` 注入；CI 见 `.github/workflows/ci.yml`。
 
 > 首次运行 `xiao_wen.system` 中知识问答会构建向量索引（一次性，约 500 个文本块，随语料变化），之后复用磁盘索引，秒级返回。
 
@@ -183,7 +186,7 @@ export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 │
 ├── docs/
 │   ├── layer-map.html           # 代码层映射挂图（运行时 + 脚手架动机）
-│   ├── adr/                     # 架构决策记录（ADR-0001..0007）
+│   ├── adr/                     # 架构决策记录（ADR-0001..0008）
 │   ├── documents/               # 知识库语料（8 份政策文档）
 │   ├── agents/                  # Agent 技能协作文档
 │   └── screenshots/             # 演示截图 6 张
@@ -197,7 +200,11 @@ export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 │   ├── chroma/                  # 向量索引
 │   └── stability.log            # 日志
 │
-├── docker-compose.yml           # 本地 Postgres（docker compose up -d，可选）
+├── docker-compose.yml           # 生产部署：app + postgres（docker compose up -d --build）
+├── Dockerfile                   # 生产镜像（Python 3.11 + uv，非 root，健康检查）
+├── .dockerignore                # 构建上下文排除（.env/测试/文档不入镜像）
+├── .github/
+│   └── workflows/ci.yml         # CI：单元层必跑 + 集成层（有 secrets 才跑）+ 镜像构建
 │
 ├── delivery/                    # 交付压缩包输出（gitignored）
 └── .scratch/                    # 本地 issue tracker（内部，不进交付包）
