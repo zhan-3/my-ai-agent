@@ -101,8 +101,8 @@ def test_backend_dispatch_with_env_uses_postgres(monkeypatch):
             calls.append(url)
 
     monkeypatch.setattr(pg, "PostgresBackend", FakePG)
-    monkeypatch.setenv("POSTGRES_URL", "postgresql://xw:xw@localhost:5432/xiao_wen")
+    monkeypatch.setenv("POSTGRES_URL", "postgresql://postgres:123456@localhost:5432/xiao_wen")
     memory._backend = None
     memory._get_backend()
-    assert calls == ["postgresql://xw:xw@localhost:5432/xiao_wen"]
+    assert calls == ["postgresql://postgres:123456@localhost:5432/xiao_wen"]
     memory._backend = None

@@ -109,7 +109,7 @@ uv run python scripts/delivery.py all   # 交付三连：门禁(ruff+pytest+mypy
 ```
 
 > 持久化记忆（可选）：`docker compose up -d` 起本地 Postgres，然后
-export POSTGRES_URL=postgresql://xw:xw@localhost:5432/xiao_wen
+export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 即可让记忆落盘（会话隔离）；不设则用内存后端（演示，重启即失）。
 
 > 首次运行 `xiao_wen.system` 中知识问答会构建向量索引（一次性，约 500 个文本块，随语料变化），之后复用磁盘索引，秒级返回。

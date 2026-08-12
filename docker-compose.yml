@@ -1,20 +1,20 @@
 # 本地开发存储（会话隔离 + 持久化的 Postgres 后端）
-# 用法：docker compose up -d && export POSTGRES_URL=postgresql://xw:xw@localhost:5432/xiao_wen
+# 用法：docker compose up -d && export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 # 产品形态：设 POSTGRES_URL 后记忆走 Postgres（会话隔离持久化）；不设则 InMemory 演示兜底
 services:
   postgres:
-    image: postgres:16
+    image: postgres:latest
     container_name: xiao_wen_pg
     environment:
-      POSTGRES_USER: xw
-      POSTGRES_PASSWORD: xw
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "123456"
       POSTGRES_DB: xiao_wen
     ports:
       - "5432:5432"
     volumes:
       - xw_pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U xw -d xiao_wen"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d xiao_wen"]
       interval: 5s
       timeout: 3s
       retries: 5
