@@ -1,4 +1,5 @@
-"""极简文件记忆存储（单用户演示版）—— 短期 + 长期两层记忆
+"""记忆模块：短期 + 长期两层记忆（JSON 文件持久化，单用户演示版）
+
 真实产品：短期记忆用 LangGraph checkpointer（thread 维度、数据库持久化、随时恢复）；
 长期记忆用 store（namespace/key 组织、JSON 文档、语义搜索）。这里用 JSON 文件演示
 「存储-读取」概念，后续可平移到真实存储。
@@ -14,7 +15,9 @@ import time
 from collections import Counter
 from pathlib import Path
 
-MEMORY_PATH = Path(__file__).resolve().parent.parent / "data" / "memory.json"
+# 项目根目录 = src/xiao_wen/ 上溯三级（src → 项目根）
+ROOT = Path(__file__).resolve().parents[2]
+MEMORY_PATH = ROOT / "data" / "memory.json"
 
 
 def _default():
@@ -22,10 +25,19 @@ def _default():
 
 
 def load_memory() -> dict:
+    """读记忆文件；文件不存在或损坏（空/非法 JSON）时重置为默认结构，绝不崩溃"""
     if not MEMORY_PATH.exists():
         return _default()
-    with open(MEMORY_PATH, encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(MEMORY_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        # 空文件/损坏：重置并回写，避免后续每次读取都报错（工程稳定性：兜底）
+        data = _default()
+        save_memory(data)
+    if not isinstance(data, dict):
+        data = _default()
+    return data
 
 
 def save_memory(mem: dict) -> None:

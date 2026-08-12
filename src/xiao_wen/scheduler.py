@@ -1,9 +1,9 @@
-"""第十一课：调度优化 —— 加分项 B：同优先级任务并行执行（Send API fan-out/fan-in）
-跑法：python homework/0011_scheduler.py
-依赖：homework/0010_system.py（复用六个 worker 节点函数）
+"""调度优化模块：同优先级任务并行执行（Send API fan-out/fan-in，加分项 B）
+跑法：uv run python -m xiao_wen.scheduler
+依赖：xiao_wen.system（复用六个 worker 节点函数）
 
 设计（对比「固定顺序串行」）：
-- 动态路由：按意图选 worker（已有，0004/0006）
+- 动态路由：按意图选 worker（条件边）
 - ★并行执行：一句话含多个独立请求 → 意图识别拆分子任务（subtasks）→
   dispatcher 用 Send 把每个子任务并行派发给对应 worker（fan-out）→
   merge 汇总（fan-in）。多个 worker 同时跑，一次对话完成多个任务。
@@ -12,7 +12,6 @@
 单意图路径完全不变（subtasks 为空走原条件边），保证不破坏已验收功能。
 """
 import operator
-import importlib.util
 from typing import TypedDict, Annotated, Literal
 
 from langgraph.graph import StateGraph, START, END, add_messages
@@ -21,18 +20,10 @@ from langchain_core.messages import AnyMessage
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
 
-from memory_store import (add_message, format_recent_messages)
+from xiao_wen.memory import add_message, format_recent_messages
 
-# ---- 1. 复用 0010 的六个 worker 节点函数（模块化：调度增强不动 worker） ----
-def _load(name: str, path: str):
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"无法加载模块：{path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-base = _load("base_v3", "homework/0010_system.py")
+# ---- 1. 复用 xiao_wen.system 的六个 worker 节点函数（模块化：调度增强不动 worker） ----
+from xiao_wen import system as base
 
 WORKERS = {"行程规划": base.itinerary, "偏好记录": base.preference, "历史查询": base.history,
            "知识问答": base.knowledge, "联网查询": base.web_node, "其他": base.other}

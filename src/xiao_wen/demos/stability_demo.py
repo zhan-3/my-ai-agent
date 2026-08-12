@@ -1,23 +1,20 @@
-"""第十五课（演示）：工程稳定性 —— 加分项 D
+"""稳定性演示（加分项 D）：重试 / 超时 / 熔断 / 故障注入 / 健康检查
 
-六件套：重试（指数退避）/ 超时控制 / 熔断（三态）/ 异常兜底 / 日志 / 健康检查
+跑法：uv run python -m xiao_wen.demos.stability_demo
 四幕演示：
   幕1 重试+超时：偶发失败的调用 → 指数退避重试后成功（日志为证）
   幕2 熔断三态：持续失败 → 熔断打开 → 快速失败不耗时 → 半开试探恢复
-  幕3 真实系统故障注入：把 0010 的 LLM 换成坏 key → 裸调用崩 vs 稳定性层降级
+  幕3 真实系统故障注入：把 system 的 LLM 换成坏 key → 裸调用崩 vs 稳定性层降级
   幕4 健康检查：系统自检报告
 """
-import importlib.util
 import os
-import sys
 import time
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
-sys.path.insert(0, os.path.dirname(__file__))  # 保证 stability / memory_store 可 import
-from stability import (CircuitBreaker, health_check, logger, safe_call, with_retry)  # noqa: E402
+from xiao_wen.stability import (CircuitBreaker, health_check, logger, safe_call, with_retry)
 
 load_dotenv()
 
@@ -31,16 +28,6 @@ BAD_LLM = ChatOpenAI(
     timeout=10,             # 超时：10s 无响应即放弃（超时控制）
     extra_body={"thinking": {"type": "disabled"}},
 )
-
-
-def _load(name: str, path: str):
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"无法加载模块：{path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
 
 if __name__ == "__main__":
     print("=" * 60)
@@ -90,7 +77,7 @@ if __name__ == "__main__":
 
     print("=" * 60)
     print("幕3｜真实系统故障注入：坏 key → 裸调用崩 vs 稳定性层降级")
-    base = _load("sys_v3", os.path.join("homework", "0010_system.py"))
+    from xiao_wen import system as base
     # monkeypatch：把意图识别模型的 LLM 换成坏 key（intent_model 构造时捕获 llm，
     # 需重建模型链才生效——这正是稳定性层包装点的价值）
     base.intent_model = base.intent_prompt | BAD_LLM.with_structured_output(

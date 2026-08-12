@@ -1,9 +1,6 @@
-"""第十四课（演示）：插件化、模块化架构 —— 加分项 C
+"""插件化演示（加分项 C）：动态发现 / 懒加载 / 渐进式披露 / 热插拔
 
-动态发现（目录扫描 + 元数据） / 懒加载（用到才执行） / 渐进式披露（AST 只读元数据）
-主管与插件完全解耦：新增插件不修改主管任何代码。
-
-跑法：python homework/0012_plugin.py
+跑法：uv run python -m xiao_wen.demos.plugin_demo
 四幕演示：
   第1幕 动态发现：扫描 plugins/，只读元数据，不执行任何插件代码
   第2幕 懒加载：触发意图才 exec_module（哨兵日志为证）
@@ -18,7 +15,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, SecretStr
 
-from plugin_registry import discover, load_plugin
+from xiao_wen.plugin_registry import discover, load_plugin
 
 load_dotenv()
 
@@ -67,7 +64,8 @@ def supervisor(text: str, manifest: list[dict]) -> str:
 
 
 if __name__ == "__main__":
-    PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugins"
+    ROOT = Path(__file__).resolve().parents[3]  # src/xiao_wen/demos → 项目根
+    PLUGIN_DIR = ROOT / "plugins"
 
     print("=" * 60)
     print("第1幕｜动态发现（渐进式披露）：只读元数据，不执行插件代码")
@@ -91,8 +89,8 @@ if __name__ == "__main__":
 print("  ⚠️ [summary] 模块已执行（懒加载触发）")
 
 import os, sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "homework"))
-from memory_store import get_itineraries, get_preferences
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from xiao_wen.memory import get_itineraries, get_preferences
 
 INTENT = "差旅总结"
 DESCRIPTION = "汇总差旅次数、常用目的地、已知偏好习惯"

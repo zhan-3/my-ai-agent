@@ -1,14 +1,14 @@
-"""第八课：向量检索升级版 —— dashscope text-embedding-v3 + 余弦相似度
-跑法：python homework/0008_rag_vector.py
-依赖：.env 里 DASHSCOPE_API_KEY（阿里云百炼）；numpy（已装）
+"""RAG 模块：向量检索升级版知识问答（dashscope text-embedding-v3 + Chroma 余弦检索）
+跑法：uv run python -m xiao_wen.rag
+依赖：.env 里 DASHSCOPE_API_KEY（阿里云百炼）；numpy / chromadb（已装）
 
-对照：homework/0007_rag.py 是关键词（BM25）版。
+对照：关键词（BM25）版是教学历史版本（已归档 teaching/archive/0007_rag.py）。
 两版跑同一组测试题即可对比：向量版能理解语义（「延长出差时间」不再误伤报销查询）。
 
 设计要点：
-- 索引构建一次性：8 份文档分块 → 批量 embedding → 存 data/embeddings.npy 缓存
+- 索引构建一次性：8 份文档分块 → 批量 embedding → Chroma 磁盘持久化
 - 查询：问题 embedding → 余弦相似度 top-k（向量检索，无需查询改写）
-- 生成：命中块拼进提示词 → LLM 依据资料回答（同 0007）
+- 生成：命中块拼进提示词 → LLM 依据资料回答
 """
 import os
 import time
@@ -23,8 +23,10 @@ import chromadb
 
 load_dotenv()
 
-DOCS_DIR = Path(__file__).resolve().parent.parent / "docs" / "documents"
-CHROMA_DIR = Path(__file__).resolve().parent.parent / "data" / "chroma"
+# 项目根目录 = src/xiao_wen/ 上溯三级（src → 项目根）
+ROOT = Path(__file__).resolve().parents[2]
+DOCS_DIR = ROOT / "docs" / "documents"
+CHROMA_DIR = ROOT / "data" / "chroma"
 EMB_MODEL = "text-embedding-v3"
 EMB_DIM = 1024
 BATCH = 10          # 每次 API 调用批量 embedding 条数

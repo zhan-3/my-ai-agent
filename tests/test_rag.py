@@ -1,32 +1,40 @@
 """RAG 验证（作业加分项 E 点名：对 RAG 进行验证）
 
 分层：
-- 单元层（0007 BM25 关键词版，纯本地零 API）：分块管线 + 检索质量
-- 集成层（0008 向量版，-m integration，真实 embedding）：向量检索相关性与排序
+- 单元层（BM25 关键词版，纯本地零 API）：分块管线 + 检索质量
+  —— 关键词版是教学历史版本，归档于 teaching/archive/（交付包不含 teaching，缺文件时整组跳过）
+- 集成层（向量版，-m integration，真实 embedding）：向量检索相关性与排序
 """
+from typing import Any
+
 import importlib.util
-import os
+from pathlib import Path
 
 import pytest
 
-sys_path = os.path.join(os.path.dirname(__file__), "..", "homework")
+from xiao_wen import rag
 
+ROOT = Path(__file__).resolve().parent.parent
 
-def _load(name: str, filename: str):
-    spec = importlib.util.spec_from_file_location(name, os.path.join(sys_path, filename))
-    if spec is None or spec.loader is None:
-        raise ImportError(f"加载失败：{filename}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+# 归档的 BM25 关键词版（教学对照）；交付包不含 teaching/，缺失时 BM25 用例整体跳过
+# （成品 RAG 是向量版，关键词版仅作教学对比，不影响交付验证）
+_archive = ROOT / "teaching" / "archive" / "0007_rag.py"
+rag07: Any = None
+if _archive.exists():
+    _spec = importlib.util.spec_from_file_location("rag07", _archive)
+    if _spec is not None and _spec.loader is not None:
+        rag07 = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(rag07)
+        # 归档版内部 DOCS_DIR 基于 teaching/archive 计算是错的，重定向到真实知识库
+        setattr(rag07, "DOCS_DIR", ROOT / "docs" / "documents")
 
-
-rag07 = _load("rag07", "0007_rag.py")
-rag08 = _load("rag08", "0008_rag_vector.py")
+needs_bm25_archive = pytest.mark.skipif(
+    rag07 is None, reason="教学归档版（teaching/archive/0007_rag.py）不在交付包中")
 
 
 # ---------------- 单元层：分块管线（0007 纯本地） ----------------
 
+@needs_bm25_archive
 def test_load_chunks_covers_all_8_docs():
     chunks = rag07.load_chunks()
     sources = {stem for stem, _ in chunks}
@@ -38,17 +46,20 @@ def test_load_chunks_covers_all_8_docs():
     assert len(chunks) > 100
 
 
+@needs_bm25_archive
 def test_chunk_size_within_limit():
     for _, text in rag07.load_chunks():
         assert len(text) <= 400, f"块超长：{len(text)} 字"
 
 
+@needs_bm25_archive
 def test_merge_tiny_chunks_merges_short():
     merged = rag07.merge_tiny_chunks([("a", "标题"), ("b", "这是正文内容")], min_len=5)
     assert len(merged) == 1
     assert merged[0][1] == "标题 这是正文内容"
 
 
+@needs_bm25_archive
 def test_tokenize_chinese():
     words = rag07.tokenize("出差住宿标准")
     assert "住宿" in words and "出差" in words
@@ -56,6 +67,7 @@ def test_tokenize_chinese():
 
 # ---------------- 单元层：BM25 检索质量（零 API） ----------------
 
+@needs_bm25_archive
 def test_bm25_policy_search_hits_travel_standards():
     """检索「住宿标准」应命中 01_travel_standards（差旅标准文档）"""
     chunks = rag07.load_chunks()
@@ -74,9 +86,9 @@ def test_bm25_policy_search_hits_travel_standards():
 @pytest.mark.integration
 def test_vector_search_relevant_and_sorted():
     """真实 embedding 检索：top-1 应命中差旅标准文档，相似度降序"""
-    chunks = rag08.load_chunks()
-    col = rag08.build_index(chunks)          # 复用持久化索引，不重复构建
-    hits = rag08.search("出差住宿标准是什么", col, k=5)
+    chunks = rag.load_chunks()
+    col = rag.build_index(chunks)          # 复用持久化索引，不重复构建
+    hits = rag.search("出差住宿标准是什么", col, k=5)
     assert hits, "应有检索结果"
     top_source = hits[0][1]
     assert "01_travel_standards" in top_source, f"top-1 来源：{top_source}"

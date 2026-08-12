@@ -1,31 +1,24 @@
-"""交付冒烟：加载 0010 完整系统，跑 3 类代表案例 + 边界（不碰真实记忆）
+"""交付冒烟：加载 xiao_wen.system 完整系统，跑 3 类代表案例 + 边界（不碰真实记忆）
 
 用法：
-  python scripts/smoke.py               # 完整冒烟（真 LLM，约 30-60s）
-  python scripts/smoke.py --import-only # 只验证模块可加载（离线自检用）
+  uv run python scripts/smoke.py               # 完整冒烟（真 LLM，约 30-60s）
+  uv run python scripts/smoke.py --import-only # 只验证模块可加载（离线自检用）
 """
-import importlib.util
-import os
 import sys
 import tempfile
 from pathlib import Path
 
-HOMEWORK = Path(__file__).resolve().parent.parent / "homework"
-sys.path.insert(0, str(HOMEWORK))
+SRC = Path(__file__).resolve().parent.parent / "src"
+sys.path.insert(0, str(SRC))
 
-# 冒烟不碰真实记忆：把记忆重定向到临时文件（memory_store 每次读文件，替换路径即生效）
-import memory_store as ms  # noqa: E402
+# 冒烟不碰真实记忆：把记忆重定向到临时文件（memory 每次读文件，替换路径即生效）
+from xiao_wen import memory as ms  # noqa: E402
 ms.MEMORY_PATH = Path(tempfile.mkdtemp()) / "memory.json"
 
-spec = importlib.util.spec_from_file_location(
-    "sys_mod", HOMEWORK / "0010_system.py")
-if spec is None or spec.loader is None:
-    raise ImportError("加载失败：0010_system.py")
-sys_mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(sys_mod)
+from xiao_wen import system as sys_mod  # noqa: E402
 
 if "--import-only" in sys.argv:
-    print("✓ 0010 完整系统可加载（离线自检）")
+    print("✓ xiao_wen.system 完整系统可加载（离线自检）")
     sys.exit(0)
 
 CASES = [

@@ -3,18 +3,9 @@
 
 跑法：uv run pytest -m integration
 """
-import importlib.util
-import os
-
 import pytest
 
-sys_path = os.path.join(os.path.dirname(__file__), "..", "homework")
-_spec = importlib.util.spec_from_file_location(
-    "sys_mod", os.path.join(sys_path, "0010_system.py"))
-if _spec is None or _spec.loader is None:
-    raise ImportError("加载失败：0010_system.py")
-_sys = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_sys)
+from xiao_wen import system as _sys
 
 
 def _invoke(user_input: str) -> str:
@@ -27,7 +18,7 @@ def _invoke(user_input: str) -> str:
 @pytest.fixture()
 def memory(monkeypatch, tmp_path):
     """本次测试的记忆文件隔离（偏好 → 行程 → 历史 共用）"""
-    import memory_store as ms
+    import xiao_wen.memory as ms
     monkeypatch.setattr(ms, "MEMORY_PATH", tmp_path / "memory.json")
     yield
 

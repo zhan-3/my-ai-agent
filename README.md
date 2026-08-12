@@ -2,7 +2,7 @@
 
 一个基于 **LangGraph 多 Agent 架构**的企业差旅智能助手：用户用自然语言提出差旅需求，系统通过「意图识别 → 调度 → 专职 Agent 协作」完成**行程规划、偏好记忆、历史查询、政策知识问答、实时信息查询**等任务。
 
-> 演示环境与代码：本仓库即完整项目。核心演示入口：`python homework/0010_system.py`
+> 演示环境与代码：本仓库即完整项目。核心演示入口：`uv run python -m xiao_wen.system`
 
 ---
 
@@ -88,47 +88,43 @@ uv sync
 #    DASHSCOPE_API_KEY=你的Key        （阿里云百炼，用于 text-embedding-v3）
 
 # 3) 一键体验完整系统（推荐）
-python homework/0010_system.py
+uv run python -m xiao_wen.system
 
-# 4) 分模块验证各 Agent（每课独立测试）
-python homework/0003_intent.py     # 意图识别
-python homework/0004_scheduler.py  # 调度路由
-python homework/0005_itinerary.py  # 行程规划 Worker
-python homework/0006_memory.py     # 记忆闭环
-python homework/0007_rag.py        # 知识问答（BM25 关键词版）
-python homework/0008_rag_vector.py # 知识问答（向量检索升级版）
-python homework/0009_web.py        # 联网查询（工具调用）
-python homework/0011_scheduler.py  # 调度优化：多请求并行执行
-python homework/0012_plugin.py     # 插件化架构：动态发现/懒加载/热插拔（四幕演示）
-python homework/0013_stability.py  # 工程稳定性：重试/熔断/故障注入/健康检查（四幕演示）
-uv run pytest                  # 自动化测试：单元层 26 个（无 LLM，秒级）
-uv run pytest -m integration   # 自动化测试：集成层 8 个（真实 LLM，约 1 分钟）
-uv run python homework/0014_webapp.py    # 可视化 Web 界面（加分项 F）→ http://127.0.0.1:8000
+# 4) 分模块验证各 Agent
+uv run python -m xiao_wen.web            # 联网查询（工具调用）
+uv run python -m xiao_wen.rag            # 知识问答（向量检索 + Chroma）
+uv run python -m xiao_wen.scheduler      # 调度优化：多请求并行执行
+uv run python -m xiao_wen.demos.plugin_demo    # 插件化架构：动态发现/懒加载/热插拔（四幕演示）
+uv run python -m xiao_wen.demos.stability_demo # 工程稳定性：重试/熔断/故障注入/健康检查（四幕演示）
+uv run pytest                  # 自动化测试：单元层（无 LLM，秒级）
+uv run pytest -m integration   # 自动化测试：集成层（真实 LLM，约 1 分钟）
+uv run xiao-wen                # 可视化 Web 界面（加分项 F，等价 python -m xiao_wen.webapp）→ http://127.0.0.1:8000
 uv run python scripts/screenshot_demo.py # 无头浏览器生成演示截图 → docs/screenshots/
 uv run python scripts/delivery.py all   # 交付三连：门禁(pytest+mypy+冒烟) → 打包 → 邮件模板
 ```
 
-> 首次运行 `0010_system.py` 中知识问答会构建向量索引（一次性，约 386 个文本块），之后复用磁盘索引，秒级返回。
+> 首次运行 `xiao_wen.system` 中知识问答会构建向量索引（一次性，约 386 个文本块），之后复用磁盘索引，秒级返回。
+> 早期课程逐步演进的编号版本（0002–0007 等）已归档到 `teaching/archive/`，成品统一收口到 `src/` 正式包。
 
 ### 目录结构
 
 ```
-homework/
-  0003_intent.py        意图识别（LLM 六分类）
-  0004_scheduler.py     调度器骨架（条件边路由）
-  0005_itinerary.py     行程规划 Worker（要素提取→行程生成）
-  0006_memory.py        记忆闭环（偏好/历史/行程读偏好）
-  0007_rag.py           知识问答 v1（BM25 关键词检索）
-  0008_rag_vector.py    知识问答 v2（向量检索 + Chroma）
-  0009_web.py           联网查询（ToolNode + ReAct）
-  0010_system.py        ★ 完整系统（6 Worker 全做实）
-  0011_scheduler.py     ★ 调度优化（Send 并行执行，复用 0010 worker）
-  0012_plugin.py        ★ 插件化演示（插件式主管 + 四幕：发现/懒加载/热插拔/边界）
-  0013_stability.py     ★ 稳定性演示（重试/熔断/真实故障注入/健康检查）
-  0014_webapp.py        ★ 可视化 Web 界面（FastAPI 后端，复用 0010 完整系统）
-  plugin_registry.py    插件注册中心（discover / AST 元数据 / load_plugin）
-  stability.py          稳定性层（with_retry / CircuitBreaker / safe_call / health_check）
-  static/index.html     Web 前端（聊天气泡 + 建议 chips + 打字机，无外部 CDN）
+src/xiao_wen/               ★ 成品包（正式命名，src 布局）
+  __init__.py              包元信息
+  system.py                ★ 完整系统（主管图 + 6 Worker 全做实，主入口）
+  scheduler.py             ★ 调度优化（Send 并行执行，复用 system worker）
+  memory.py                两层记忆（短期消息 + 长期偏好/行程，JSON 持久化）
+  rag.py                   知识问答（向量检索 + Chroma，dashscope embedding）
+  web.py                   联网查询（ToolNode + ReAct：天气/汇率/空气质量）
+  plugin_registry.py       插件注册中心（discover / AST 元数据 / load_plugin）
+  stability.py             稳定性层（with_retry / CircuitBreaker / safe_call / health_check）
+  webapp.py                ★ 可视化 Web 界面（FastAPI 后端，复用 system 完整系统）
+  static/index.html        Web 前端（聊天气泡 + 建议 chips + 打字机，无外部 CDN）
+  demos/
+    plugin_demo.py         插件化演示（插件式主管 + 四幕：发现/懒加载/热插拔/边界）
+    stability_demo.py      稳定性演示（重试/熔断/真实故障注入/健康检查）
+
+teaching/archive/          教学历史版本（0002–0007 逐步演进的编号文件归档处）
 
 scripts/                工具脚本
   screenshot_demo.py     无头浏览器演示截图 → docs/screenshots/
@@ -141,14 +137,13 @@ tests/                  自动化测试（加分项 E，pytest）
   test_itinerary.py     缺失检查 + 结果可读性格式
   test_plugin.py        插件注册中心（含「加载即爆炸」零执行验证）
   test_stability.py     熔断三态/重试/兑底
-  test_rag.py           RAG 验证：分块管线/BM25 检索（单元）+ 向量检索（集成）
+  test_rag.py           RAG 验证：分块管线/BM25 检索（单元，复用 teaching/archive）+ 向量检索（集成）
   test_intent.py        （集成）意图识别 7 用例含边界
   test_endtoend.py      （集成）两层记忆闭环
-  memory_store.py       记忆存储层（短期 + 长期，可替换实现）
 
 plugins/                插件目录（每个插件 = INTENT + DESCRIPTION + run()）
-  policy.py             插件：知识问答（复用 0008 向量 RAG）
-  weather.py            插件：联网查询（复用 0009 天气工具）
+  policy.py             插件：知识问答（复用 xiao_wen.rag 向量 RAG）
+  weather.py            插件：联网查询（复用 xiao_wen.web 天气工具）
   stats.py              插件：差旅统计（新功能，演示动态发现）
 data/memory.json        记忆数据（自动生成，已 gitignore）
 data/chroma/            向量索引（自动生成，已 gitignore）
@@ -204,7 +199,7 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 
 ### 6.8 工程质量：类型检查（mypy）
 
-`uv run mypy homework/` → 0 警告。22 个警告分三类处理：真 Bug（0006 曾 import 已改名的 `add_preference`，一跑就 ImportError——改名后必须全局搜引用+回归）；防御性改进（`raise RuntimeError(...) from last`、importlib spec None 检查、结构化输出断言收窄为模型实例）；库噪音（LangGraph invoke 重载对部分键 State 输入过严 → 配置级关闭 call-overload 并注明理由）。
+`uv run mypy` → 0 警告（检查 `src/` + `tests/` 20 个文件）。22 个警告分三类处理：真 Bug（0006 曾 import 已改名的 `add_preference`，一跑就 ImportError——改名后必须全局搜引用+回归）；防御性改进（`raise RuntimeError(...) from last`、importlib spec None 检查、结构化输出断言收窄为模型实例）；库噪音（LangGraph invoke 重载对部分键 State 输入过严 → 配置级关闭 call-overload 并注明理由）。
 
 ### 6.9 插件化架构（加分项 C）
 
@@ -216,11 +211,11 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 
 ### 6.11 评测与测试（加分项 E）
 
-分层测试（pytest 9）：单元层 32 个无 LLM（记忆读写/追加覆盖、行程缺失检查/结果格式、插件注册中心、熔断/重试/兑底、**RAG 分块管线与 BM25 检索质量**）秒级离线可跑；集成层 9 个真实模型（意图识别 7 用例含边界、端到端两层记忆闭环、**向量 RAG 真实 embedding 检索相关性**）用 `-m integration` 显式跑。关键做法：conftest 记忆隔离到 tmp_path（不碰真实数据）、参数化用例表、**「加载即爆炸」假插件实证 AST 渐进披露零执行**、**RAG 双版本验证（0007 BM25 纯本地 + 0008 向量真实 embedding）对照关键词检索与语义检索**。
+分层测试（pytest 9）：单元层 23 个无 LLM（记忆读写/追加覆盖、行程缺失检查/结果格式、插件注册中心、熔断/重试/兑底、**RAG 分块管线与 BM25 检索质量**）秒级离线可跑；集成层 9 个真实模型（意图识别 7 用例含边界、端到端两层记忆闭环、**向量 RAG 真实 embedding 检索相关性**）用 `-m integration` 显式跑。关键做法：conftest 记忆隔离到 tmp_path（不碰真实数据）、参数化用例表、**「加载即爆炸」假插件实证 AST 渐进披露零执行**、**RAG 双版本验证（BM25 关键词版归档于 teaching/archive 纯本地 + 向量版真实 embedding）对照关键词检索与语义检索**。
 
 ### 6.12 可视化 Web 界面（加分项 F）
 
-FastAPI + uvicorn 后端复用 0010 完整系统（Agent 逻辑零重写），原生 HTML/JS 前端（聊天气泡 + 建议 chips + 打字机效果 + XSS 转义，无外部 CDN 离线可用）。接口：GET /（页面）、POST /api/chat（走完整主管图 + 两层记忆闭环）、GET /healthz（配合加分项 D）、GET /docs（自动文档）。Web 联调时发现 nominatim 地理编码服务不可用 → 内置 20 城经纬度表（零依赖永远可用）+ nominatim 兑底，多级降级。演示截图 6 张（playwright 无头浏览器，真实运行）见 docs/screenshots/。
+FastAPI + uvicorn 后端复用 `xiao_wen.system` 完整系统（Agent 逻辑零重写），原生 HTML/JS 前端（聊天气泡 + 建议 chips + 打字机效果 + XSS 转义，无外部 CDN 离线可用）。接口：GET /（页面）、POST /api/chat（走完整主管图 + 两层记忆闭环）、GET /healthz（配合加分项 D）、GET /docs（自动文档）。Web 联调时发现 nominatim 地理编码服务不可用 → 内置 20 城经纬度表（零依赖永远可用）+ nominatim 兑底，多级降级。演示截图 6 张（playwright 无头浏览器，真实运行）见 docs/screenshots/。
 
 ## 7. 核心示例（演示三类案例）
 
@@ -295,7 +290,7 @@ FastAPI + uvicorn 后端复用 0010 完整系统（Agent 逻辑零重写），�
 | C 插件化、模块化架构 | ✅ 完整 | 插件注册中心：动态发现（目录扫描）+ 渐进式披露（AST 元数据）+ 懒加载 + 热插拔演示 |
 | D 工程稳定性 | ✅ 完整 | 六件套：LLM 重试（max_retries+指数退避）/ 超时控制 / 熔断三态 / 异常兜底 / 日志 / 健康检查；含真实故障注入演示（坏 key → 裸调用 401 崩溃 vs 优雅降级） |
 | E 评测与测试 | ✅ 完整 | 分层自动化测试 41 个：单元层 32（记忆/行程/插件/稳定性/RAG 分块与 BM25，无 LLM）+ 集成层 9（意图识别 7 用例含边界、端到端记忆闭环、向量 RAG 检索）；`uv run pytest` / `-m integration` |
-| F 可视化界面 | ✅ 完整 | FastAPI + 原生 JS Web 界面（聊天气泡/chips/打字机），复用 0010 完整系统零重写；演示截图 6 张见 docs/screenshots/ |
+| F 可视化界面 | ✅ 完整 | FastAPI + 原生 JS Web 界面（聊天气泡/chips/打字机），复用 `xiao_wen.system` 完整系统零重写；演示截图 6 张见 docs/screenshots/ |
 
 ## 10. 已知问题或后续优化方向
 
@@ -309,7 +304,7 @@ FastAPI + uvicorn 后端复用 0010 完整系统（Agent 逻辑零重写），�
 - 行程校验层：行程生成后过「RAG 政策校验 + 实时班次/天气合理性检查」（把知识 Agent 与联网 Agent 组合）。
 - 调度优化：优先级调度、同优先级并行执行、收集信息后再触发规划。
 - 记忆精确化：支持「上次住的什么酒店」级细粒度历史查询（当前按行程摘要级别存储）。
-- 存储升级：短期换 Redis（TTL）、长期换 MySQL/PostgreSQL、检索换 Milvus/Qdrant——存储层已集中到 `memory_store.py`，可平替。
+- 存储升级：短期换 Redis（TTL）、长期换 MySQL/PostgreSQL、检索换 Milvus/Qdrant——存储层已集中到 `xiao_wen/memory.py`，可平替。
 - 可视化：Web 界面（Gradio/Streamlit）交互。
 
 ---
@@ -322,7 +317,7 @@ FastAPI + uvicorn 后端复用 0010 完整系统（Agent 逻辑零重写），�
 
 | 目录 | 内容 | 是否进交付包 |
 |---|---|---|
-| `homework/` `tests/` `plugins/` `scripts/` `docs/` | 系统代码 + 测试 + 插件 + 工具 + 知识库/截图 | ✅ 成品 |
+| `src/` `tests/` `plugins/` `scripts/` `docs/` | 系统代码（`src/xiao_wen/` 成品包）+ 测试 + 插件 + 工具 + 知识库/截图 | ✅ 成品 |
 | `README.md` `pyproject.toml` `uv.lock` | 说明 + 依赖锁定 | ✅ 成品 |
 | `teaching/` | 17 课课件、19 条学习记录、术语表、速查表、教学笔记 | ❌ 教学过程 |
 | `AGENTS.md` `.scratch/` | 本仓库 Agent 协作配置与本地 issue tracker | ❌ 内部 |

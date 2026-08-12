@@ -1,19 +1,14 @@
-"""插件：联网查询（复用 homework/0009 的天气工具）"""
+"""插件：联网查询（复用 xiao_wen.web 的天气工具）"""
 # 懒加载哨兵
 print("  ⚠️ [weather] 模块已执行（懒加载触发）")
 
-import importlib.util
 import os
 import re
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "homework"))
-_web_path = os.path.join(os.path.dirname(__file__), "..", "homework", "0009_web.py")
-_spec = importlib.util.spec_from_file_location("web_backend", _web_path)
-if _spec is None or _spec.loader is None:
-    raise ImportError(f"无法加载后端：{_web_path}")
-_web = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_web)
+# 插件被注册中心以文件路径 exec_module 加载，需自行把 src/ 加入搜索路径
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from xiao_wen import web as _web  # noqa: E402
 
 # ---- 插件元数据 ----
 INTENT = "联网查询"

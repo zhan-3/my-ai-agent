@@ -1,23 +1,22 @@
-"""第十课：组装完整系统 v3 —— 六个 worker 全部做实（多 Agent 系统总装）
-跑法：python homework/0010_system.py
-依赖：.env（DEEPSEEK_* + DASHSCOPE_API_KEY）；homework/memory_store.py（记忆，含短期+长期两层）
-      0008_rag_vector.py（向量知识问答）、0009_web.py（联网查询图）
+"""完整系统模块：多 Agent 主管总装（六个 Worker 全部做实）
+跑法：uv run python -m xiao_wen.system
+依赖：.env（DEEPSEEK_* + DASHSCOPE_API_KEY）；xiao_wen.memory（记忆，短期+长期两层）
+      xiao_wen.rag（向量知识问答）、xiao_wen.web（联网查询图）
 
-架构（和 0006 系统 v2 相同骨架，两处桩升级为真实现）：
+架构（主管-工人 Supervisor–Workers）：
 - 意图识别：LLM 主管（六分类，json_mode）+ 注入最近对话（短期记忆）
 - 行程规划：两阶段管线（要素提取→行程生成）+ 偏好注入 + 常驻城市补全 + 行程写回记忆
 - 偏好记录 / 历史查询：长期记忆（JSON），偏好支持追加/覆盖（is_update）
-- 知识问答：向量检索（dashscope text-embedding-v3 + chromadb，来自 0008）
-- 联网查询：ToolNode ReAct 循环（天气/汇率/空气质量，来自 0009）+ 上文上下文注入（指代消解）
+- 知识问答：向量检索（dashscope text-embedding-v3 + chromadb，来自 xiao_wen.rag）
+- 联网查询：ToolNode ReAct 循环（天气/汇率/空气质量，来自 xiao_wen.web）+ 上下文注入（指代消解）
 - 其他：兜底（产品边界外的请求）
 
 记忆分层（对应 LangChain 官方 memory 概念）：
-- 短期记忆：最近 N 轮对话（memory_store.messages），每轮 invoke 前注入 —— 官方对应 checkpointer+thread
-- 长期记忆：偏好（含常驻城市，追加/覆盖）、历史行程、常用目的地 —— 官方对应 store
+- 短期记忆：最近 N 轮对话（memory.messages），每轮 invoke 前注入 —— 对应 checkpointer+thread
+- 长期记忆：偏好（含常驻城市，追加/覆盖）、历史行程 —— 对应 store
 - hot path 权衡：注入克制（截断最近 6 轮），避免全量历史塞上下文（变慢、变贵、干扰）
 """
-import importlib.util
-from typing import TypedDict, Annotated, Literal
+from typing import Any, TypedDict, Annotated, Literal
 import os
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph, START, END, add_messages
@@ -26,9 +25,9 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field, SecretStr
 
-from memory_store import (add_or_update_preference, add_message, add_itinerary,
-                          get_preferences, get_itineraries, get_home_city,
-                          format_recent_messages)
+from xiao_wen.memory import (add_or_update_preference, add_message, add_itinerary,
+                             get_preferences, get_itineraries, get_home_city,
+                             format_recent_messages)
 
 load_dotenv()
 
@@ -113,17 +112,9 @@ plan_prompt = ChatPromptTemplate.from_messages([
 ])
 plan_model = plan_prompt | llm.with_structured_output(ItineraryPlan, method="json_mode")
 
-# ---- 4. 导入外部 worker 模块（0008 向量知识问答、0009 联网查询图）----
-def _load(name: str, path: str):
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"无法加载模块：{path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-rag = _load("rag_v3", "homework/0008_rag_vector.py")   # rag.knowledge_qa(query) -> str
-web = _load("web_v3", "homework/0009_web.py")          # web.app 图 + web.SYSTEM
+# ---- 4. 导入外部 worker 模块（xiao_wen.rag 向量知识问答、xiao_wen.web 联网查询图）----
+from xiao_wen import rag   # rag.knowledge_qa(query) -> str
+from xiao_wen import web   # web.app 图 + web.SYSTEM
 
 # ---- 5. State ----
 class State(TypedDict):
@@ -243,8 +234,8 @@ def knowledge(state):
     return {"answer": rag.knowledge_qa(state["user_input"])}
 
 def web_query(question: str, ctx: str = "无") -> str:
-    """调 0009 的 ToolNode 图（ReAct 循环），返回最终回答文本。ctx=短期记忆上下文，支持指代消解"""
-    msgs = [web.SYSTEM]
+    """调 xiao_wen.web 的 ToolNode 图（ReAct 循环），返回最终回答文本。ctx=短期记忆上下文，支持指代消解"""
+    msgs: list[Any] = [web.SYSTEM]
     if ctx != "无":
         msgs.append(("system", f"以下是本次对话上文，新问题可能省略了主语（如「那上海呢」）：\n{ctx}"))
     msgs.append(("human", question))

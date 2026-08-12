@@ -1,23 +1,20 @@
-"""行程规划纯逻辑测试：必填要素缺失检查 + 结果可读性格式（无需 LLM）"""
-import importlib.util
-import os
+"""行程规划纯逻辑测试：必填要素缺失检查 + 结果可读性格式（无需 LLM）
 
-sys_path = os.path.join(os.path.dirname(__file__), "..", "homework")
-_spec = importlib.util.spec_from_file_location(
-    "itinerary_mod", os.path.join(sys_path, "0005_itinerary.py"))
-if _spec is None or _spec.loader is None:
-    raise ImportError("加载失败：0005_itinerary.py")
-_itinerary = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_itinerary)
+行程 worker 逻辑内嵌于 xiao_wen.system 完整系统（0005 历史版已归档 teaching/archive/），
+这里加载成品系统测其内部纯函数（模块顶层只构造模型，不调用 API）。
+"""
+from typing import Any
+
+from xiao_wen import system as _itinerary
 
 TripRequest = _itinerary.TripRequest
 ItineraryPlan = _itinerary.ItineraryPlan
 
 
 def _req(**kw):
-    base = dict(to_city="北京", from_city="上海", start_date="2026-10-08",
-                duration_days=4, purpose="开会", via_cities="", transport="",
-                hotel_pref="无", budget_pref="中等")
+    base: dict[str, Any] = dict(to_city="北京", from_city="上海", start_date="2026-10-08",
+                                duration_days=4, purpose="开会", via_cities="", transport="",
+                                hotel_pref="无", budget_pref="中等")
     base.update(kw)
     return TripRequest(**base)
 

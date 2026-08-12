@@ -6,8 +6,9 @@ import os
 import sys
 from collections import Counter
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "homework"))
-from memory_store import get_itineraries
+# 插件被注册中心以文件路径 exec_module 加载，需自行把 src/ 加入搜索路径
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from xiao_wen.memory import get_itineraries  # noqa: E402
 
 # ---- 插件元数据 ----
 INTENT = "差旅统计"

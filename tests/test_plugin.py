@@ -1,7 +1,7 @@
 """插件注册中心测试：AST 元数据渐进披露（不 exec）、懒加载、热插拔动态发现"""
 from pathlib import Path
 
-import plugin_registry as reg
+from xiao_wen import plugin_registry as reg
 
 
 def test_discover_reads_metadata_without_executing(tmp_path, monkeypatch):

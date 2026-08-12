@@ -1,7 +1,7 @@
 """稳定性层单元测试：熔断三态、重试退避、异常兜底（纯逻辑，无网络）"""
 import time
 
-from stability import CircuitBreaker, safe_call, with_retry
+from xiao_wen.stability import CircuitBreaker, safe_call, with_retry
 
 
 def test_breaker_three_states():

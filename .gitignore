@@ -15,3 +15,8 @@ data/memory.json
 data/embeddings.npy
 data/chroma/
 delivery/
+
+# pi agent 项目级配置（本机会话偏好，不进仓库）
+.pi/
+__pycache__/
+data/*.log

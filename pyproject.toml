@@ -19,7 +19,13 @@ dependencies = [
 ]
 
 [project.scripts]
-my-ai-agent = "my_ai_agent:main"
+# 控制台入口：等价于 uv run python -m xiao_wen.webapp
+xiao-wen = "xiao_wen.webapp:main"
+
+[tool.uv.build-backend]
+# src 布局：模块目录名与项目名（my-ai-agent → my_ai_agent）不同，显式声明
+module-name = "xiao_wen"
+module-root = "src"
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]
@@ -34,10 +40,9 @@ dev = [
 
 [tool.mypy]
 python_version = "3.11"
-files = ["homework", "tests"]
-# tests 运行时靠 conftest 把 homework/ 加进 sys.path（数字开头文件不能直接 import），
-# mypy 用同样的路径声明解析 memory_store / plugin_registry / stability
-mypy_path = ["homework"]
+files = ["src", "tests"]
+# src 布局：src/xiao_wen 是唯一包，mypy 用它解析 xiao_wen.* 导入
+mypy_path = ["src"]
 check_untyped_defs = true
 # LangGraph Pregel.invoke 的重载对「部分键 State 输入」过严（demo 合法传部分键），
 # 全局关闭该错误码；其余错误码保持开启。

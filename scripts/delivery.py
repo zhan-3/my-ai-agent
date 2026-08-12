@@ -26,7 +26,7 @@ PY = sys.executable
 # .env/.venv/data/teaching(教学过程)/AGENTS.md/.scratch 天然排除
 WHITELIST = [
     "README.md", "pyproject.toml", "uv.lock",
-    "homework", "tests", "plugins", "scripts", "docs",
+    "src", "tests", "plugins", "scripts", "docs",
 ]
 SKIP_PART = {"__pycache__", ".pytest_cache", ".mypy_cache", ".venv"}
 
@@ -97,7 +97,7 @@ def email() -> None:
 正文：
   老师好，
   附件为第二阶段作业「差旅晓问智能出行助手」压缩包，包含：
-  - 项目代码（homework/ 完整系统 + tests/ 自动化测试 + 插件）
+  - 项目代码（src/xiao_wen/ 完整系统 + tests/ 自动化测试 + 插件）
   - README 说明文档（对照 8.2 十项清单）
   - 演示截图 6 张（docs/screenshots/，8.1 要求）
   基础项 A-E 与加分项 A-F 均已完成（详见 README §8/§9）。

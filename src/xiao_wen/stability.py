@@ -1,8 +1,8 @@
-"""稳定性工具层（加分项 D：工程稳定性）
+"""稳定性模块：工程稳定性六件套（加分项 D）
 
-六件套：重试（指数退避）/ 超时（调用方约定 timeout 参数）/ 熔断（三态）/ 异常兜底 / 日志 / 健康检查
+重试（指数退避）/ 超时（调用方约定 timeout 参数）/ 熔断（三态）/ 异常兜底 / 日志 / 健康检查
 用法：
-    from stability import with_retry, CircuitBreaker, safe_call, logger, health_check
+    from xiao_wen.stability import with_retry, CircuitBreaker, safe_call, logger, health_check
     breaker = CircuitBreaker(failure_threshold=3, recovery_time=5.0)
     @with_retry(retries=2, breaker=breaker)
     def call_llm(...): ...
@@ -15,7 +15,8 @@ import time
 from pathlib import Path
 
 # ---- 日志记录（stdout + data/stability.log 双写） ----
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 logging.basicConfig(
@@ -121,18 +122,22 @@ def health_check() -> list[dict]:
     report.append({"项": "向量索引", "状态": "✅" if chroma_dir.exists() else "⚠️",
                    "详情": f"{chroma_dir} {'存在（已持久化）' if chroma_dir.exists() else '缺失，需先跑 0008'}"})
 
-    # ③ 记忆文件可读可写
+    # ③ 记忆文件可读可写（缺失时写入合法空结构，避免 touch 出空文件导致后续读崩）
     mem = DATA_DIR / "memory.json"
     writable = True
     try:
-        mem.touch(exist_ok=True)
+        if not mem.exists():
+            mem.write_text('{"preferences": [], "itineraries": [], "messages": []}',
+                           encoding="utf-8")
+        else:
+            mem.touch(exist_ok=True)
     except OSError:
         writable = False
     report.append({"项": "记忆存储", "状态": "✅" if writable else "⚠️",
                    "详情": f"{mem} 可写" if writable else f"{mem} 不可写"})
 
     # ④ 插件目录（加分项 C）
-    plugins_dir = Path(__file__).resolve().parent.parent / "plugins"
+    plugins_dir = ROOT / "plugins"
     n_plugins = len(list(plugins_dir.glob("*.py"))) if plugins_dir.exists() else 0
     report.append({"项": "插件目录", "状态": "✅" if n_plugins else "⚠️",
                    "详情": f"发现 {n_plugins} 个插件"})
