@@ -56,7 +56,7 @@
     └─────────────────────────────────────────────────┘     └──────────────┘
 ```
 
-意图词汇表 = 注册表 manifest **动态生成**：六内置（`行程规划 / 偏好记录 / 历史查询 / 知识问答 / 联网查询 / 其他`）+ 外部扩展（如 `差旅统计`）自动并入——新增子 Agent 主管零改动（见 §6.7）。产品边界规则：**仅服务企业差旅**，个人休闲旅游等一律归「其他」。
+意图词汇表 = 注册表 manifest **动态生成**：六内置（`行程规划 / 偏好记录 / 历史查询 / 知识问答 / 联网查询 / 其他`）+ 外部扩展（如 `差旅统计`）自动并入——新增子 Agent 主管零改动（见 §6.7）。主管图由**图工厂**（graph_builder）组装，指纹缓存自动重建。产品边界规则：**仅服务企业差旅**，个人休闲旅游等一律归「其他」。
 
 > 📌 更完整的代码层映射挂图（运行时 pipeline + 脚手架动机、逐文件速查）见 [docs/layer-map.html](docs/layer-map.html)。
 
@@ -67,7 +67,7 @@
 | 系统角色 | 系统实现 | 职责 | 关键技术 |
 |---|---|---|---|
 | Intention Agent 意图识别 | `classify_intent` 节点（intent.py） | 动态词汇表分类 + 理由 | LLM + json_mode 结构化输出 |
-| Orchestration Agent 调度 | 条件边路由（system.py 注册表驱动组装） | 按意图把请求分派给对应子 Agent | `add_conditional_edges` |
+| Orchestration Agent 调度 | 条件边路由（graph_builder 图工厂组装） | 按意图把请求分派给对应子 Agent | `add_conditional_edges` |
 | Event Collection Agent 要素提取 | 行程子 Agent 第一阶段 | 提取出发/目的/日期/时长/偏好 | LLM 结构化输出 |
 | Itinerary Planning Agent 行程规划 | `agents/itinerary_agent.py` | 生成完整行程 | 两阶段管线 + 偏好注入 |
 | Preference Agent 偏好 | `agents/preference_agent.py` | 偏好写入（追加/覆盖区分） | 长期记忆 |
@@ -125,8 +125,9 @@ uv run python scripts/delivery.py all   # 交付三连：门禁(ruff+pytest+mypy
 ├── src/                         # 源码（src 布局）
 │   └── xiao_wen/                ★ 成品包
 │       ├── __init__.py          # 包元信息
-│       ├── system.py            ★ 完整系统（主管图 + 注册表驱动组装，主入口）
-│       ├── scheduler.py         ★ 调度优化（Send 并行，注册表驱动子 Agent）
+│       ├── system.py            ★ 完整系统（单意图主管图，图工厂薄壳，主入口）
+│       ├── scheduler.py         ★ 调度优化（并行调度图，图工厂薄壳）
+│       ├── graph_builder.py     ★ 图工厂（主管/调度图组装 + 指纹缓存热插拔）
 │       ├── session.py           ★ 会话循环收口（读记忆→注入→invoke→写回）
 │       ├── intent.py            ★ 意图识别单一来源（动态词汇表 + 多意图拆分）
 │       ├── llm.py               ★ 模型单一接缝（懒构造 + 熔断守卫代理）
@@ -220,11 +221,11 @@ text-embedding-v3 + Chroma 余弦检索 top-5，命中块拼进提示词生成�
 
 ### 6.6 调度优化
 
-一句话含多个独立请求时拆分子任务，Send 并行执行（fan-out/fan-in），归约器 `collected` 拼接结果，避免多子 Agent 写同一 key 互相覆盖。
+一句话含多个独立请求时拆分子任务，Send 并行执行（fan-out/fan-in），归约器 `collected` 拼接结果，避免多子 Agent 写同一 key 互相覆盖。**产品默认图即调度图**（session.chat → 图工厂 parallel=True）：Web 界面/命令行/演示全部生效，单意图路径与主管图完全兼容。
 
 ### 6.7 多 Agent / 子 Agent 注册机制
 
-`plugin_registry.discover()` 扫描内置 `src/xiao_wen/agents/` + 外部 `plugins/` 目录；AST 渐进式披露（意图识别阶段只读 INTENT/DESCRIPTION 元数据，不执行子 Agent 代码）；`load_agent()` 派发时才加载（懒加载，未使用的子 Agent 不加载）；主管图由 manifest 动态组装——**新增子 Agent（丢一个文件）→ 重新发现 → 主管自动认识新意图**（运行中热插拔，plugin_demo 第3幕演示）。内置优先，外部扩展同意图时被忽略。
+`plugin_registry.discover()` 扫描内置 `src/xiao_wen/agents/` + 外部 `plugins/` 目录；AST 渐进式披露（意图识别阶段只读 INTENT/DESCRIPTION 元数据，不执行子 Agent 代码）；`load_agent()` 派发时才加载（懒加载，未使用的子 Agent 不加载）；**图工厂**（graph_builder）由 manifest 动态组装主管/调度图，**指纹缓存自动重建**——新增子 Agent（丢一个文件）→ 下次调用即新图、主管自动认识新意图（运行中热插拔，plugin_demo 第3幕演示；无需 importlib.reload）。内置优先，外部扩展同意图时被忽略。
 
 ### 6.8 工程稳定性
 

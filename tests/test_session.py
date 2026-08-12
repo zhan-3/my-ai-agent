@@ -64,3 +64,25 @@ def test_chat_uses_injected_store():
     assert r.answer == "答"
     assert calls == [("user", "hi"), ("assistant", "答")]
     assert graph.calls[0]["recent"] == "无历史"
+
+
+def test_chat_default_graph_is_parallel_supervisor(monkeypatch):
+    """默认图 = 图工厂的调度图（parallel=True）：产品 hot path 并行能力接线（Q1/Q6a）"""
+    import xiao_wen.graph_builder as gb
+
+    seen = {}
+
+    class FakeGraph:
+        def invoke(self, state):
+            seen["state"] = state
+            return {"answer": "答", "intent": "其他", "reason": "默认图"}
+
+    def fake_build(parallel=False):
+        seen["parallel"] = parallel
+        return FakeGraph()
+
+    monkeypatch.setattr(gb, "build_supervisor_graph", fake_build)
+    r = chat("hi")
+    assert r.answer == "答"
+    assert seen["parallel"] is True, "默认图应为调度图（多意图并行）"
+    assert seen["state"]["recent"] is not None

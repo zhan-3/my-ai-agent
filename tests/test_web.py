@@ -27,7 +27,7 @@ def test_air_quality_known_city_uses_local_coords(monkeypatch):
         }
 
     monkeypatch.setattr(web, "_get_json", fake_get)
-    out = web.get_air_quality.func("北京")
+    out = web.get_air_quality.func("北京")  # type: ignore[attr-defined]
     assert "PM2.5 10" in out and "北京" in out
     assert all("nominatim" not in u for u in urls)
     assert any("air-quality-api" in u for u in urls)
@@ -40,7 +40,7 @@ def test_air_quality_unknown_city_friendly(monkeypatch):
         raise ValueError(f"未找到城市：{city}")
 
     monkeypatch.setattr(web, "_geocode", raise_geo)
-    out = web.get_air_quality.func("不存在的城市")
+    out = web.get_air_quality.func("不存在的城市")  # type: ignore[attr-defined]
     assert "未找到城市" in out
     assert "服务" not in out
 

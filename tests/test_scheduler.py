@@ -1,7 +1,7 @@
 """调度优化（并行路径）测试：dispatch fan-out / make_parallel 包装 / merge fan-in
 
-此前调度并行路径无任何自动化测试（只有 demo 覆盖）——C4 补齐（ADR-0003）。
-全程无 LLM：用桩 worker + 迷你图复刻组装，断言 Send 拆分与合并汇总。
+并行组件随建图代码收口于图工厂（graph_builder，深模块）——测试直接测组件纯逻辑，
+无需 LLM：用桩 worker + 迷你图复刻组装，断言 Send 拆分与合并汇总。
 """
 
 import operator
@@ -10,7 +10,7 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph, add_messages
 from langgraph.types import Send
 
-from xiao_wen import scheduler as sc
+from xiao_wen import graph_builder as gb
 from xiao_wen.intent import SubTask
 
 # ---------------- 纯逻辑件 ----------------
@@ -21,7 +21,7 @@ def test_dispatch_sends_fanout_for_subtasks():
         "subtasks": [SubTask(intent="知识问答", text="a"), SubTask(intent="联网查询", text="b")],
         "intent": "知识问答",
     }
-    out = sc.dispatch(state)
+    out = gb.dispatch(state)
     assert isinstance(out, list) and len(out) == 2
     assert all(isinstance(s, Send) for s in out)
     assert [s.node for s in out] == ["p_知识问答", "p_联网查询"]
@@ -30,7 +30,7 @@ def test_dispatch_sends_fanout_for_subtasks():
 
 def test_dispatch_string_route_when_single():
     state = {"subtasks": [], "intent": "历史查询"}
-    assert sc.dispatch(state) == "历史查询"
+    assert gb.dispatch(state) == "历史查询"
 
 
 def test_make_parallel_routes_current_task():
@@ -40,14 +40,14 @@ def test_make_parallel_routes_current_task():
         seen.append(state["user_input"])
         return {"answer": "已处理"}
 
-    node = sc.make_parallel(worker)
+    node = gb.make_parallel(worker)
     out = node({"current_task": SubTask(intent="历史查询", text="查上次行程"), "user_input": "原输入"})
     assert out["collected"] == [{"intent": "历史查询", "text": "查上次行程", "answer": "已处理"}]
     assert seen == ["查上次行程"]
 
 
 def test_merge_summarizes_all_parts():
-    out = sc.merge(
+    out = gb.merge(
         {
             "collected": [
                 {"intent": "知识问答", "text": "住宿标准", "answer": "答A"},
@@ -91,10 +91,10 @@ def _build_mini_graph():
     g.add_node(classify_intent)
     for name, fn in workers.items():
         g.add_node(name, fn)
-        g.add_node(f"p_{name}", sc.make_parallel(fn))
-    g.add_node(sc.merge)
+        g.add_node(f"p_{name}", gb.make_parallel(fn))
+    g.add_node(gb.merge)
     g.add_edge(START, "classify_intent")
-    g.add_conditional_edges("classify_intent", sc.dispatch, {n: n for n in workers})
+    g.add_conditional_edges("classify_intent", gb.dispatch, {n: n for n in workers})
     for name in workers:
         g.add_edge(f"p_{name}", "merge")
     g.add_edge("merge", END)

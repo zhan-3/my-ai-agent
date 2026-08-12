@@ -79,8 +79,8 @@ if __name__ == "__main__":
     print("幕3｜真实系统故障注入：坏 key → 裸调用崩 vs 稳定性层降级")
     from functools import lru_cache
 
+    from xiao_wen import graph_builder as base
     from xiao_wen import intent as intent_mod
-    from xiao_wen import system as base
 
     # monkeypatch：把意图识别模型的 LLM 换成坏 key（注入点 = intent._intent_model 懒构建工厂；
     # system.classify_intent → intent.classify 在调用时模块级懒查找该工厂，替换即生效；

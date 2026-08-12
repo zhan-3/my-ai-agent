@@ -1,15 +1,15 @@
-"""完整系统模块：多 Agent 主管总装（注册表驱动的子 Agent 图）
+"""完整系统模块（薄壳）：单意图主管图入口 + 演示
 跑法：uv run python -m xiao_wen.system
 依赖：.env（DEEPSEEK_* + DASHSCOPE_API_KEY）；xiao_wen.memory（记忆，短期+长期两层）
       xiao_wen.rag（向量知识问答）、xiao_wen.web（联网查询图）
 
-架构（多 Agent：主管 + 可发现的子 Agent）：
-- 子 Agent 层：六个内置子 Agent 实体在 src/xiao_wen/agents/（+ 外部扩展 plugins/），
-  每个模块声明 INTENT/DESCRIPTION/run(state)，由注册中心（xiao_wen.plugin_registry）
-  自动扫描注册、AST 渐进式披露、派发时懒加载——新增子 Agent 主管零改动
-- 意图识别：LLM 主管（意图词汇表 = 注册表 manifest 动态生成，含六内置 + 外部扩展）
-  + 注入最近对话（短期记忆）；多意图拆分子任务由调度增强（scheduler）并行处理
-- 本模块职责：把注册表 manifest 组装成主管图（节点 = 懒加载代理，路由 = manifest 意图）
+本模块只做两件事：
+- app = 图工厂的单意图实例（build_supervisor_graph(parallel=False)）——图组装收口于
+  xiao_wen.graph_builder（深模块），本模块是消费方薄壳
+- __main__ 演示：三类案例端到端（偏好/常驻城市 → 行程规划 → 联网 → 历史 → 外部扩展 → 边界）
+
+产品默认图是调度图（session.chat，parallel=True，多意图并行）；本模块的 app 是
+「最小主管图」：单意图路径完全兼容（调度图是它的超集），供演示与文档引用。
 
 记忆分层（对应 LangChain 官方 memory 概念）：
 - 短期记忆：最近 N 轮对话（memory.messages），每轮 invoke 前注入 —— 对应 checkpointer+thread
@@ -17,62 +17,11 @@
 - hot path 权衡：注入克制（截断最近 6 轮），避免全量历史塞上下文（变慢、变贵、干扰）
 """
 
-from collections.abc import Hashable
-from typing import Annotated, TypedDict
+from xiao_wen.graph_builder import build_supervisor_graph
 
-from langchain_core.messages import AnyMessage
-from langgraph.graph import END, START, StateGraph, add_messages
+app = build_supervisor_graph(parallel=False)
 
-from xiao_wen import intent
-from xiao_wen.plugin_registry import discover, load_agent
-
-
-# ---- 1. State ----
-class State(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
-    user_input: str
-    recent: str  # 短期记忆：最近对话（每轮 invoke 前注入）
-    intent: str
-    reason: str
-    answer: str
-
-
-# ---- 2. 主管：意图分类（单一来源 xiao_wen.intent，词汇表 = 注册表 manifest） ----
-def classify_intent(state):
-    r = intent.classify(state["recent"], state["user_input"])
-    # 兜底：LLM 幻觉意图不在词汇表内 → 归「其他」（避免路由 KeyError）
-    return {"intent": r.intent, "reason": r.reason}
-
-
-# ---- 3. 组装主管图（注册表驱动：manifest 动态生成节点 + 路由） ----
-manifest = discover()
-intent.set_intents(manifest)  # 注入动态意图词汇表（含外部扩展，如 差旅统计）
-
-
-def _make_node(intent_name: str):
-    """懒加载代理节点：派发到该意图时才加载子 Agent 模块（未使用的子 Agent 不加载）"""
-
-    def node(state):
-        return load_agent(intent_name).run(state)
-
-    return node
-
-
-graph = StateGraph(State)
-graph.add_node(classify_intent)
-ROUTES: dict[Hashable, str] = {}
-for m in manifest:
-    graph.add_node(m["INTENT"], _make_node(m["INTENT"]))
-    ROUTES[m["INTENT"]] = m["INTENT"]
-
-graph.add_edge(START, "classify_intent")
-graph.add_conditional_edges("classify_intent", lambda s: s["intent"], ROUTES)
-for name in ROUTES.values():
-    graph.add_edge(name, END)
-
-app = graph.compile()
-
-# ---- 4. 演示：三类案例端到端 ----
+# ---- 演示：三类案例端到端 ----
 if __name__ == "__main__":
     from xiao_wen.session import chat
 
