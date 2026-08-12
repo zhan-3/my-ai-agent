@@ -1,7 +1,7 @@
 """内置子 Agent：联网查询（多 Agent 架构的子 Agent 实体）
 
 真实现：xiao_wen.web 的 ToolNode 图（ReAct 循环：天气/汇率/空气质量），
-带短期记忆上下文注入（指代消解）。web_query 原实现随 worker 拆入本模块。
+带短期记忆上下文注入（指代消解）。web_query 原实现随子 Agent 化拆入本模块。
 """
 INTENT = "联网查询"
 DESCRIPTION = "用户要查实时信息（指定城市天气、汇率、空气质量）→ 联网查询。"

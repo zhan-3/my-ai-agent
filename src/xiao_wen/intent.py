@@ -20,9 +20,14 @@ _current_intents: Optional[list[dict]] = None
 
 
 def set_intents(manifest: list[dict]) -> None:
-    """注入意图词汇表（注册表 manifest：每条含 INTENT / DESCRIPTION）"""
+    """注入意图词汇表（注册表 manifest：每条含 INTENT / DESCRIPTION）
+
+    词汇表变化时同时失效 _intent_model 缓存——运行中热插拔（重新发现 →
+    重新注入）后，下一次 classify 会用新词汇表重建 prompt，不依赖时序。
+    """
     global _current_intents
     _current_intents = list(manifest)
+    _intent_model.cache_clear()
 
 
 def _intents() -> list[dict]:

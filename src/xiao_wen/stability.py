@@ -139,11 +139,12 @@ def health_check() -> list[dict]:
     report.append({"项": "记忆存储", "状态": "✅" if writable else "⚠️",
                    "详情": f"{mem} 可写" if writable else f"{mem} 不可写"})
 
-    # ④ 外部扩展子 Agent 目录（插件化）
-    plugins_dir = ROOT / "plugins"
-    n_plugins = len(list(plugins_dir.glob("*.py"))) if plugins_dir.exists() else 0
-    report.append({"项": "插件目录", "状态": "✅" if n_plugins else "⚠️",
-                   "详情": f"发现 {n_plugins} 个外部扩展子 Agent"})
+    # ④ 外部扩展子 Agent 目录（插件化；计数口径与注册中心 discover() 一致：只数外部扩展、
+    #    过滤缺 INTENT/DESCRIPTION 元数据的文件，不数内置 agents/）
+    from xiao_wen import plugin_registry
+    ext = [m for m in plugin_registry.discover() if m["source"] == "external"]
+    report.append({"项": "插件目录", "状态": "✅" if ext else "⚠️",
+                   "详情": "发现 " + "、".join(m["INTENT"] for m in ext) + f"（{len(ext)} 个外部扩展）"})
 
     # ⑤ 日志文件可写
     report.append({"项": "日志", "状态": "✅",

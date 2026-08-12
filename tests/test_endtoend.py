@@ -44,3 +44,11 @@ def test_two_layer_memory_loop(memory):
     # ⑤ 边界：个人休闲 → 其他
     ans = _invoke("这个暑假去哪里玩")
     assert "服务范围" in ans or "抱歉" in ans
+
+
+@pytest.mark.integration
+def test_external_agent_end_to_end_dispatch(memory):
+    """外部扩展子 Agent（差旅统计）经真实主管图端到端派发：
+    注册表发现 → 词汇表注入 → 意图识别 → 条件边路由 → 懒加载执行"""
+    ans = _invoke("统计一下我的出差情况")
+    assert "暂无历史行程记录" in ans, f"期望 stats.run 输出，实际：{ans}"

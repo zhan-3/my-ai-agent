@@ -64,8 +64,8 @@
 | 系统角色 | 系统实现 | 职责 | 关键技术 |
 |---|---|---|---|
 | Intention Agent 意图识别 | `classify_intent` 节点 | 六分类 + 理由 | LLM + json_mode 结构化输出 |
-| Orchestration Agent 调度 | 条件边路由 | 按意图把请求分派给对应 Worker | `add_conditional_edges` |
-| Event Collection Agent 要素提取 | 行程 Worker 第一阶段 | 提取出发/目的/日期/时长/偏好 | LLM 结构化输出 |
+| Orchestration Agent 调度 | 条件边路由 | 按意图把请求分派给对应子 Agent | `add_conditional_edges` |
+| Event Collection Agent 要素提取 | 行程子 Agent 第一阶段 | 提取出发/目的/日期/时长/偏好 | LLM 结构化输出 |
 | Preference Agent 偏好 | `preference` 节点 | 偏好写入（追加/覆盖区分） | 长期记忆 |
 | Memory Query Agent 记忆查询 | `history` 节点 | 返回历史行程 | 长期记忆 |
 | Knowledge/RAG Agent 知识问答 | `knowledge` 节点 | 政策库语义检索 + 生成 | embedding + Chroma |
@@ -108,7 +108,7 @@ uv run python scripts/delivery.py all   # 交付三连：门禁(pytest+mypy+冒�
 src/xiao_wen/               ★ 成品包（正式命名，src 布局）
   __init__.py              包元信息
   system.py                ★ 完整系统（主管图 + 子 Agent 注册表驱动组装，主入口）
-  scheduler.py             ★ 调度优化（Send 并行执行，注册表驱动 worker）
+  scheduler.py             ★ 调度优化（Send 并行执行，注册表驱动子 Agent）
   llm.py                   ★ 模型单一接缝（懒构造 + 缺失变量快速失败 + 熔断守卫）
   session.py               ★ 会话循环收口（读最近对话 → 注入 → invoke → 写回两轮）
   intent.py                ★ 意图识别单一来源（词汇表 = 注册表 manifest 动态生成 + 多意图拆分）
@@ -184,7 +184,7 @@ text-embedding-v3 + Chroma 余弦检索 top-5，命中块拼进提示词生成�
 
 ### 6.6 调度优化
 
-一句话含多个独立请求时拆分子任务，Send 并行执行（fan-out/fan-in），归约器 `collected` 拼接结果，避免多 Worker 写同一 key 互相覆盖。
+一句话含多个独立请求时拆分子任务，Send 并行执行（fan-out/fan-in），归约器 `collected` 拼接结果，避免多子 Agent 写同一 key 互相覆盖。
 
 ### 6.7 多 Agent / 子 Agent 注册机制
 

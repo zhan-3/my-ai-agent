@@ -1,13 +1,13 @@
 """调度优化模块：同优先级任务并行执行（Send API fan-out/fan-in）
 跑法：uv run python -m xiao_wen.scheduler
-依赖：xiao_wen.plugin_registry（子 Agent 注册表，懒加载 worker）
+依赖：xiao_wen.plugin_registry（子 Agent 注册表，懒加载子 Agent）
 
 设计（对比「固定顺序串行」）：
-- 动态路由：按意图选 worker（条件边）
+- 动态路由：按意图选子 Agent（条件边）
 - ★并行执行：一句话含多个独立请求 → 意图识别拆分子任务（subtasks）→
-  dispatcher 用 Send 把每个子任务并行派发给对应 worker（fan-out）→
-  merge 汇总（fan-in）。多个 worker 同时跑，一次对话完成多个任务。
-- 先收集信息再规划：行程 worker 内部两阶段（要素提取→生成），已具备
+  dispatcher 用 Send 把每个子任务并行派发给对应子 Agent（fan-out）→
+  merge 汇总（fan-in）。多个子 Agent 同时跑，一次对话完成多个任务。
+- 先收集信息再规划：行程子 Agent 内部两阶段（要素提取→生成），已具备
 
 单意图路径完全不变（subtasks 为空走原条件边），保证不破坏已验收功能。
 """
@@ -22,11 +22,12 @@ from xiao_wen import intent
 from xiao_wen.intent import SubTask
 from xiao_wen.plugin_registry import discover, load_agent
 
-# ---- 1. 子 Agent 清单（注册表自动发现：内置六 + 外部扩展）与懒加载 worker ----
-_WORKER_NAMES = [m["INTENT"] for m in discover()]
+# ---- 1. 子 Agent 清单（注册表自动发现：内置六 + 外部扩展）与懒加载子 Agent ----
+_AGENT_NAMES = [m["INTENT"] for m in discover()]
 
-def _worker(intent_name: str):
-    """懒加载 worker：派发到该意图时才加载子 Agent 模块（与 system 同一注册表，调度增强不动子 Agent）"""
+
+def _agent(intent_name: str):
+    """懒加载子 Agent：派发到该意图时才加载模块（与 system 同一注册表，调度增强不动子 Agent）"""
     def node(state):
         return load_agent(intent_name).run(state)
     return node
@@ -50,11 +51,11 @@ def classify_intent(state):
     return {"intent": r.intent, "reason": r.reason, "subtasks": r.subtasks}
 
 # ---- 4. 并行执行：dispatcher（Send fan-out）+ 包装节点 + merge（fan-in） ----
-def make_parallel(worker):
-    """把原 worker 包成并行节点：读 Send 分支的 current_task，输出 collected（不覆盖 answer）"""
+def make_parallel(agent):
+    """把原子 Agent 包成并行节点：读 Send 分支的 current_task，输出 collected（不覆盖 answer）"""
     def node(state):
         sub = state["current_task"]
-        out = worker({**state, "user_input": sub.text})
+        out = agent({**state, "user_input": sub.text})
         return {"collected": [{"intent": sub.intent, "text": sub.text, "answer": out["answer"]}]}
     return node
 
@@ -77,10 +78,10 @@ def merge(state):
 # ---- 5. 组装图 ----
 graph = StateGraph(State)
 graph.add_node(classify_intent)
-for name in _WORKER_NAMES:
-    graph.add_node(name, _worker(name))
-for name in _WORKER_NAMES:
-    graph.add_node(f"p_{name}", make_parallel(_worker(name)))
+for name in _AGENT_NAMES:
+    graph.add_node(name, _agent(name))
+for name in _AGENT_NAMES:
+    graph.add_node(f"p_{name}", make_parallel(_agent(name)))
 graph.add_node(merge)
 
 graph.add_edge(START, "classify_intent")
@@ -88,13 +89,13 @@ graph.add_edge(START, "classify_intent")
 graph.add_conditional_edges(
     "classify_intent",
     dispatch,
-    {name: name for name in _WORKER_NAMES},
+    {name: name for name in _AGENT_NAMES},
 )
 # 并行组：p_* → merge（fan-in）
-for name in _WORKER_NAMES:
+for name in _AGENT_NAMES:
     graph.add_edge(f"p_{name}", "merge")
 graph.add_edge("merge", END)
-for name in _WORKER_NAMES:
+for name in _AGENT_NAMES:
     graph.add_edge(name, END)
 
 app = graph.compile()

@@ -6,7 +6,7 @@
     （也可用 `uv run xiao-wen` 等价启动）
 
 设计：
-- 复用 xiao_wen.system 完整系统（六 worker 主管架构），不重写任何 Agent 逻辑
+- 复用 xiao_wen.system 完整系统（子 Agent 注册表驱动主管架构），不重写任何 Agent 逻辑
 - 记忆闭环收口于 xiao_wen.session.chat（读 recent → 注入 → invoke → 写回两轮）
 - 异常兜底在 web 层（session 层向上抛）：任何异常给友好降级文案
 - 会话隔离暂缓：session_id 预留，记忆为全局单文件（ADR-0002）

@@ -1,6 +1,6 @@
 """内置子 Agent：历史查询（多 Agent 架构的子 Agent 实体）
 
-读长期记忆（xiao_wen.memory）的历史行程，原实现随 worker 拆入本模块。
+读长期记忆（xiao_wen.memory）的历史行程，原实现随子 Agent 化拆入本模块。
 """
 INTENT = "历史查询"
 DESCRIPTION = "用户询问历史对话或历史行程 → 历史查询。"
