@@ -1,4 +1,4 @@
-"""Web 界面模块（加分项 F）：FastAPI 后端 + 原生 HTML/JS 前端（零构建、离线可用）
+"""Web 界面模块：FastAPI 后端 + 原生 HTML/JS 前端（零构建、离线可用）
 跑法：
     uv run python -m xiao_wen.webapp
     浏览器打开 http://127.0.0.1:8000
@@ -23,7 +23,7 @@ from xiao_wen import system  # 复用完整系统（六 worker 主管架构）�
 
 app_graph = system.app
 
-app = FastAPI(title="晓问 · 差旅出行助手", description="多 Agent 差旅助手 Web 界面（加分项 F）")
+app = FastAPI(title="晓问 · 差旅出行助手", description="多 Agent 差旅助手 Web 界面")
 
 
 class ChatRequest(BaseModel):
@@ -75,7 +75,7 @@ HTML_PATH = os.path.join(os.path.dirname(__file__), "static", "index.html")
 
 @app.get("/healthz")
 def healthz() -> dict:
-    """健康检查接口（配合加分项 D）"""
+    """健康检查接口（配合稳定性自检）"""
     from xiao_wen.stability import health_check
     return {"checks": health_check()}
 

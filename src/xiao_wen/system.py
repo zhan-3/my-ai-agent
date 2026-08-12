@@ -37,8 +37,8 @@ llm = ChatOpenAI(
     base_url=os.environ["DEEPSEEK_BASE_URL"],
     api_key=SecretStr(os.environ["DEEPSEEK_API_KEY"]),
     temperature=0,
-    max_retries=2,   # 工程稳定性：LLM 失败自动重试 2 次（加分项 D）
-    timeout=30,      # 工程稳定性：30s 无响应即放弃（加分项 D）
+    max_retries=2,   # 工程稳定性：LLM 失败自动重试 2 次
+    timeout=30,      # 工程稳定性：30s 无响应即放弃
     extra_body={"thinking": {"type": "disabled"}},
 )
 
@@ -230,7 +230,7 @@ def itinerary(state):
     return {"answer": format_plan(plan)}
 
 def knowledge(state):
-    """真实现：向量检索知识问答（0008：embedding + chromadb）"""
+    """真实现：向量检索知识问答（embedding + chromadb）"""
     return {"answer": rag.knowledge_qa(state["user_input"])}
 
 def web_query(question: str, ctx: str = "无") -> str:
@@ -268,7 +268,7 @@ for name in ["itinerary", "preference", "history", "knowledge", "web", "other"]:
 
 app = graph.compile()
 
-# ---- 9. 演示：三类案例端到端（作业演示要求） ----
+# ---- 9. 演示：三类案例端到端 ----
 if __name__ == "__main__":
     demo = [
         # ① 偏好新增（长期记忆写入）

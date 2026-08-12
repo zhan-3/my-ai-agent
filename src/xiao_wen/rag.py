@@ -2,8 +2,7 @@
 跑法：uv run python -m xiao_wen.rag
 依赖：.env 里 DASHSCOPE_API_KEY（阿里云百炼）；numpy / chromadb（已装）
 
-对照：关键词（BM25）版是教学历史版本（已归档 teaching/archive/0007_rag.py）。
-两版跑同一组测试题即可对比：向量版能理解语义（「延长出差时间」不再误伤报销查询）。
+方案演进：早期用关键词检索（jieba 分词 + BM25）暴露语义天花板（「延长出差时间」误命中环保文档）后，换成向量检索；现行方案即向量版。
 
 设计要点：
 - 索引构建一次性：8 份文档分块 → 批量 embedding → Chroma 磁盘持久化
@@ -57,7 +56,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         time.sleep(0.2)  # 限速，避免触发频率限制
     return vecs
 
-# ---- 3. 分块（与 0007 相同的策略：标题和内容同块）----
+# ---- 3. 分块（标题和内容同块）----
 def load_chunks(max_len: int = 400):
     chunks = []
     for path in sorted(DOCS_DIR.glob("*.txt")):
@@ -132,7 +131,7 @@ def search(query: str, col, k: int = 5):
         out.append((sim, meta["source"], doc))
     return out
 
-# ---- 5. 增强 + 生成（同 0007）----
+# ---- 5. 增强 + 生成 ----
 knowledge_prompt = ChatPromptTemplate.from_messages([
     ("system", """你是晓问公司的差旅政策顾问。严格依据【参考资料】回答用户问题。
 规则：

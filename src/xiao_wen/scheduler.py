@@ -1,4 +1,4 @@
-"""调度优化模块：同优先级任务并行执行（Send API fan-out/fan-in，加分项 B）
+"""调度优化模块：同优先级任务并行执行（Send API fan-out/fan-in）
 跑法：uv run python -m xiao_wen.scheduler
 依赖：xiao_wen.system（复用六个 worker 节点函数）
 

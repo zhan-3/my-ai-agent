@@ -13,7 +13,7 @@
 - plugin_registry   插件注册中心（动态发现 / AST 渐进披露 / 懒加载）
 - stability         稳定性层（重试 / 熔断 / 兜底 / 日志 / 健康检查）
 - webapp            可视化 Web 界面（FastAPI）
-- demos             课程演示脚本（plugin_demo / stability_demo）
+- demos             演示脚本（plugin_demo / stability_demo）
 """
 
 __version__ = "0.1.0"

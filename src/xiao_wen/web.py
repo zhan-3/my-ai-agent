@@ -2,7 +2,7 @@
 跑法：uv run python -m xiao_wen.web
 依赖：无新依赖。天气用 open-meteo（免费无需 key），汇率用 open.er-api.com（免费无需 key）
 
-教学点：
+设计要点：
 - @tool 装饰器：函数 → 工具（docstring 是给 LLM 看的说明书，必须写清参数含义）
 - llm.bind_tools([...])：给 LLM 挂上工具清单，LLM 在回答时自主决定「要不要调工具、调哪个、传什么参」
 - ToolNode：langgraph.prebuilt 提供的现成工具执行节点

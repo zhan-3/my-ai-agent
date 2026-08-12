@@ -1,4 +1,4 @@
-"""稳定性演示（加分项 D）：重试 / 超时 / 熔断 / 故障注入 / 健康检查
+"""稳定性演示：重试 / 超时 / 熔断 / 故障注入 / 健康检查
 
 跑法：uv run python -m xiao_wen.demos.stability_demo
 四幕演示：

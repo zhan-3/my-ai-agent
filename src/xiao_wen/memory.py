@@ -99,7 +99,7 @@ def get_home_city() -> str | None:
 
 
 def get_common_destinations(n: int = 3) -> list[str]:
-    """常用目的地（从历史行程统计，加分项「出差习惯」）"""
+    """常用目的地（从历史行程统计，「出差习惯」）"""
     its = get_itineraries()
     cities: list[str] = []
     for i in its:

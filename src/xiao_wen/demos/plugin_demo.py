@@ -1,4 +1,4 @@
-"""插件化演示（加分项 C）：动态发现 / 懒加载 / 渐进式披露 / 热插拔
+"""插件化演示：动态发现 / 懒加载 / 渐进式披露 / 热插拔
 
 跑法：uv run python -m xiao_wen.demos.plugin_demo
 四幕演示：
@@ -25,8 +25,8 @@ llm = ChatOpenAI(
     base_url=os.environ["DEEPSEEK_BASE_URL"],
     api_key=SecretStr(os.environ["DEEPSEEK_API_KEY"]),
     temperature=0,
-    max_retries=2,   # 工程稳定性：LLM 失败自动重试 2 次（加分项 D）
-    timeout=30,      # 工程稳定性：30s 无响应即放弃（加分项 D）
+    max_retries=2,   # 工程稳定性：LLM 失败自动重试 2 次
+    timeout=30,      # 工程稳定性：30s 无响应即放弃
     extra_body={"thinking": {"type": "disabled"}},
 )
 
@@ -117,6 +117,6 @@ def run(query: str) -> str:
     print(f"  用户：{q}")
     print(f"  答复：{supervisor(q, discover())}\n")
 
-    # 清理热插拔演示文件（保持插件目录为课程基线三件套）
+    # 清理热插拔演示文件（保持插件目录为基线三件套）
     (PLUGIN_DIR / "summary.py").unlink()
     print("（已清理热插拔演示文件 summary.py，插件目录恢复基线）")

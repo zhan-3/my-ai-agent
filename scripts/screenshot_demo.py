@@ -1,4 +1,4 @@
-"""无头浏览器演示截图（作业 8.1 提交材料：演示截图）
+"""无头浏览器演示截图（演示材料）
 
 跑法：uv run python scripts/screenshot_demo.py（需 webapp 已启动）
 产出：docs/screenshots/ 下 5 张演示截图

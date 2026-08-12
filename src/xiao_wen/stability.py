@@ -1,4 +1,4 @@
-"""稳定性模块：工程稳定性六件套（加分项 D）
+"""稳定性模块：工程稳定性六件套
 
 重试（指数退避）/ 超时（调用方约定 timeout 参数）/ 熔断（三态）/ 异常兜底 / 日志 / 健康检查
 用法：
@@ -120,7 +120,7 @@ def health_check() -> list[dict]:
     # ② 向量知识库索引（chroma 持久化）
     chroma_dir = DATA_DIR / "chroma"
     report.append({"项": "向量索引", "状态": "✅" if chroma_dir.exists() else "⚠️",
-                   "详情": f"{chroma_dir} {'存在（已持久化）' if chroma_dir.exists() else '缺失，需先跑 0008'}"})
+                   "详情": f"{chroma_dir} {'存在（已持久化）' if chroma_dir.exists() else '缺失，需先构建向量索引（rag 模块）'}"})
 
     # ③ 记忆文件可读可写（缺失时写入合法空结构，避免 touch 出空文件导致后续读崩）
     mem = DATA_DIR / "memory.json"
@@ -136,7 +136,7 @@ def health_check() -> list[dict]:
     report.append({"项": "记忆存储", "状态": "✅" if writable else "⚠️",
                    "详情": f"{mem} 可写" if writable else f"{mem} 不可写"})
 
-    # ④ 插件目录（加分项 C）
+    # ④ 插件目录（插件化）
     plugins_dir = ROOT / "plugins"
     n_plugins = len(list(plugins_dir.glob("*.py"))) if plugins_dir.exists() else 0
     report.append({"项": "插件目录", "状态": "✅" if n_plugins else "⚠️",

@@ -1,6 +1,6 @@
 """行程规划纯逻辑测试：必填要素缺失检查 + 结果可读性格式（无需 LLM）
 
-行程 worker 逻辑内嵌于 xiao_wen.system 完整系统（0005 历史版已归档 teaching/archive/），
+行程 worker 逻辑内嵌于 xiao_wen.system 完整系统，
 这里加载成品系统测其内部纯函数（模块顶层只构造模型，不调用 API）。
 """
 from typing import Any
