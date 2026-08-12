@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from xiao_wen import llm
 from xiao_wen.memory import add_or_update_preference, get_itineraries
-from xiao_wen.trip_planner import NeedsInfo, format_plan, plan as _trip_plan
+from xiao_wen.trip_planner import NeedsInfo, format_plan, needs_info_text, plan as _trip_plan
 
 # ---- 1. LLM：单一接缝（xiao_wen.llm，懒构造 + 熔断守卫；链在本模块懒构建） ----
 
@@ -94,9 +94,7 @@ def itinerary(state):
     """行程规划：两阶段管线收口于 xiao_wen.trip_planner.plan（ADR-0003）"""
     r = _trip_plan(state["user_input"])
     if isinstance(r, NeedsInfo):
-        return {"answer": "⚠️ 还缺一些信息才能帮你安排行程，请补充：\n· "
-                + "\n· ".join(r.missing)
-                + "\n（例如：「10月8日从广州去北京开会4天」）"}
+        return {"answer": needs_info_text(r)}
     return {"answer": format_plan(r.plan)}
 
 def knowledge(state):

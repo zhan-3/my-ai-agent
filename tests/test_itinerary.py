@@ -12,7 +12,7 @@ ItineraryPlan = _it.ItineraryPlan
 
 def _req(**kw):
     base: dict[str, Any] = dict(to_city="北京", from_city="上海", start_date="2026-10-08",
-                                duration_days=4, purpose="开会", via_cities="", transport="",
+                                duration_days=4, transport="",
                                 hotel_pref="无", budget_pref="中等")
     base.update(kw)
     return TripRequest(**base)

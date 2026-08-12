@@ -11,13 +11,14 @@ from langgraph.graph import END, START, StateGraph, add_messages
 from langgraph.types import Send
 
 from xiao_wen import scheduler as sc
+from xiao_wen.intent import SubTask
 
 
 # ---------------- 纯逻辑件 ----------------
 
 def test_dispatch_sends_fanout_for_subtasks():
-    state = {"subtasks": [{"intent": "知识问答", "text": "a"},
-                          {"intent": "联网查询", "text": "b"}],
+    state = {"subtasks": [SubTask(intent="知识问答", text="a"),
+                          SubTask(intent="联网查询", text="b")],
              "intent": "知识问答"}
     out = sc.dispatch(state)
     assert isinstance(out, list) and len(out) == 2
@@ -39,7 +40,7 @@ def test_make_parallel_routes_current_task():
         return {"answer": "已处理"}
 
     node = sc.make_parallel(worker)
-    out = node({"current_task": {"intent": "历史查询", "text": "查上次行程"},
+    out = node({"current_task": SubTask(intent="历史查询", text="查上次行程"),
                 "user_input": "原输入"})
     assert out["collected"] == [{"intent": "历史查询", "text": "查上次行程",
                                  "answer": "已处理"}]
@@ -77,8 +78,8 @@ def _build_mini_graph():
 
     def classify_intent(state):
         return {"intent": "知识问答", "reason": "多意图",
-                "subtasks": [{"intent": "知识问答", "text": "政策问题"},
-                             {"intent": "联网查询", "text": "天气问题"}]}
+                "subtasks": [SubTask(intent="知识问答", text="政策问题"),
+                             SubTask(intent="联网查询", text="天气问题")]}
 
     g = StateGraph(MiniState)
     g.add_node(classify_intent)

@@ -56,7 +56,7 @@ class Intent(BaseModel):
 class IntentResult:
     intent: str
     reason: str
-    subtasks: list[dict]  # [{intent, text}, ...]
+    subtasks: list[SubTask]  # 多意图拆分子任务（单意图时为空数组）
 
 
 @lru_cache
@@ -74,5 +74,5 @@ def classify(recent: str, user_input: str) -> IntentResult:
     return IntentResult(
         intent=r.intent,
         reason=r.reason,
-        subtasks=[s.model_dump() for s in r.subtasks],
+        subtasks=r.subtasks,  # 保持 SubTask 对象类型，不下沉成 dict（Primitive Obsession 修正）
     )

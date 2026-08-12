@@ -39,4 +39,4 @@ def test_intent_classification(text, expected):
 @pytest.mark.parametrize("text,expected", MULTI_CASES)
 def test_intent_splits_subtasks(text, expected):
     r = _intent.classify("", text)
-    assert [s["intent"] for s in r.subtasks] == expected, f"{text!r} 拆分：{r.subtasks}"
+    assert [s.intent for s in r.subtasks] == expected, f"{text!r} 拆分：{r.subtasks}"

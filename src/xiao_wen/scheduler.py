@@ -20,6 +20,7 @@ from langchain_core.messages import AnyMessage
 
 # ---- 1. 复用 xiao_wen.system 的六个 worker 节点函数（模块化：调度增强不动 worker） ----
 from xiao_wen import system as base
+from xiao_wen.intent import SubTask, classify as _classify
 
 WORKERS = {"行程规划": base.itinerary, "偏好记录": base.preference, "历史查询": base.history,
            "知识问答": base.knowledge, "联网查询": base.web_node, "其他": base.other}
@@ -32,12 +33,11 @@ class State(TypedDict):
     intent: str
     reason: str
     answer: str
-    subtasks: list[dict]          # 多意图拆分：[{intent, text}, ...]
-    current_task: dict            # Send 分支内当前子任务
+    subtasks: list[SubTask]  # 多意图拆分（SubTask 对象，不下沉 dict）
+    current_task: SubTask    # Send 分支内当前子任务
     collected: Annotated[list[dict], operator.add]  # 并行结果收集（归约器拼接）
 
 # ---- 3. 意图识别：多意图拆分（单一来源 xiao_wen.intent，C3） ----
-from xiao_wen.intent import classify as _classify
 
 def classify_intent(state):
     r = _classify(state["recent"], state["user_input"])
@@ -48,15 +48,15 @@ def make_parallel(worker):
     """把原 worker 包成并行节点：读 Send 分支的 current_task，输出 collected（不覆盖 answer）"""
     def node(state):
         sub = state["current_task"]
-        out = worker({**state, "user_input": sub["text"]})
-        return {"collected": [{"intent": sub["intent"], "text": sub["text"], "answer": out["answer"]}]}
+        out = worker({**state, "user_input": sub.text})
+        return {"collected": [{"intent": sub.intent, "text": sub.text, "answer": out["answer"]}]}
     return node
 
 def dispatch(state):
     """fan-out 条件边函数：多意图 → Send 列表（并行执行）；单意图 → 字符串路由"""
     subs = state.get("subtasks")
     if subs:
-        return [Send(f"p_{s['intent']}", {"current_task": s}) for s in subs]
+        return [Send(f"p_{s.intent}", {"current_task": s}) for s in subs]
     return state["intent"]
 
 def merge(state):
