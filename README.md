@@ -109,51 +109,79 @@ uv run python scripts/delivery.py all   # 交付三连：门禁(pytest+mypy+冒�
 ### 目录结构
 
 ```
-src/xiao_wen/               ★ 成品包（正式命名，src 布局）
-  __init__.py              包元信息
-  system.py                ★ 完整系统（主管图 + 子 Agent 注册表驱动组装，主入口）
-  scheduler.py             ★ 调度优化（Send 并行执行，注册表驱动子 Agent）
-  llm.py                   ★ 模型单一接缝（懒构造 + 缺失变量快速失败 + 熔断守卫）
-  session.py               ★ 会话循环收口（读最近对话 → 注入 → invoke → 写回两轮）
-  intent.py                ★ 意图识别单一来源（词汇表 = 注册表 manifest 动态生成 + 多意图拆分）
-  trip_planner.py          ★ 行程规划管线（提取→补全→缺项→生成→写回）
-  agents/                  ★ 内置子 Agent 实体（每个 = INTENT + DESCRIPTION + run(state)）
-    itinerary_agent.py     行程规划（trip_planner 收口）
-    preference_agent.py    偏好记录（提取 + memory 追加/覆盖）
-    history_agent.py       历史查询（读长期记忆）
-    knowledge_agent.py     知识问答（rag 向量检索）
-    web_agent.py           联网查询（web ToolNode ReAct + 指代消解）
-    other_agent.py         其他（边界兜底）
-  memory.py                两层记忆（短期消息 + 长期偏好/行程，JSON 持久化）
-  rag.py                   知识问答（向量检索 + Chroma，dashscope embedding）
-  web.py                   联网查询（ToolNode + ReAct：天气/汇率/空气质量）
-  plugin_registry.py       子 Agent 注册中心（discover / AST 元数据 / load_agent，内置优先）
-  stability.py             稳定性层（with_retry / CircuitBreaker / safe_call / health_check）
-  webapp.py                ★ 可视化 Web 界面（FastAPI 后端，复用 system 完整系统）
-  static/index.html        Web 前端（聊天气泡 + 建议 chips + 打字机，无外部 CDN）
-  demos/
-    plugin_demo.py         多 Agent 机制演示（发现/懒加载/热插拔/外部扩展真实路由）
-    stability_demo.py      稳定性演示（重试/熔断/真实故障注入/健康检查）
-
-scripts/                工具脚本
-  screenshot_demo.py     无头浏览器演示截图 → docs/screenshots/
-
-docs/screenshots/        演示截图 6 张（首页/行程/天气/指代消解/知识问答/历史）
-
-tests/                  自动化测试（pytest）
-  conftest.py           记忆隔离到 tmp_path（绝不碰真实数据）
-  test_memory.py        记忆：追加/覆盖/常驻城市/历史/常用目的地
-  test_itinerary.py     缺失检查 + 结果可读性格式
-  test_plugin.py        子 Agent 注册中心（发现 6 内置+外部 / 懒加载 / 内置优先 / 热插拔）
-  test_stability.py     熔断三态/重试/兑底
-  test_rag.py           RAG 验证：分块管线（单元）+ 向量检索（集成）
-  test_intent.py        （集成）意图识别 7 用例含边界
-  test_endtoend.py      （集成）两层记忆闭环
-
-plugins/                外部扩展子 Agent 目录（每个 = INTENT + DESCRIPTION + run(state)）
-  stats.py              子 Agent：差旅统计（第七意图，真实路由；演示动态发现）
-data/memory.json        记忆数据（自动生成，已 gitignore）
-data/chroma/            向量索引（自动生成，已 gitignore）
+.
+├── README.md                    # 项目说明（本文件）
+├── CONTEXT.md                   # 领域术语表（主管/子 Agent/注册中心…）
+├── AGENTS.md                    # Agent 协作配置（本地 issue tracker 约定）
+├── pyproject.toml               # 依赖与工具配置（uv 管理）
+├── uv.lock                      # 依赖锁定
+├── .gitignore                   # 忽略：.env / data 数据 / 交付包
+├── .python-version
+│
+├── src/                         # 源码（src 布局）
+│   └── xiao_wen/                ★ 成品包
+│       ├── __init__.py          # 包元信息
+│       ├── system.py            ★ 完整系统（主管图 + 注册表驱动组装，主入口）
+│       ├── scheduler.py         ★ 调度优化（Send 并行，注册表驱动子 Agent）
+│       ├── session.py           ★ 会话循环收口（读记忆→注入→invoke→写回）
+│       ├── intent.py            ★ 意图识别单一来源（动态词汇表 + 多意图拆分）
+│       ├── llm.py               ★ 模型单一接缝（懒构造 + 熔断守卫代理）
+│       ├── trip_planner.py      ★ 行程规划管线（提取→补全→缺项→生成→写回）
+│       ├── plugin_registry.py   # 子 Agent 注册中心（discover / AST 元数据 / load_agent）
+│       ├── memory.py            # 两层记忆（短期消息 + 长期偏好/行程，JSON）
+│       ├── rag.py               # 知识问答（向量检索 + Chroma）
+│       ├── web.py               # 联网查询（ToolNode + ReAct）
+│       ├── stability.py         # 稳定性层（重试/熔断/兜底/健康检查）
+│       ├── webapp.py            # FastAPI Web 界面（复用 system 零重写）
+│       ├── agents/              # 内置子 Agent 实体（每个 = INTENT + DESCRIPTION + run）
+│       │   ├── itinerary_agent.py   # 行程规划（trip_planner 收口）
+│       │   ├── preference_agent.py  # 偏好记录（追加/覆盖）
+│       │   ├── history_agent.py     # 历史查询（读长期记忆）
+│       │   ├── knowledge_agent.py   # 知识问答（rag 向量检索）
+│       │   ├── web_agent.py         # 联网查询（含指代消解）
+│       │   └── other_agent.py       # 其他（边界兜底）
+│       ├── demos/
+│       │   ├── plugin_demo.py       # 多 Agent 机制演示（发现/懒加载/热插拔/真实路由）
+│       │   └── stability_demo.py    # 稳定性演示（重试/熔断/故障注入/健康检查）
+│       └── static/
+│           └── index.html           # Web 前端（聊天气泡 + chips，无外部 CDN）
+│
+├── plugins/                     # 外部扩展子 Agent 目录（注册表自动发现）
+│   └── stats.py                 # 差旅统计（第七意图，真实路由）
+│
+├── tests/                       # 自动化测试（pytest）
+│   ├── conftest.py              # 记忆隔离到 tmp_path（绝不碰真实数据）
+│   ├── test_memory.py           # 记忆：追加/覆盖/常驻城市/历史
+│   ├── test_itinerary.py        # 行程：缺失检查 + 结果格式
+│   ├── test_plugin.py           # 注册中心：发现/懒加载/内置优先/热插拔
+│   ├── test_stability.py        # 熔断三态/重试/兜底
+│   ├── test_rag.py              # RAG：分块（单元）+ 检索（集成）
+│   ├── test_intent.py           # （集成）意图识别 7 用例含边界
+│   ├── test_endtoend.py         # （集成）两层记忆闭环 + 外部扩展派发
+│   ├── test_llm.py              # LLM 接缝
+│   ├── test_scheduler.py        # 调度优化（并行）
+│   ├── test_session.py          # 会话循环
+│   └── test_web.py              # 联网查询
+│
+├── docs/
+│   ├── layer-map.html           # 代码层映射挂图（运行时 + 脚手架动机）
+│   ├── adr/                     # 架构决策记录（ADR-0001..0005）
+│   ├── documents/               # 知识库语料（8 份政策文档）
+│   ├── agents/                  # Agent 技能协作文档
+│   └── screenshots/             # 演示截图 6 张
+│
+├── scripts/
+│   ├── smoke.py                 # 交付冒烟（真 LLM / --import-only 离线自检）
+│   ├── screenshot_demo.py       # 无头浏览器演示截图
+│   └── delivery.py              # 交付三连：门禁 → 打包 → 邮件模板
+│
+├── data/                        # 运行数据（自动生成，gitignored）
+│   ├── memory.json              # 记忆数据
+│   ├── chroma/                  # 向量索引
+│   └── stability.log            # 日志
+│
+├── delivery/                    # 交付压缩包输出（gitignored）
+└── .scratch/                    # 本地 issue tracker（内部，不进交付包）
 ```
 
 ## 6. 关键设计
