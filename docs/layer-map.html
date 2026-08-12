@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>层映射挂图 — my-ai-agent（晓问）</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+    </script>
+    <style>
+      .chip { border: 1px solid #cbd5e1; border-radius: 4px; padding: 2px 6px; font-size: 11px; background: #f8fafc; }
+      .tbl th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; }
+      .tbl td { vertical-align: top; }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans">
+    <main class="max-w-6xl mx-auto px-6 py-12 space-y-12">
+
+      <!-- ============ 页头 ============ -->
+      <header>
+        <div class="flex items-baseline justify-between">
+          <h1 class="text-3xl font-serif font-bold tracking-tight">晓问 · 代码层映射挂图</h1>
+          <span class="text-sm text-slate-500 whitespace-nowrap">2026-08-12 · 多 Agent 化版</span>
+        </div>
+        <div class="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-xs text-slate-600">
+          <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-3 rounded-sm" style="background:#1d4ed8"></span> 层0 · 运行时（demo 可见）</span>
+          <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-3 rounded-sm" style="background:#059669"></span> 层1 · 脚手架（改代码时才登场）</span>
+          <span class="flex items-center gap-1.5"><span class="inline-block w-6 border-t-2 border-dashed border-slate-500"></span> 虚线 = 支撑/解耦关系</span>
+        </div>
+        <p class="mt-6 text-sm text-slate-500 leading-relaxed max-w-3xl">
+          全部代码只有两层。<b>层0</b> 是演出——用户看到的一切（意图识别、七个可发现子 Agent、记忆、回答）；
+          <b>层1</b> 是后台——不改变任何 demo 输出，只改变「改代码时的安全感」。
+          读代码的捷径：<b>先读层0 的数据流，再问「哪个痛点让层1 的某个文件存在」</b>，而不是从上往下读。
+        </p>
+      </header>
+
+      <!-- ============ 图 A：两层总图 ============ -->
+      <section class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div class="p-6 pb-2">
+          <h2 class="text-xl font-serif font-bold">图 A · 两层总图：注册表驱动主管 + 脚手架包围</h2>
+          <p class="mt-1 text-xs text-slate-500 font-mono">层0 = 主管由注册表动态组装 · 七个子 Agent（6 内置 + 1 外部）· 派发才加载</p>
+        </div>
+        <div class="p-6 overflow-x-auto">
+          <pre class="mermaid">
+flowchart TB
+  subgraph L0["层0 · 运行时"]
+    direction LR
+    U["用户"]
+    S["session.chat()<br/>会话循环收口"]
+    I["intent 识别<br/>词汇表 = 注册表 manifest 动态生成<br/>多意图拆分"]
+    G["主管 system.app<br/>注册表驱动组装<br/>节点 = 懒加载代理"]
+    W1["行程规划<br/>agents/itinerary_agent"]
+    W2["偏好记录<br/>agents/preference_agent"]
+    W3["历史查询<br/>agents/history_agent"]
+    W4["知识问答<br/>agents/knowledge_agent"]
+    W5["联网查询<br/>agents/web_agent"]
+    W6["其他<br/>agents/other_agent"]
+    W7["差旅统计 ★外部<br/>plugins/stats.py"]
+    M["两层记忆 memory.py"]
+    A["回答"]
+    SCH["scheduler<br/>Send fan-out / fan-in<br/>同一注册表并行"]
+
+    U --> S --> I --> G
+    G --> W1 --> M --> A
+    G --> W2 --> A
+    G --> W3 --> M
+    W3 --> A
+    G --> W4 --> A
+    G --> W5 --> A
+    G --> W6 --> A
+    G --> W7 --> M
+    W7 --> A
+    I -.多意图拆分支.-> SCH -.合并回答.-> A
+  end
+
+  subgraph L1["层1 · 脚手架"]
+    direction LR
+    SEAM["接缝 llm.py<br/>get_llm() 懒构造 + 熔断守卫"]
+    STAB["稳定 stability.py<br/>重试 / 熔断 / 兜底 / 健康检查"]
+    REG["注册中心 plugin_registry.py<br/>discover / AST 元数据 / load_agent 懒加载"]
+    TEST["测试 tests/<br/>53 单元桩 + 14 集成真"]
+    DOC["文档 CONTEXT.md<br/>+ ADR-0001..0005"]
+  end
+
+  SEAM -. 所有 LLM 调用的唯一入口 .-> I
+  SEAM -. 所有 LLM 调用的唯一入口 .-> G
+  TEST -. 桩替换 LLM，离线断言逻辑 .-> G
+  DOC -. 决策理由留档，防重构改序 .-> G
+  STAB -. 守卫热路径（嵌入 / 联网） .-> W4
+  STAB -. 守卫热路径（嵌入 / 联网） .-> W5
+  REG -. 装配唯一来源：发现 / 注册 / 懒加载 .-> G
+          </pre>
+        </div>
+      </section>
+
+      <!-- ============ 表 B：痛点 → 层 → 文件 ============ -->
+      <section class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div class="p-6 pb-2">
+          <h2 class="text-xl font-serif font-bold">表 B · 痛点 → 层 → 机制：层1 每个文件都因一个痛点存在</h2>
+          <p class="mt-1 text-xs text-slate-500">问法：先有痛点，后有机制。这七行就是「为什么会多出这些文件」的答案。</p>
+        </div>
+        <div class="px-6 pb-6 overflow-x-auto">
+          <table class="tbl w-full text-sm">
+            <thead>
+              <tr class="border-b border-slate-200">
+                <th class="py-2 pr-4">痛点（不解决会怎样）</th>
+                <th class="py-2 pr-4">属于</th>
+                <th class="py-2 pr-4">机制（文件）</th>
+                <th class="py-2">一句话原理</th>
+              </tr>
+            </thead>
+            <tbody class="text-slate-700">
+              <tr class="border-b border-slate-100">
+                <td class="py-3 pr-4">主管硬编码六节点 → 加一个子 Agent 就要改主代码、重新发版（原要求：动态发现/自动扫描注册/懒加载/渐进式披露）</td>
+                <td class="py-3 pr-4"><span class="chip" style="background:#d1fae5;border-color:#059669;color:#065f46">层1</span></td>
+                <td class="py-3 pr-4 font-mono text-xs">plugin_registry.py + agents/ 契约</td>
+                <td class="py-3">discover=扫 agents/+plugins/ 自动注册 · AST 元数据=只读说明书不执行 · load_agent=派发才加载 · 丢个文件主管零改动</td>
+              </tr>
+              <tr class="border-b border-slate-100">
+                <td class="py-3 pr-4">LLM 输出不确定、要钱、要网络 —— 无法靠「跑一遍」判断改动对错</td>
+                <td class="py-3 pr-4"><span class="chip" style="background:#d1fae5;border-color:#059669;color:#065f46">层1</span></td>
+                <td class="py-3 pr-4 font-mono text-xs">llm.py + tests/ 桩</td>
+                <td class="py-3">接缝把模型从逻辑里抽走；测试把模型换成固定答案的桩，纯逻辑离线断言</td>
+              </tr>
+              <tr class="border-b border-slate-100">
+                <td class="py-3 pr-4">模型/网络会挂（429、超时、断网）—— 用户看到 traceback</td>
+                <td class="py-3 pr-4"><span class="chip" style="background:#d1fae5;border-color:#059669;color:#065f46">层1</span></td>
+                <td class="py-3 pr-4 font-mono text-xs">stability.py</td>
+                <td class="py-3">重试（指数退避）→ 熔断（连续失败直接拒绝）→ 兜底（崩了给一句人话）</td>
+              </tr>
+              <tr class="border-b border-slate-100">
+                <td class="py-3 pr-4">两个月后看不懂「为什么主管节点是循环生成的」</td>
+                <td class="py-3 pr-4"><span class="chip" style="background:#d1fae5;border-color:#059669;color:#065f46">层1</span></td>
+                <td class="py-3 pr-4 font-mono text-xs">CONTEXT.md + ADR</td>
+                <td class="py-3">决策理由留档；ADR-0003 写明「编排顺序是产品行为，不许改」；ADR-0005 记录「多 Agent 化反转」</td>
+              </tr>
+              <tr class="border-b border-slate-100">
+                <td class="py-3 pr-4">交付场景缺 .env / 脏目录 —— 一导入就 KeyError 崩</td>
+                <td class="py-3 pr-4"><span class="chip" style="background:#d1fae5;border-color:#059669;color:#065f46">层1</span></td>
+                <td class="py-3 pr-4 font-mono text-xs">llm.py + rag.py 懒校验</td>
+                <td class="py-3">构造才校验、缺变量一次性报齐；导入无副作用（clean-dir 测试兜底）</td>
+              </tr>
+              <tr class="border-b border-slate-100">
+                <td class="py-3 pr-4">一句话两个请求只能串行排队等</td>
+                <td class="py-3 pr-4"><span class="chip" style="background:#dbeafe;border-color:#1d4ed8;color:#1e40af">层0</span></td>
+                <td class="py-3 pr-4 font-mono text-xs">scheduler.py</td>
+                <td class="py-3">意图识别拆 subtasks → Send 并行派发 → merge 汇总（fan-out/fan-in，同一注册表）</td>
+              </tr>
+              <tr class="border-b border-slate-100">
+                <td class="py-3 pr-4">六个执行节点混在 system.py 里 → 改一个牵动主管图</td>
+                <td class="py-3 pr-4"><span class="chip" style="background:#dbeafe;border-color:#1d4ed8;color:#1e40af">层0</span></td>
+                <td class="py-3 pr-4 font-mono text-xs">agents/ 六实体薄壳</td>
+                <td class="py-3">每个子 Agent = INTENT + DESCRIPTION + run(state)，实现收口于 trip_planner/memory/rag/web 深模块</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ============ 图 C：测试为什么存在 ============ -->
+      <section class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div class="p-6 pb-2">
+          <h2 class="text-xl font-serif font-bold">图 C · 测试的原理：同一个接缝，两条岔路</h2>
+          <p class="mt-1 text-xs text-slate-500">逻辑只认接口、不认实现 —— 换模型不需要改逻辑，换桩也不需要。</p>
+        </div>
+        <div class="p-6 overflow-x-auto">
+          <pre class="mermaid">
+flowchart LR
+  P["提示词 + 逻辑<br/>（缺项检查 / 编排顺序 / 写回时机 / 动态词汇表）"]
+  SEAM["接缝 get_llm()"]
+  REAL["真 LLM<br/>集成测试 14 条<br/>要钱 · 要网络 · 慢"]
+  FAKE["桩 _FakeChain<br/>单元测试 53 条<br/>零成本 · 毫秒级"]
+  ASSERT["断言逻辑<br/>不联网也能跑"]
+
+  P --> SEAM
+  SEAM --"运行时 / 集成"--> REAL
+  SEAM --"单元测试替换"--> FAKE
+  FAKE --> ASSERT
+          </pre>
+        </div>
+        <div class="px-6 pb-6 text-sm text-slate-600 leading-relaxed">
+          <p class="mb-2">67 个测试里 53 个不联网 —— 不是偷懒，是<span class="font-semibold">逻辑才是主角</span>，LLM 只是被替换掉的演员。
+          test_itinerary 里有个 <code class="chip">boom()</code>：<span class="font-mono text-xs">「如果缺项时调用了生成模型就抛错」</span>——测的是「逻辑不该做的事」，只能靠桩测出来，跑真 LLM 反而测不出。
+          新增的外部扩展识别（差旅统计）也有 2 条集成用例 + 1 条端到端派发用例——动态词汇表由真模型验证。</p>
+          <p class="text-xs text-slate-400">副作用：单元测试秒级全跑 → 每次改动敢提交；集成测试只在大改动后跑 → 验证真实模型路径。</p>
+        </div>
+      </section>
+
+      <!-- ============ 表 D：逐文件速查 ============ -->
+      <section class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div class="p-6 pb-2">
+          <h2 class="text-xl font-serif font-bold">表 D · 逐文件速查：这个文件为什么存在</h2>
+        </div>
+        <div class="px-6 pb-6 grid md:grid-cols-2 gap-6 text-sm">
+          <!-- 层0 -->
+          <div>
+            <div class="text-xs uppercase tracking-wider mb-3" style="color:#1d4ed8">层0 · 运行时（演出）</div>
+            <table class="tbl w-full">
+              <tbody class="text-slate-700">
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">session.py</td><td class="py-2">会话循环收口：读最近对话 → 注入 → invoke → 写回两轮</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">intent.py</td><td class="py-2">意图识别单一来源：词汇表 = 注册表 manifest 动态生成（渐进式披露）+ 多意图拆分 + 指代消解</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">system.py</td><td class="py-2">完整系统总装：discover → set_intents → 注册表驱动建节点/路由（加子 Agent 零改动）</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">agents/</td><td class="py-2">六个内置子 Agent 实体（INTENT + DESCRIPTION + run(state)）：itinerary / preference / history / knowledge / web / other</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">trip_planner.py</td><td class="py-2">行程管线：提取 → 补全 → 缺项 → 生成 → 写回（顺序是产品行为）</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">memory.py</td><td class="py-2">两层记忆：短期消息 + 长期偏好/历史（JSON 持久化）</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">rag.py</td><td class="py-2">知识问答：dashscope embedding + Chroma 向量检索</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">web.py</td><td class="py-2">联网查询：ToolNode ReAct（天气/汇率/空气质量）</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">scheduler.py</td><td class="py-2">调度增强：多意图 Send 并行（与 system 同一注册表）</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">webapp.py</td><td class="py-2">FastAPI 可视化界面（复用 system 完整系统）</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <!-- 层1 -->
+          <div>
+            <div class="text-xs uppercase tracking-wider mb-3" style="color:#059669">层1 · 脚手架（安全感）</div>
+            <table class="tbl w-full">
+              <tbody class="text-slate-700">
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">llm.py</td><td class="py-2">模型单一接缝：懒构造 + 缺变量一次报齐 + 熔断守卫代理</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">stability.py</td><td class="py-2">重试 / 熔断 / 兜底 / 日志 / 健康检查（热路径守卫）</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">plugin_registry.py</td><td class="py-2">子 Agent 注册中心：discover（agents/+plugins/）/ AST 元数据 / load_agent 懒加载 / 内置优先</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">plugins/stats.py</td><td class="py-2">外部扩展子 Agent：差旅统计（第七意图，真实路由；演示动态发现）</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">tests/</td><td class="py-2">53 单元（桩替换 LLM）+ 14 集成（真 LLM）= 67 全过</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">CONTEXT.md</td><td class="py-2">领域术语表：主管/子 Agent/注册中心/意图/常驻城市/缺项提示…</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">docs/adr/</td><td class="py-2">ADR-0001..0005：接缝/会话/行程/插件边界（多 Agent 化反转）/ RAG 保持现状</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">demos/</td><td class="py-2">plugin_demo（发现/懒加载/热插拔/外部扩展真实路由）+ stability_demo（重试/熔断/故障注入/健康检查）</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">scripts/smoke.py</td><td class="py-2">冒烟自检：离线可加载完整系统</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 页脚：认知锚点 ============ -->
+      <footer class="rounded-xl border border-slate-200 bg-slate-900 text-slate-200 p-6">
+        <h2 class="text-lg font-serif font-bold mb-2">一句话锚点</h2>
+        <p class="text-sm leading-relaxed">
+          层1 不演出——它给的不是功能，是<span class="text-emerald-300 font-semibold">安全感</span>：
+          改代码不慌（测试）、交付不崩（懒校验）、服务挂了有缓冲（稳定性）、加子 Agent 不动主代码（注册中心）、
+          未来看得懂当初（ADR）。<span class="text-slate-400">看懂层0，就懂了晓问在做什么；看懂层1，就懂了晓问为什么这么写。</span>
+        </p>
+        <p class="mt-3 text-xs text-slate-500">建议阅读顺序：图 A（结构）→ 表 B（动机）→ 图 C（测试原理）→ 表 D（逐文件）。逐文件精读推荐从 plugin_registry.py（注册中心）或 src/xiao_wen/agents/（子 Agent 实体契约）开始。</p>
+      </footer>
+
+    </main>
+  </body>
+</html>
