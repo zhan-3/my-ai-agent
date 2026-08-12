@@ -10,8 +10,6 @@
 
 差旅场景有明确的**多角色分工**特点：识别用户要什么（意图）→ 决定派谁去做（调度）→ 各专职 Agent 分别处理（规划行程 / 记偏好 / 查历史 / 答政策 / 查实时信息）。本项目把这些能力拆成 6 个可独立开发、独立验证、再组装的工作单元（Worker），由一个 LLM 意图主管统一调度，形成「**主管-工人（Supervisor–Workers）**」多 Agent 架构。
 
-设计主线（先桩后实）：**先搭骨架验证流程，再逐个把 Worker 做实**。最终系统 6 个 Worker 全部做实。
-
 ## 2. 技术栈
 
 | 类别 | 选型 | 说明 |
@@ -22,7 +20,6 @@
 | 大模型 | DeepSeek（OpenAI 兼容接口） | 意图识别、要素提取、行程生成、问答、工具调用 |
 | Embedding | 阿里 DashScope text-embedding-v3（1024 维） | 知识库向量化 |
 | 向量库 | Chroma 1.5.9（磁盘持久化） | 政策文档语义检索 |
-| 关键词检索 | jieba 分词 + BM25 | 早期方案，检索效果对照 |
 | 记忆存储 | 本地 JSON 文件（`data/memory.json`） | 短期对话 + 长期偏好/历史（分层设计） |
 | 联网数据 | open-meteo（天气/空气质量）、exchangerate-api（汇率） | 免费公开 API，无需 key |
 | 包管理 | uv | 依赖锁定（pyproject.toml + uv.lock） |
@@ -146,73 +143,51 @@ data/memory.json        记忆数据（自动生成，已 gitignore）
 data/chroma/            向量索引（自动生成，已 gitignore）
 ```
 
-## 6. 关键设计说明
+## 6. 关键设计
 
-### 6.1 结构化输出方案（踩坑实证）
+### 6.1 结构化输出
 
-DeepSeek 模型对 `json_schema` 方法支持不稳定（能力矩阵实测），最终统一方案：
+DeepSeek 对 `json_schema` 方法支持不稳定，统一用 `json_mode`：
 
 ```python
 llm = ChatOpenAI(..., extra_body={"thinking": {"type": "disabled"}})
 model = prompt | llm.with_structured_output(Schema, method="json_mode")
 ```
 
-配套三条纪律：**键名英文写死、JSON 花括号转义、字段形状在提示词里钉死**。教训：结构化输出「上下文一变就要重新验证」（RAG 升级时结构漂移过）。
+纪律：键名英文写死、JSON 花括号转义、字段形状写死在提示词里。
 
-### 6.2 行程规划：两阶段管线 + 质量保障
+### 6.2 行程规划
 
-行程 Worker 内部分两阶段：**要素提取 → 行程生成**。生成阶段注入用户历史偏好（记忆），并输出**安排理由**（政策约束/偏好/交通合理性）。输入要素不全时（缺城市/日期/天数）主动向用户索要，不硬生成占位行程。
+两阶段管线：**要素提取 → 行程生成**。生成时注入用户偏好并输出安排理由；要素缺失时主动索要，不硬生成占位行程。
 
-### 6.3 知识问答：向量检索设计
+### 6.3 知识问答
 
-| | 早期方案（关键词） | 现行方案（向量） |
-|---|---|---|
-| 检索 | jieba 分词 + BM25 | text-embedding-v3 + Chroma 余弦 top-5 |
-| 查询改写 | 需要（改写后才命中） | 不需要 |
-| 语义案例 | 「延长出差时间」误命中环保文档（"长时间"词面匹配） | 一次命中 FAQ |
-| 依赖 | 无 | Embedding API + 向量库 |
-
-方案演进依据：关键词版暴露语义天花板后，换成向量检索解决。诚实说明：向量检索依赖外部 API 且不可解释，真实产品建议关键词+向量混合检索。
+text-embedding-v3 + Chroma 余弦检索 top-5，命中块拼进提示词生成答案，无需查询改写。
 
 ### 6.4 两层记忆
 
-对应 LangChain 官方 Memory 概念：
+- **短期**：最近 6 轮对话每轮注入，支持指代消解（「那上海呢」→ 问天气）。
+- **长期**：偏好（追加/覆盖区分）、常驻城市（自动补出发城市）、历史行程。
 
-- **短期记忆（thread-scoped）**：最近 6 轮对话，每轮推理前注入 → 支持指代消解（「那上海呢」→ 理解是问天气）。注入克制截断，避免长历史塞满上下文（hot path 权衡）。
-- **长期记忆（跨会话）**：偏好（**追加/覆盖区分**：is_update 时替换同类别旧条目）、常驻城市（行程规划自动补出发城市）、历史行程、常用目的地。
-- 官方对应：短期=checkpointer+thread，长期=store。本项目用 JSON 文件演示分层概念，真实产品短期换 Redis/长期换 MySQL。
+### 6.5 联网查询
 
-### 6.5 联网查询：工具调用 + 重试降级
+`@tool` → `bind_tools` → `ToolNode` ReAct 循环。免费 API 自动重试 2 次 + 降级文案；内置 20 城经纬度表，未收录城市走 OSM Nominatim 兑底。
 
-`@tool`（docstring 即 LLM 说明书）→ `bind_tools` → `ToolNode` → 条件边 ReAct 循环。能力矩阵实证：本模型**只支持 auto 模式**（强制 tool_choice 不可用），负例能正确拒绝调用工具。网络层：统一 `requests`、读取环境变量代理、自动重试 2 次 + 降级错误文案（免费 API 不稳定，实测多次）。Web 联调时发现 nominatim 地理编码不可用 → 内置 20 城经纬度表（零依赖永远可用）+ nominatim 兑底（未收录城市才走外部 API），多级降级「能本地化的绝不依赖网络」。
+### 6.6 调度优化
 
-### 6.6 工程组装：先桩后实 + 模块化
+一句话含多个独立请求时拆分子任务，Send 并行执行（fan-out/fan-in），归约器 `collected` 拼接结果，避免多 Worker 写同一 key 互相覆盖。
 
-先搭「主管 + 6 Worker 桩」骨架，之后逐个做实（行程→记忆→知识→联网），总装只做「导入 + 挂图」，拓扑零改动。Worker 间统一「输入 state → 输出 answer」接口契约。
+### 6.7 插件化架构
 
-### 6.7 调度优化：多请求并行执行
+`discover()` 扫描 `plugins/` 目录；AST 渐进式披露（意图识别阶段不执行插件代码）；派发时才懒加载；支持运行中热插拔。
 
-一句话含多个独立请求时（「查下住宿标准，顺便看看北京天气」），意图识别拆分子任务（subtasks），条件边函数返回 **Send 列表**（LangGraph fan-out 并行），各并行 Worker 完成后 fan-in 到 merge 汇总。并行结果用归约器字段 `collected` 拼接，避免多 Worker 写同一 key 互相覆盖。单意图路径不变（拆不出时回退原路由）。
+### 6.8 工程稳定性
 
-### 6.8 工程质量：类型检查（mypy）
+六件套：LLM 重试（max_retries + 指数退避）/ 超时控制 / 熔断三态 / `safe_call()` 异常兜底 / 日志 / 健康检查。演示含真实故障注入（坏 key 裸调用崩溃 vs 稳定层优雅降级）。
 
-`uv run mypy` → 0 警告（检查 `src/` + `tests/` 20 个文件）。配置说明：LangGraph `invoke` 重载对部分键 State 输入过严，`call-overload` 在配置级关闭并注明理由。
+### 6.9 可视化 Web 界面
 
-### 6.9 插件化架构
-
-子 Agent 支持动态发现机制：① 自动扫描注册——`discover()` 扫描 `plugins/` 目录，每个插件声明 `INTENT + DESCRIPTION + run(query)->str`；② 渐进式披露——意图识别阶段用 **AST 解析**只读插件元数据（不执行模块代码）；③ 懒加载——派发时才 `exec_module` + 缓存。演示四幕：发现（零加载）→ 懒加载（哨兵日志）→ **热插拔**（运行中新增插件，主管自动认识新意图，零代码改动）→ 边界。动态性的代价：意图类别从静态 `Literal` 变为运行时校验。
-
-### 6.10 工程稳定性
-
-六件套：① LLM 重试——ChatOpenAI `max_retries=2`（内置）+ 自定义 `with_retry` 指数退避；② 超时控制——`timeout=30`；③ 熔断——`CircuitBreaker` 三态（closed→open→half_open），连续失败 3 次打开、恢复期半开试探，后续请求零耗时快速失败；④ 异常兑底——`safe_call()` 任何异常返回友好降级文案，系统不崩；⑤ 日志——logging 双写 stdout + `data/stability.log`；⑥ 健康检查——`health_check()` 自检 .env/向量索引/记忆/插件/日志五项。演示含**真实故障注入**：坏 API key 下裸调用 401 崩溃 vs 稳定性层 281ms 优雅降级。
-
-### 6.11 评测与测试
-
-分层测试（pytest）：单元层 20 个无 LLM（记忆读写/追加覆盖、行程缺失检查/结果格式、插件注册中心、熔断/重试/兑底、**RAG 分块管线**）秒级离线可跑；集成层 9 个真实模型（意图识别 7 用例含边界、端到端两层记忆闭环、**向量 RAG 真实 embedding 检索相关性**）用 `-m integration` 显式跑。关键做法：conftest 记忆隔离到 tmp_path（不碰真实数据）、参数化用例表、**「加载即爆炸」假插件实证 AST 渐进披露零执行**、**向量 RAG 真实 embedding 检索相关性验证**。
-
-### 6.12 可视化 Web 界面
-
-FastAPI + uvicorn 后端复用 `xiao_wen.system` 完整系统（Agent 逻辑零重写），原生 HTML/JS 前端（聊天气泡 + 建议 chips + 打字机效果 + XSS 转义，无外部 CDN 离线可用）。接口：GET /（页面）、POST /api/chat（走完整主管图 + 两层记忆闭环）、GET /healthz（配合稳定性自检）、GET /docs（自动文档）。Web 联调时发现 nominatim 地理编码服务不可用 → 内置 20 城经纬度表（零依赖永远可用）+ nominatim 兑底，多级降级。演示截图 6 张（playwright 无头浏览器，真实运行）见 docs/screenshots/。
+FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端（聊天气泡 + 建议 chips + 打字机 + XSS 转义，无外部 CDN）。接口：GET /、POST /api/chat、GET /healthz、GET /docs。
 
 ## 7. 核心示例（演示三类案例）
 
@@ -295,14 +270,13 @@ FastAPI + uvicorn 后端复用 `xiao_wen.system` 完整系统（Agent 逻辑零�
 - 行程中的车次/航班为模型生成的**参考方案**，非真实预订（演示未接票务系统）。
 - 天气/汇率/空气质量来自免费公开 API：① geocoding 子域名曾失效（已换 OSM Nominatim）；② API 不稳定（已加重试+降级，仍可能偶发失败）。
 - 记忆为单用户 JSON 文件存储：无多用户隔离、无并发控制（演示够用，生产不适用）。
-- 向量检索依赖外部 Embedding API，且结果不可解释；「延长出差时间」类语义问题已验证优于关键词版，但仍有边界。
+- 向量检索依赖外部 Embedding API，结果不可解释，复杂语义仍有边界。
 
 **后续优化方向**
 - 行程校验层：行程生成后过「RAG 政策校验 + 实时班次/天气合理性检查」（把知识 Agent 与联网 Agent 组合）。
 - 调度优化：优先级调度、同优先级并行执行、收集信息后再触发规划。
 - 记忆精确化：支持「上次住的什么酒店」级细粒度历史查询（当前按行程摘要级别存储）。
 - 存储升级：短期换 Redis（TTL）、长期换 MySQL/PostgreSQL、检索换 Milvus/Qdrant——存储层已集中到 `xiao_wen/memory.py`，可平替。
-- 可视化：Web 界面（Gradio/Streamlit）交互。
 
 ---
 
