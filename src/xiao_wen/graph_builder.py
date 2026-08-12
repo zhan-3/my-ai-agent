@@ -16,7 +16,7 @@
 """
 
 import operator
-from typing import Annotated, TypedDict
+from typing import Annotated, NotRequired, TypedDict
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph import END, START, StateGraph, add_messages
@@ -36,9 +36,9 @@ class State(TypedDict):
     intent: str
     reason: str
     answer: str
-    subtasks: list[SubTask]  # 多意图拆分子任务（单意图时为空数组）
-    current_task: SubTask  # Send 分支内当前子任务
-    collected: Annotated[list[dict], operator.add]  # 并行结果收集（归约器拼接）
+    subtasks: NotRequired[list[SubTask]]  # 多意图拆分子任务（单意图时为空数组）
+    current_task: NotRequired[SubTask]  # Send 分支内当前子任务
+    collected: NotRequired[Annotated[list[dict], operator.add]]  # 并行结果收集（归约器拼接）
 
 
 # ---- 分类节点（唯一实现：恒返回 subtasks，由 parallel 参数决定是否使用） ----
@@ -100,6 +100,7 @@ def build_supervisor_graph(parallel: bool = False) -> CompiledStateGraph:
     if key in _cache:
         return _cache[key]
     _cache.clear()  # manifest 变了：旧指纹的图都过期，一次只留最新一代
+    intent.set_intents(manifest)  # 意图词汇表随重建刷新（内部 cache_clear → 模型缓存失效）
     app = _assemble(manifest, parallel)
     _cache[key] = app
     return app

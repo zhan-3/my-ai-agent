@@ -54,6 +54,9 @@ def test_new_plugin_rebuilds_graph(monkeypatch, tmp_path):
     import xiao_wen.plugin_registry as pr
 
     monkeypatch.setattr(pr, "PLUGIN_DIR", tmp_path)  # 外部扩展目录指向临时目录
+    import xiao_wen.intent as intent_mod
+
+    monkeypatch.setattr(intent_mod, "_current_intents", None)  # 隔离词汇表注入副作用（build→set_intents）
     before = gb.build_supervisor_graph(parallel=False)
     before_nodes = set(before.get_graph().nodes)
     assert "临时意图" not in before_nodes
@@ -69,7 +72,6 @@ def test_new_plugin_rebuilds_graph(monkeypatch, tmp_path):
     assert "临时意图" in after_nodes  # 新意图进入图
 
     # 懒加载派发：短路意图分类（无 LLM），验证新意图可路由到临时插件
-    import xiao_wen.intent as intent_mod
     from xiao_wen.intent import IntentResult
 
     monkeypatch.setattr(
@@ -79,3 +81,39 @@ def test_new_plugin_rebuilds_graph(monkeypatch, tmp_path):
     )
     out = after.invoke({"user_input": "x", "recent": "", "messages": []})
     assert out.get("answer") == "临时插件的回答"
+
+
+def test_build_reinjects_vocabulary_and_invalidates_intent_model(monkeypatch, tmp_path):
+    """warm 进程热插拔回归（Standards/Spec 双轴同钉）：图工厂重建必须同时
+    刷新意图词汇表并失效 _intent_model 缓存——否则常驻进程（webapp）中
+    新子 Agent 落盘后词汇表冻结，新意图永远归「其他」"""
+    import xiao_wen.intent as intent_mod
+    import xiao_wen.plugin_registry as pr
+
+    monkeypatch.setattr(pr, "PLUGIN_DIR", tmp_path)
+    monkeypatch.setattr(intent_mod, "_current_intents", [])  # 重置注入状态（空词汇表，teardown 自动恢复）
+    intent_mod._intent_model()  # 预热：缓存一个 prompt（基线词汇表）
+    assert intent_mod._intent_model.cache_info().currsize == 1
+
+    gb.build_supervisor_graph(parallel=False)  # 指纹变化 → 重建 → 应重新注入词汇表
+    assert intent_mod._current_intents is not None, "图工厂重建应重新注入词汇表（set_intents）"
+    assert intent_mod._intent_model.cache_info().currsize == 0, "词汇表刷新必须失效模型缓存"
+
+
+def test_build_refreshes_vocabulary_with_new_plugin(monkeypatch, tmp_path):
+    """落盘新子 Agent → 重建后词汇表包含新意图（warm 语义，不 monkeypatch classify）"""
+    import xiao_wen.intent as intent_mod
+    import xiao_wen.plugin_registry as pr
+
+    monkeypatch.setattr(pr, "PLUGIN_DIR", tmp_path)
+    monkeypatch.setattr(intent_mod, "_current_intents", [])  # 重置注入状态，teardown 自动恢复
+    gb.build_supervisor_graph(parallel=False)
+    assert "临时意图" not in {m["INTENT"] for m in intent_mod._current_intents or []}
+
+    (tmp_path / "tmp_plugin.py").write_text(
+        'INTENT = "临时意图"\nDESCRIPTION = "临时插件：验证词汇表刷新"\n'
+        'def run(state):\n    return {"answer": "临时插件的回答"}\n',
+        encoding="utf-8",
+    )
+    gb.build_supervisor_graph(parallel=False)
+    assert "临时意图" in {m["INTENT"] for m in intent_mod._current_intents or []}

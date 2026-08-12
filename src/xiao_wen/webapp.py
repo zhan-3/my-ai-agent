@@ -6,7 +6,7 @@
     （也可用 `uv run xiao-wen` 等价启动）
 
 设计：
-- 复用 xiao_wen.system 完整系统（子 Agent 注册表驱动主管架构），不重写任何 Agent 逻辑
+- 复用图工厂（graph_builder）调度图（子 Agent 注册表驱动主管架构，多意图并行），不重写任何 Agent 逻辑
 - 记忆闭环收口于 xiao_wen.session.chat（读 recent → 注入 → invoke → 写回两轮）
 - 异常兜底在 web 层（session 层向上抛）：任何异常给友好降级文案
 - 会话隔离暂缓：session_id 预留，记忆为全局单文件（ADR-0002）
@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from xiao_wen.session import chat as run_chat  # 会话循环收口（复用 system.app）
+from xiao_wen.session import chat as run_chat  # 会话循环收口（默认 = 图工厂调度图，多意图并行）
 
 app = FastAPI(title="晓问 · 差旅出行助手", description="多 Agent 差旅助手 Web 界面")
 
