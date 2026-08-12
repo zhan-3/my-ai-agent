@@ -3,6 +3,7 @@
 C7：get_air_quality 与 get_weather 共用 _geocode（本地 CITY_COORDS 优先），
 常用城市零依赖、不打 nominatim；未知城市给友好文案。
 """
+
 from xiao_wen import web
 
 
@@ -14,8 +15,16 @@ def test_air_quality_known_city_uses_local_coords(monkeypatch):
         urls.append(url)
         if "nominatim" in url:
             raise AssertionError("已知城市不应触发地理编码网络请求")
-        return {"current": {"pm10": 30, "pm2_5": 10, "carbon_monoxide": 0.4,
-                            "nitrogen_dioxide": 20, "ozone": 50, "sulphur_dioxide": 5}}
+        return {
+            "current": {
+                "pm10": 30,
+                "pm2_5": 10,
+                "carbon_monoxide": 0.4,
+                "nitrogen_dioxide": 20,
+                "ozone": 50,
+                "sulphur_dioxide": 5,
+            }
+        }
 
     monkeypatch.setattr(web, "_get_json", fake_get)
     out = web.get_air_quality.func("北京")

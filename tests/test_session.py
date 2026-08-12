@@ -2,10 +2,11 @@
 
 记忆隔离由 conftest 自动夹具提供（MEMORY_PATH 指向 tmp）。
 """
+
 import pytest
 
 from xiao_wen import memory as memory_store
-from xiao_wen.session import chat, ChatResult
+from xiao_wen.session import ChatResult, chat
 
 
 class FakeGraph:

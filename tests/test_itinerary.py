@@ -2,6 +2,7 @@
 
 管线（ADR-0003）收口于 xiao_wen.trip_planner：提取 → 常驻城市补全 → 缺项检查 → 生成 → 写回。
 """
+
 from typing import Any
 
 from xiao_wen import trip_planner as _it
@@ -11,14 +12,21 @@ ItineraryPlan = _it.ItineraryPlan
 
 
 def _req(**kw):
-    base: dict[str, Any] = dict(to_city="北京", from_city="上海", start_date="2026-10-08",
-                                duration_days=4, transport="",
-                                hotel_pref="无", budget_pref="中等")
+    base: dict[str, Any] = {
+        "to_city": "北京",
+        "from_city": "上海",
+        "start_date": "2026-10-08",
+        "duration_days": 4,
+        "transport": "",
+        "hotel_pref": "无",
+        "budget_pref": "中等",
+    }
     base.update(kw)
     return TripRequest(**base)
 
 
 # ---------------- 纯函数：缺项检查 ----------------
+
 
 def test_missing_full_request_is_empty():
     assert _it._missing(_req()) == []
@@ -34,10 +42,15 @@ def test_missing_detects_each_field():
 
 # ---------------- 纯函数：格式化 ----------------
 
+
 def test_format_plan_readable_with_reasons():
     day = _it.DayPlan(
-        date="2026-10-08", transport="高铁 G2 次 07:00 上海虹桥→11:28 北京南",
-        hotel="全季酒店（国贸店）", activities=["峰会"], notes="带好身份证")
+        date="2026-10-08",
+        transport="高铁 G2 次 07:00 上海虹桥→11:28 北京南",
+        hotel="全季酒店（国贸店）",
+        activities=["峰会"],
+        notes="带好身份证",
+    )
     plan = ItineraryPlan(
         summary="10月8日从上海乘高铁赴北京开会4天",
         days=[day],
@@ -45,10 +58,10 @@ def test_format_plan_readable_with_reasons():
     )
     text = _it.format_plan(plan)
     assert "10月8日" in text
-    assert "高铁 G2 次" in text          # 每日交通
-    assert "💡 安排理由" in text          # 基础项 E：安排理由
+    assert "高铁 G2 次" in text  # 每日交通
+    assert "💡 安排理由" in text  # 基础项 E：安排理由
     assert "避开早高峰" in text
-    assert "带好身份证" in text            # 备注（注意事项）
+    assert "带好身份证" in text  # 备注（注意事项）
 
 
 def test_format_plan_no_reasons_ok():
@@ -59,6 +72,7 @@ def test_format_plan_no_reasons_ok():
 
 
 # ---------------- 编排：plan()（模型用桩注入） ----------------
+
 
 class _FakeChain:
     def __init__(self, out):
@@ -93,6 +107,7 @@ def test_plan_needs_info_when_missing(monkeypatch):
 def test_plan_home_city_completes_before_missing_check(monkeypatch):
     """常驻城市补全先于缺项检查：缺出发城市但有常驻城市 → 不算缺项，进入生成"""
     from xiao_wen import memory as ms
+
     ms.add_or_update_preference("常驻城市", "上海", True)
     plan_out = ItineraryPlan(summary="上海→北京", days=[], reasons=[])
     _stub_models(monkeypatch, _req(from_city="待定"), plan_out=plan_out)
@@ -104,6 +119,7 @@ def test_plan_home_city_completes_before_missing_check(monkeypatch):
 def test_plan_generates_and_writes_back(monkeypatch):
     """生成成功 → 写回长期记忆（历史行程可读）"""
     from xiao_wen import memory as ms
+
     plan_out = ItineraryPlan(summary="出差计划", days=[], reasons=[])
     _stub_models(monkeypatch, _req(), plan_out=plan_out)
     r = _it.plan("安排行程")

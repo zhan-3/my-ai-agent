@@ -8,6 +8,7 @@
   第3幕 热插拔：运行中向 plugins/ 新增子 Agent → 文件层即时感知 → 重建主管图即路由（主管零改动）
   第4幕 外部扩展真实路由：差旅统计（第七意图）在真实 system.app 里被识别并派发
 """
+
 import importlib
 import sys
 from pathlib import Path
@@ -30,11 +31,9 @@ if __name__ == "__main__":
 
     print("=" * 60)
     print("第2幕｜懒加载：未派发的子 Agent 不加载，派发才加载")
-    print("  调用行程规划前，是否已加载 web_agent？",
-          "xiao_wen.agents.web_agent" in sys.modules)
+    print("  调用行程规划前，是否已加载 web_agent？", "xiao_wen.agents.web_agent" in sys.modules)
     load_agent("行程规划")  # 内置：import_module
-    print("  调用行程规划后，是否已加载 web_agent？",
-          "xiao_wen.agents.web_agent" in sys.modules)
+    print("  调用行程规划后，是否已加载 web_agent？", "xiao_wen.agents.web_agent" in sys.modules)
     print("  加载外部扩展 stats（哨兵日志『[stats] 模块已执行』证明此时才执行）：")
     load_agent("差旅统计")
     print("  → 懒加载生效：未使用的子 Agent 不加载（原要求：未使用的模块不加载）\n")
@@ -61,11 +60,11 @@ def run(state: dict) -> dict:
 '''
     (PLUGIN_DIR / "summary.py").write_text(new_agent, encoding="utf-8")
     manifest = discover()
-    print(f"  → 重新发现，现在 {len(manifest)} 个意图："
-          f"{'、'.join(m['INTENT'] for m in manifest)}")
+    print(f"  → 重新发现，现在 {len(manifest)} 个意图：{'、'.join(m['INTENT'] for m in manifest)}")
     # 主管零改动：重建主管图（manifest 重新扫描 + 词汇表注入），路由新意图
     importlib.reload(sys_mod)
     from xiao_wen.session import chat
+
     q = "帮我总结一下我的差旅情况"
     r = chat(q)
     print(f"  用户：{q}")

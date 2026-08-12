@@ -1,4 +1,5 @@
 """记忆层单元测试：短期追加/最近 N 轮、偏好追加/覆盖、常驻城市、历史行程、常用目的地"""
+
 import xiao_wen.memory as ms
 
 
@@ -44,7 +45,7 @@ def test_itinerary_and_common_destinations():
 def test_load_memory_survives_corrupt_file(tmp_path, monkeypatch):
     """记忆文件被清空/写坏时 load_memory 应兜底重置，绝不抛 JSONDecodeError（回归）"""
     monkeypatch.setattr(ms, "MEMORY_PATH", tmp_path / "memory.json")
-    (tmp_path / "memory.json").write_text("", encoding="utf-8")   # 0 字节空文件
+    (tmp_path / "memory.json").write_text("", encoding="utf-8")  # 0 字节空文件
     assert ms.load_memory() == {"preferences": [], "itineraries": [], "messages": []}
     (tmp_path / "memory.json").write_text("{not json!!", encoding="utf-8")  # 非法 JSON
     assert ms.load_memory() == {"preferences": [], "itineraries": [], "messages": []}

@@ -10,6 +10,7 @@
 - preferences:  长期记忆-偏好（含追加/覆盖：is_update 时替换同类别旧条目）
 - itineraries:  长期记忆-历史行程（可统计常用目的地）
 """
+
 import json
 import time
 from collections import Counter
@@ -65,8 +66,7 @@ def format_recent_messages(n: int = 6) -> str:
     msgs = get_recent_messages(n)
     if not msgs:
         return "无"
-    lines = [f"{'用户' if m['role'] == 'user' else '助手'}: {m['content'][:80]}"
-             for m in msgs]
+    lines = [f"{'用户' if m['role'] == 'user' else '助手'}: {m['content'][:80]}" for m in msgs]
     return "\n".join(lines)
 
 
@@ -76,8 +76,7 @@ def add_or_update_preference(category: str, content: str, is_update: bool = Fals
     mem = load_memory()
     if is_update:
         mem["preferences"] = [p for p in mem["preferences"] if p["category"] != category]
-    rec = {"category": category, "content": content,
-           "ts": time.strftime("%Y-%m-%d %H:%M")}
+    rec = {"category": category, "content": content, "ts": time.strftime("%Y-%m-%d %H:%M")}
     mem["preferences"].append(rec)
     save_memory(mem)
     return rec

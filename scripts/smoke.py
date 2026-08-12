@@ -4,6 +4,7 @@
   uv run python scripts/smoke.py               # 完整冒烟（真 LLM，约 30-60s）
   uv run python scripts/smoke.py --import-only # 只验证模块可加载（离线自检用）
 """
+
 import sys
 import tempfile
 from pathlib import Path
@@ -13,9 +14,9 @@ sys.path.insert(0, str(SRC))
 
 # 冒烟不碰真实记忆：把记忆重定向到临时文件（memory 每次读文件，替换路径即生效）
 from xiao_wen import memory as ms  # noqa: E402
+
 ms.MEMORY_PATH = Path(tempfile.mkdtemp()) / "memory.json"
 
-from xiao_wen import system as sys_mod  # noqa: E402
 from xiao_wen.session import chat  # noqa: E402
 
 if "--import-only" in sys.argv:
@@ -26,7 +27,7 @@ CASES = [
     ("帮我规划10月8日从上海去北京开会4天的行程", "行程规划"),
     ("出差住宿标准是什么", "知识问答"),
     ("北京今天天气怎么样", "联网查询"),
-    ("这个暑假去哪里玩", "其他"),          # 产品边界
+    ("这个暑假去哪里玩", "其他"),  # 产品边界
 ]
 print("▶ 演示冒烟（真 LLM）")
 for text, expected in CASES:

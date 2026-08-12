@@ -4,11 +4,15 @@
 run(state) -> dict：统一子 Agent 接口，state 含 user_input / recent。
 实现收口于深模块 xiao_wen.trip_planner（ADR-0003：编排顺序是产品行为，不许改）。
 """
-INTENT = "行程规划"
-DESCRIPTION = ("用户请助理安排行程、出差计划，或询问行程安排 → 行程规划。"
-               "负责生成逐日行程（交通/住宿/餐饮/预算）、常驻城市补全与缺项提示，并写回长期记忆。")
 
-from xiao_wen.trip_planner import NeedsInfo, format_plan, needs_info_text, plan as _trip_plan  # noqa: E402
+INTENT = "行程规划"
+DESCRIPTION = (
+    "用户请助理安排行程、出差计划，或询问行程安排 → 行程规划。"
+    "负责生成逐日行程（交通/住宿/餐饮/预算）、常驻城市补全与缺项提示，并写回长期记忆。"
+)
+
+from xiao_wen.trip_planner import NeedsInfo, format_plan, needs_info_text  # noqa: E402
+from xiao_wen.trip_planner import plan as _trip_plan  # noqa: E402
 
 
 def run(state) -> dict:

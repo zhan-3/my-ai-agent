@@ -36,6 +36,7 @@ dev = [
     "mypy>=2.3.0",
     "playwright>=1.62.0",
     "pytest>=9.1.1",
+    "ruff>=0.16.2",
 ]
 
 [tool.mypy]
@@ -47,6 +48,22 @@ check_untyped_defs = true
 # LangGraph Pregel.invoke 的重载对「部分键 State 输入」过严（demo 合法传部分键），
 # 全局关闭该错误码；其余错误码保持开启。
 disable_error_code = ["call-overload"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["docs", "delivery"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "RUF", "SIM", "PLW"]
+ignore = [
+    "BLE001",  # 稳定性层刻意盲捕异常 → 兜底文案（webapp/stability 已注明意图）
+    "DTZ",     # 本地日历语义（日期按本地时区），UTC 化会改产品行为
+    "RUF001", "RUF002", "RUF003",  # 中文代码全角标点是正常用法，非歧义字符
+]
+# 代码里已有的 noqa 全部基于这两条启用：
+#   E402 模块级 import 位置（子 Agent 元数据 INTENT/DESCRIPTION 前置契约、exec_module 路径注入）
+#   BLE001 上面已忽略
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

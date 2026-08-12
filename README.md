@@ -24,6 +24,7 @@
 | 联网数据 | open-meteo（天气/空气质量）、exchangerate-api（汇率） | 免费公开 API，无需 key |
 | 包管理 | uv | 依赖锁定（pyproject.toml + uv.lock） |
 | 类型检查 | mypy（dev 依赖） | 全项目 0 警告 |
+| 代码检查 | ruff（dev 依赖） | E/F/I/UP/B/SIM 等规则全绿，门禁一部分 |
 | 插件机制 | 子 Agent 注册中心 | 动态发现/懒加载/渐进式披露（内置+外部） |
 | 稳定性层 | 自研 + LangChain 内置 | 重试/超时/熔断/兜底/日志/健康检查 |
 | 测试框架 | pytest 9 + pytest.mark | 分层测试 67 个：单元 53（无 LLM）+ 集成 14（真实模型） |
@@ -97,6 +98,7 @@ uv run python -m xiao_wen.rag            # 知识问答（向量检索 + Chroma�
 uv run python -m xiao_wen.scheduler      # 调度优化：多请求并行执行
 uv run python -m xiao_wen.demos.plugin_demo    # 插件化架构：动态发现/懒加载/热插拔（四幕演示）
 uv run python -m xiao_wen.demos.stability_demo # 工程稳定性：重试/熔断/故障注入/健康检查（四幕演示）
+uv run ruff check              # 代码检查（lint，秒级）
 uv run pytest                  # 自动化测试：单元层（无 LLM，秒级）
 uv run pytest -m integration   # 自动化测试：集成层（真实 LLM，约 1 分钟）
 uv run xiao-wen                # 可视化 Web 界面（等价 python -m xiao_wen.webapp）→ http://127.0.0.1:8000
@@ -104,7 +106,7 @@ uv run python scripts/screenshot_demo.py # 无头浏览器生成演示截图 →
 uv run python scripts/delivery.py all   # 交付三连：门禁(pytest+mypy+冒烟) → 打包 → 邮件模板
 ```
 
-> 首次运行 `xiao_wen.system` 中知识问答会构建向量索引（一次性，约 386 个文本块），之后复用磁盘索引，秒级返回。
+> 首次运行 `xiao_wen.system` 中知识问答会构建向量索引（一次性，约 500 个文本块，随语料变化），之后复用磁盘索引，秒级返回。
 
 ### 目录结构
 

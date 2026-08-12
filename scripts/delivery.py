@@ -1,7 +1,7 @@
 """交付门禁 + 打包 + 解包自检
 
 用法（在项目根，venv 已激活）：
-  python scripts/delivery.py gate      # 全量门禁：pytest + mypy + 冒烟
+  python scripts/delivery.py gate      # 全量门禁：ruff + pytest + mypy + 冒烟
   python scripts/delivery.py package   # 门禁 → 打包 → 解包自检（产出 delivery/*.zip）
   python scripts/delivery.py all       # 全流程（推荐，约 4 分钟）
 
@@ -10,8 +10,8 @@
 - 打包 = 白名单（漏掉好过泄密：.env/.venv/data 天然不进包）
 - 自检 = 解到临时目录重跑离线门禁，证明压缩包自洽（不依赖本机状态）
 """
+
 import datetime
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,15 +24,21 @@ PY = sys.executable
 # 打包白名单（最终成品）：显式列出
 # .env/.venv/data/AGENTS.md/.scratch 天然排除
 WHITELIST = [
-    "README.md", "pyproject.toml", "uv.lock",
-    "src", "tests", "plugins", "scripts", "docs",
+    "README.md",
+    "pyproject.toml",
+    "uv.lock",
+    "src",
+    "tests",
+    "plugins",
+    "scripts",
+    "docs",
 ]
 SKIP_PART = {"__pycache__", ".pytest_cache", ".mypy_cache", ".venv"}
 
 
 def _run(cmd: list[str], cwd: Path, label: str) -> None:
     print(f"▶ {label}\n  $ {' '.join(cmd)}")
-    r = subprocess.run(cmd, cwd=cwd)
+    r = subprocess.run(cmd, cwd=cwd, check=False)  # 显式声明：返回码由本函数统一检查（门禁语义）
     if r.returncode != 0:
         print(f"✗ {label} 失败（退出码 {r.returncode}）")
         raise SystemExit(1)
@@ -40,7 +46,8 @@ def _run(cmd: list[str], cwd: Path, label: str) -> None:
 
 
 def gate() -> None:
-    """全量门禁：单元 + 集成 + 类型检查 + 冒烟（需要 .env 与网络）"""
+    """全量门禁：lint + 单元 + 集成 + 类型检查 + 冒烟（需要 .env 与网络）"""
+    _run([PY, "-m", "ruff", "check", "src", "tests", "plugins", "scripts"], ROOT, "代码检查（ruff）")
     _run([PY, "-m", "pytest", "-q", "-m", "not integration"], ROOT, "单元测试（无 LLM）")
     _run([PY, "-m", "pytest", "-q", "-m", "integration"], ROOT, "集成测试（真实 LLM）")
     _run([PY, "-m", "mypy"], ROOT, "类型检查（mypy）")
@@ -84,7 +91,6 @@ def package() -> None:
         _run([PY, "-m", "mypy"], td_path, "自检：类型检查")
         _run([PY, "scripts/smoke.py", "--import-only"], td_path, "自检：模块可加载")
     print("\n✓ 自检通过——压缩包自洽，可以提交")
-
 
     if (ROOT / "delivery").is_dir():
         zips = sorted((ROOT / "delivery").glob("*.zip"))

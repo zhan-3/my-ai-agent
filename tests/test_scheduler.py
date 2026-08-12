@@ -3,23 +3,24 @@
 此前调度并行路径无任何自动化测试（只有 demo 覆盖）——C4 补齐（ADR-0003）。
 全程无 LLM：用桩 worker + 迷你图复刻组装，断言 Send 拆分与合并汇总。
 """
+
 import operator
 from typing import Annotated, TypedDict
 
-import pytest
 from langgraph.graph import END, START, StateGraph, add_messages
 from langgraph.types import Send
 
 from xiao_wen import scheduler as sc
 from xiao_wen.intent import SubTask
 
-
 # ---------------- 纯逻辑件 ----------------
 
+
 def test_dispatch_sends_fanout_for_subtasks():
-    state = {"subtasks": [SubTask(intent="知识问答", text="a"),
-                          SubTask(intent="联网查询", text="b")],
-             "intent": "知识问答"}
+    state = {
+        "subtasks": [SubTask(intent="知识问答", text="a"), SubTask(intent="联网查询", text="b")],
+        "intent": "知识问答",
+    }
     out = sc.dispatch(state)
     assert isinstance(out, list) and len(out) == 2
     assert all(isinstance(s, Send) for s in out)
@@ -40,23 +41,26 @@ def test_make_parallel_routes_current_task():
         return {"answer": "已处理"}
 
     node = sc.make_parallel(worker)
-    out = node({"current_task": SubTask(intent="历史查询", text="查上次行程"),
-                "user_input": "原输入"})
-    assert out["collected"] == [{"intent": "历史查询", "text": "查上次行程",
-                                 "answer": "已处理"}]
+    out = node({"current_task": SubTask(intent="历史查询", text="查上次行程"), "user_input": "原输入"})
+    assert out["collected"] == [{"intent": "历史查询", "text": "查上次行程", "answer": "已处理"}]
     assert seen == ["查上次行程"]
 
 
 def test_merge_summarizes_all_parts():
-    out = sc.merge({"collected": [
-        {"intent": "知识问答", "text": "住宿标准", "answer": "答A"},
-        {"intent": "联网查询", "text": "天气", "answer": "答B"},
-    ]})
+    out = sc.merge(
+        {
+            "collected": [
+                {"intent": "知识问答", "text": "住宿标准", "answer": "答A"},
+                {"intent": "联网查询", "text": "天气", "answer": "答B"},
+            ]
+        }
+    )
     assert "2 个请求" in out["answer"]
     assert "答A" in out["answer"] and "答B" in out["answer"]
 
 
 # ---------------- 迷你图：fan-out → fan-in 端到端（无 LLM） ----------------
+
 
 class MiniState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -77,9 +81,11 @@ def _build_mini_graph():
     workers = {"知识问答": fake_worker, "联网查询": fake_worker}
 
     def classify_intent(state):
-        return {"intent": "知识问答", "reason": "多意图",
-                "subtasks": [SubTask(intent="知识问答", text="政策问题"),
-                             SubTask(intent="联网查询", text="天气问题")]}
+        return {
+            "intent": "知识问答",
+            "reason": "多意图",
+            "subtasks": [SubTask(intent="知识问答", text="政策问题"), SubTask(intent="联网查询", text="天气问题")],
+        }
 
     g = StateGraph(MiniState)
     g.add_node(classify_intent)

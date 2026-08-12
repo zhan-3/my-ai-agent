@@ -6,9 +6,9 @@
 - 单一接口：classify(recent, user_input) -> IntentResult(intent, reason, subtasks)
 - 链懒构建（走 LLM 单一接缝，熔断守卫自动继承）
 """
+
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Optional
 
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from xiao_wen import llm
 
 # 模块级当前词汇表：None = 未注入，classify 时从注册表 discover() 取默认（六内置 + 外部扩展）
-_current_intents: Optional[list[dict]] = None
+_current_intents: list[dict] | None = None
 
 
 def set_intents(manifest: list[dict]) -> None:
@@ -25,7 +25,7 @@ def set_intents(manifest: list[dict]) -> None:
     词汇表变化时同时失效 _intent_model 缓存——运行中热插拔（重新发现 →
     重新注入）后，下一次 classify 会用新词汇表重建 prompt，不依赖时序。
     """
-    global _current_intents
+    global _current_intents  # noqa: PLW0603 —— 词汇表注入是模块级状态的刻意设计
     _current_intents = list(manifest)
     _intent_model.cache_clear()
 
@@ -35,6 +35,7 @@ def _intents() -> list[dict]:
     if _current_intents is not None:
         return _current_intents
     from xiao_wen import plugin_registry  # 懒导入：避免 intent → registry 循环依赖
+
     return plugin_registry.discover()
 
 
@@ -47,21 +48,23 @@ def _build_prompt(intents: list[dict]) -> ChatPromptTemplate:
         f"可用意图（严格选一，不在清单内或与业务无关的一律归「其他」）：\n{catalog}\n"
         "边界：本助手只服务企业差旅。个人休闲/旅游规划、非差旅问题一律归「其他」。\n"
         "参考最近对话理解省略/指代（如「那上海呢」指上一轮提到的城市）。\n\n"
-        "【多意图拆分】一句话里包含多个独立请求时（用\"顺便/还有/以及/和\"连接），\n"
+        '【多意图拆分】一句话里包含多个独立请求时（用"顺便/还有/以及/和"连接），\n'
         "把每个独立请求拆成一条 subtasks（各自带 intent 和原文）；单一请求时 subtasks 为空数组 []。\n\n"
         "输出键名必须严格为英文：\n"
-        "- \"intent\"：主导意图（严格清单内之一），多意图时取第一个\n"
-        "- \"reason\"：一句话理由\n"
-        "- \"subtasks\"：数组，每项键名严格为 intent（清单内之一）和 text（该子请求原文）\n"
-        "示例（单）：{{\"intent\": \"行程规划\", \"reason\": \"要求安排出差行程\", \"subtasks\": []}}\n"
-        "示例（多）：{{\"intent\": \"知识问答\", \"reason\": \"包含政策和天气两个请求\",\n"
-        "  \"subtasks\": [{{\"intent\": \"知识问答\", \"text\": \"出差住宿标准是什么\"}},\n"
-        "               {{\"intent\": \"联网查询\", \"text\": \"北京今天天气怎么样\"}}]}}"
+        '- "intent"：主导意图（严格清单内之一），多意图时取第一个\n'
+        '- "reason"：一句话理由\n'
+        '- "subtasks"：数组，每项键名严格为 intent（清单内之一）和 text（该子请求原文）\n'
+        '示例（单）：{{"intent": "行程规划", "reason": "要求安排出差行程", "subtasks": []}}\n'
+        '示例（多）：{{"intent": "知识问答", "reason": "包含政策和天气两个请求",\n'
+        '  "subtasks": [{{"intent": "知识问答", "text": "出差住宿标准是什么"}},\n'
+        '               {{"intent": "联网查询", "text": "北京今天天气怎么样"}}]}}'
     )
-    return ChatPromptTemplate.from_messages([
-        ("system", system_msg),
-        ("human", "最近对话：\n{recent}\n\n当前用户输入：{input}"),
-    ])
+    return ChatPromptTemplate.from_messages(
+        [
+            ("system", system_msg),
+            ("human", "最近对话：\n{recent}\n\n当前用户输入：{input}"),
+        ]
+    )
 
 
 class SubTask(BaseModel):

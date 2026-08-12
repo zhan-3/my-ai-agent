@@ -4,6 +4,9 @@
 编排顺序是产品行为，勿改：常驻城市补全**先于**缺项检查（“用户没说出发城市但记忆里有”
 不算缺项）；缺项短路不调生成；写回发生在生成成功后。
 """
+
+# ruff: noqa: E501 —— 本模块是 prompt 密集模块：发给 LLM 的提示词内容行
+# （要素示例、约束、reasons 说明）天然超行宽，拆分会改变提示词（换行=内容）。
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -14,6 +17,7 @@ from xiao_wen import llm
 from xiao_wen.memory import add_itinerary, get_home_city, get_preferences
 
 # ---- Schema（与领域契约一致） ----
+
 
 class TripRequest(BaseModel):
     from_city: str
@@ -40,26 +44,34 @@ class ItineraryPlan(BaseModel):
 
 @dataclass
 class PlanResult:
-    plan: ItineraryPlan   # 生成的行程（已写回长期记忆）
+    plan: ItineraryPlan  # 生成的行程（已写回长期记忆）
 
 
 @dataclass
 class NeedsInfo:
-    missing: list[str]    # 缺失要素清单（基础项 E：缺项提示）
+    missing: list[str]  # 缺失要素清单（基础项 E：缺项提示）
 
 
 # ---- 两阶段提示词（与验收契约一致） ----
 
-extract_prompt = ChatPromptTemplate.from_messages([
-    ("system", """你是企业差旅助手的要素提取器，输出严格 JSON。
+extract_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """你是企业差旅助手的要素提取器，输出严格 JSON。
 键名必须严格为英文：from_city、to_city、start_date（YYYY-MM-DD，没给日期填"待定"）、
 duration_days（数字）、hotel_pref（没有填"无"）、budget_pref（经济/中等/舒适，没有填"中等"）。
-示例：{{"from_city": "北京", "to_city": "杭州", "start_date": "2026-08-20", "duration_days": 3, "hotel_pref": "无", "budget_pref": "中等"}}"""),
-    ("human", "{input}"),
-])
+示例：{{"from_city": "北京", "to_city": "杭州", "start_date": "2026-08-20", "duration_days": 3, "hotel_pref": "无", "budget_pref": "中等"}}""",
+        ),
+        ("human", "{input}"),
+    ]
+)
 
-plan_prompt = ChatPromptTemplate.from_messages([
-    ("system", """你是资深差旅规划师，输出严格 JSON。基于差旅要素生成企业差旅行程。
+plan_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """你是资深差旅规划师，输出严格 JSON。基于差旅要素生成企业差旅行程。
 约束：
 - 天数与要素一致；每天包含 transport、hotel、activities、notes 四个字段
 - 交通方式符合城市间距离；活动含公务安排和用餐建议
@@ -73,12 +85,15 @@ plan_prompt = ChatPromptTemplate.from_messages([
 - activities：字符串数组，每项一句，如 "14:00-17:00 公务：拜访客户公司"、"18:30-20:00 用餐：与客户晚餐"
 - notes：字符串，一两句备注
 
-输出键名严格为英文：days（数组，每项键名 date/transport/hotel/activities/notes）、summary、reasons（字符串数组）。"""),
-    ("human", "差旅要素：{trip_json}\n用户历史偏好：{prefs}\n用户原话：{user_input}"),
-])
+输出键名严格为英文：days（数组，每项键名 date/transport/hotel/activities/notes）、summary、reasons（字符串数组）。""",
+        ),
+        ("human", "差旅要素：{trip_json}\n用户历史偏好：{prefs}\n用户原话：{user_input}"),
+    ]
+)
 
 
 # ---- 链（走 LLM 单一接缝，懒构建） ----
+
 
 @lru_cache
 def _extract_model():
@@ -91,6 +106,7 @@ def _plan_model():
 
 
 # ---- 编排 ----
+
 
 def _missing(req: TripRequest) -> list[str]:
     """检查必填要素缺失，返回缺失清单（基础项 E：缺失信息提示）"""
@@ -122,17 +138,20 @@ def plan(user_input: str) -> PlanResult | NeedsInfo:
         return NeedsInfo(missing=miss)
     prefs = get_preferences()
     prefs_text = "；".join(f"{p['category']}:{p['content']}" for p in prefs) or "无"
-    plan = _plan_model().invoke({
-        "trip_json": req.model_dump_json(),
-        "prefs": prefs_text,
-        "user_input": user_input,
-    })
+    plan = _plan_model().invoke(
+        {
+            "trip_json": req.model_dump_json(),
+            "prefs": prefs_text,
+            "user_input": user_input,
+        }
+    )
     assert isinstance(plan, ItineraryPlan)
     add_itinerary(req.model_dump(), plan.summary)
     return PlanResult(plan=plan)
 
 
 # ---- 展示（可读性格式化，测试锁定） ----
+
 
 def format_plan(plan: ItineraryPlan) -> str:
     lines = [f"📋 {plan.summary}", ""]
@@ -155,6 +174,8 @@ def format_plan(plan: ItineraryPlan) -> str:
 
 def needs_info_text(needs: NeedsInfo) -> str:
     """缺项提示文案（基础项 E）"""
-    return ("⚠️ 还缺一些信息才能帮你安排行程，请补充：\n· "
-            + "\n· ".join(needs.missing)
-            + "\n（例如：「10月8日从广州去北京开会4天」）")
+    return (
+        "⚠️ 还缺一些信息才能帮你安排行程，请补充：\n· "
+        + "\n· ".join(needs.missing)
+        + "\n（例如：「10月8日从广州去北京开会4天」）"
+    )

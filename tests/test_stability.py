@@ -1,4 +1,5 @@
 """稳定性层单元测试：熔断三态、重试退避、异常兜底（纯逻辑，无网络）"""
+
 import time
 
 from xiao_wen.stability import CircuitBreaker, safe_call, with_retry
@@ -17,9 +18,9 @@ def test_breaker_three_states():
     assert b.is_open
     # 恢复期到 → 访问 is_open 触发 half_open 试探
     time.sleep(1.05)
-    assert b.is_open is False       # 触发迁移：half_open 放行一个请求
+    assert b.is_open is False  # 触发迁移：half_open 放行一个请求
     assert b.state == "half_open"
-    b.record_success()              # 试探成功 → 复位
+    b.record_success()  # 试探成功 → 复位
     assert b.state == "closed"
     assert b.failures == 0
 
@@ -29,7 +30,7 @@ def test_breaker_stays_open_on_recovery_failure():
     for _ in range(2):
         b.record_failure()
     time.sleep(0.15)
-    b.record_failure()            # half_open 试探失败 → 立刻回 open
+    b.record_failure()  # half_open 试探失败 → 立刻回 open
     assert b.state == "open"
 
 
@@ -44,7 +45,7 @@ def test_with_retry_succeeds_after_flaky_failures():
         return "ok"
 
     assert flaky() == "ok"
-    assert calls["n"] == 3        # 第 1、2 次失败，第 3 次成功
+    assert calls["n"] == 3  # 第 1、2 次失败，第 3 次成功
 
 
 def test_with_retry_gives_up_after_exhaustion():
@@ -54,14 +55,14 @@ def test_with_retry_gives_up_after_exhaustion():
 
     try:
         always_fail()
-        assert False, "应当抛异常"
+        raise AssertionError("应当抛异常")  # 走到这里说明逻辑不该放行
     except ValueError:
         pass
 
 
 def test_with_retry_respects_breaker_open():
     b = CircuitBreaker(failure_threshold=1, recovery_time=60)
-    b.record_failure()            # 打开
+    b.record_failure()  # 打开
 
     @with_retry(retries=3, base_delay=0.01, breaker=b)
     def fn():
@@ -69,7 +70,7 @@ def test_with_retry_respects_breaker_open():
 
     try:
         fn()
-        assert False, "熔断打开时应快速失败"
+        raise AssertionError("熔断打开时应快速失败")  # 走到这里说明熔断未生效
     except RuntimeError as e:
         assert "熔断已打开" in str(e)
 
@@ -91,7 +92,9 @@ def test_health_check_memory_default_single_source(tmp_path, monkeypatch):
     """健康检查写出的空记忆结构必须与 memory._default() 单一来源一致（C7 防漂移）"""
     import json as _json
 
-    from xiao_wen import memory as ms, stability as st
+    from xiao_wen import memory as ms
+    from xiao_wen import stability as st
+
     monkeypatch.setattr(st, "DATA_DIR", tmp_path)
     st.health_check()
     written = _json.loads((tmp_path / "memory.json").read_text(encoding="utf-8"))
@@ -100,8 +103,10 @@ def test_health_check_memory_default_single_source(tmp_path, monkeypatch):
 
 def test_health_check_env_report_keys_follow_seam(monkeypatch):
     """环境配置项覆盖 llm 接缝的 REQUIRED_ENV_VARS + embedding 变量（单一来源）"""
-    from xiao_wen import llm as llm_seam, stability as st
+    from xiao_wen import llm as llm_seam
+    from xiao_wen import stability as st
     from xiao_wen.rag import _EMBED_ENV_VAR
+
     report = st.health_check()
     row = next(r for r in report if r["项"] == "环境配置")
     for v in llm_seam.REQUIRED_ENV_VARS:

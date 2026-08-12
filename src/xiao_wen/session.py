@@ -6,6 +6,7 @@
 - 依赖可注入：graph 默认 system.app；store 默认 memory 模块（假图/假存储即可测循环）
 - 会话隔离暂缓：记忆为全局单文件，session_id 仅占位（ADR-0002）
 """
+
 from dataclasses import dataclass
 
 from xiao_wen import memory
@@ -18,8 +19,7 @@ class ChatResult:
     reason: str
 
 
-def chat(text: str, session_id: str = "default", *,
-         graph=None, store=None) -> ChatResult:
+def chat(text: str, session_id: str = "default", *, graph=None, store=None) -> ChatResult:
     """一轮对话闭环。
 
     - graph：默认 xiao_wen.system.app（懒导入，避免会话层导入重模块）
@@ -28,16 +28,19 @@ def chat(text: str, session_id: str = "default", *,
     """
     if graph is None:
         from xiao_wen.system import app as default_graph
+
         graph = default_graph
     if store is None:
         store = memory
 
     recent = store.format_recent_messages(6)
-    r = graph.invoke({
-        "messages": [("human", text)],
-        "user_input": text,
-        "recent": recent,
-    })
+    r = graph.invoke(
+        {
+            "messages": [("human", text)],
+            "user_input": text,
+            "recent": recent,
+        }
+    )
     store.add_message("user", text)
     store.add_message("assistant", r["answer"])
     return ChatResult(answer=r["answer"], intent=r["intent"], reason=r["reason"])

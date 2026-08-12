@@ -16,12 +16,16 @@
 - 长期记忆：偏好（含常驻城市，追加/覆盖）、历史行程 —— 对应 store
 - hot path 权衡：注入克制（截断最近 6 轮），避免全量历史塞上下文（变慢、变贵、干扰）
 """
-from typing import Any, Hashable, TypedDict, Annotated
-from langgraph.graph import StateGraph, START, END, add_messages
+
+from collections.abc import Hashable
+from typing import Annotated, TypedDict
+
 from langchain_core.messages import AnyMessage
+from langgraph.graph import END, START, StateGraph, add_messages
 
 from xiao_wen import intent
 from xiao_wen.plugin_registry import discover, load_agent
+
 
 # ---- 1. State ----
 class State(TypedDict):
@@ -32,21 +36,27 @@ class State(TypedDict):
     reason: str
     answer: str
 
+
 # ---- 2. 主管：意图分类（单一来源 xiao_wen.intent，词汇表 = 注册表 manifest） ----
 def classify_intent(state):
     r = intent.classify(state["recent"], state["user_input"])
     # 兜底：LLM 幻觉意图不在词汇表内 → 归「其他」（避免路由 KeyError）
     return {"intent": r.intent, "reason": r.reason}
 
+
 # ---- 3. 组装主管图（注册表驱动：manifest 动态生成节点 + 路由） ----
 manifest = discover()
 intent.set_intents(manifest)  # 注入动态意图词汇表（含外部扩展，如 差旅统计）
 
+
 def _make_node(intent_name: str):
     """懒加载代理节点：派发到该意图时才加载子 Agent 模块（未使用的子 Agent 不加载）"""
+
     def node(state):
         return load_agent(intent_name).run(state)
+
     return node
+
 
 graph = StateGraph(State)
 graph.add_node(classify_intent)
@@ -65,6 +75,7 @@ app = graph.compile()
 # ---- 4. 演示：三类案例端到端 ----
 if __name__ == "__main__":
     from xiao_wen.session import chat
+
     demo = [
         # ① 偏好新增（长期记忆写入）
         "我不吃辣，住宿喜欢安静",

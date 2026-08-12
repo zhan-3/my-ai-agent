@@ -11,6 +11,7 @@
 - 异常兜底在 web 层（session 层向上抛）：任何异常给友好降级文案
 - 会话隔离暂缓：session_id 预留，记忆为全局单文件（ADR-0002）
 """
+
 import os
 
 import uvicorn
@@ -25,7 +26,7 @@ app = FastAPI(title="晓问 · 差旅出行助手", description="多 Agent 差�
 
 class ChatRequest(BaseModel):
     user_input: str
-    session_id: str = "default"   # 会话隔离（演示级内存；真实产品换 Redis）
+    session_id: str = "default"  # 会话隔离（演示级内存；真实产品换 Redis）
 
 
 class ChatResponse(BaseModel):
@@ -50,8 +51,9 @@ def chat(req: ChatRequest) -> ChatResponse:
     try:
         r = run_chat(text, req.session_id)
         return ChatResponse(answer=r.answer, intent=r.intent, reason=r.reason)
-    except Exception as e:  # noqa: BLE001 —— 稳定性：任何异常都给友好文案
+    except Exception as e:
         from xiao_wen.stability import logger
+
         logger.error("chat 失败（session=%s）：%s", req.session_id, e)
         return ChatResponse(answer="⚠️ 服务暂时不可用，请稍后再试。", intent="error", reason=str(e)[:120])
 
@@ -64,6 +66,7 @@ HTML_PATH = os.path.join(os.path.dirname(__file__), "static", "index.html")
 def healthz() -> dict:
     """健康检查接口（配合稳定性自检）"""
     from xiao_wen.stability import health_check
+
     return {"checks": health_check()}
 
 

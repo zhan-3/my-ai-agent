@@ -1,4 +1,5 @@
 """LLM 接缝测试：懒加载 / 校验快速失败 / 熔断守卫 / 透传（全本地，不碰真实 LLM）"""
+
 import importlib
 
 import pytest
@@ -73,10 +74,10 @@ def test_success_resets_breaker(monkeypatch):
         with pytest.raises(RuntimeError):
             m.invoke("x")
     fake.fail = None
-    assert m.invoke("ok") == "ok"          # 成功 → 计数清零
+    assert m.invoke("ok") == "ok"  # 成功 → 计数清零
     fake.fail = RuntimeError("boom")
     with pytest.raises(RuntimeError):
-        m.invoke("x")                      # 失败计数从 0 重新累计，不立刻熔断
+        m.invoke("x")  # 失败计数从 0 重新累计，不立刻熔断
 
 
 def test_guard_wraps_derived_and_passthrough(monkeypatch):
@@ -101,7 +102,7 @@ def test_prompt_composition_inherits_guard(monkeypatch):
     """回归：prompt | get_llm(override=...) 必须能组合（Runnable 子类），且链调用走熔断"""
     from langchain_core.prompts import ChatPromptTemplate
 
-    fake = FakeLLM(answer="{\"intent\": \"行程规划\", \"reason\": \"测试\"}")
+    fake = FakeLLM(answer='{"intent": "行程规划", "reason": "测试"}')
     chain = ChatPromptTemplate.from_messages([("human", "{input}")]) | llm.get_llm(override=fake)
     assert chain.invoke({"input": "hi"}) == fake.answer
     assert fake.invokes == 1
@@ -112,8 +113,9 @@ def test_prompt_composition_inherits_guard(monkeypatch):
             return "struct"
 
     fake.with_structured_output = lambda schema, **k: Structured()
-    chain2 = ChatPromptTemplate.from_messages([("human", "{input}")]) \
-        | llm.get_llm(override=fake).with_structured_output(dict)
+    chain2 = ChatPromptTemplate.from_messages([("human", "{input}")]) | llm.get_llm(
+        override=fake
+    ).with_structured_output(dict)
     assert chain2.invoke({"input": "hi"}) == "struct"
 
 

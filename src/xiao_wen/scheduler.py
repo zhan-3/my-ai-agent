@@ -11,12 +11,13 @@
 
 单意图路径完全不变（subtasks 为空走原条件边），保证不破坏已验收功能。
 """
-import operator
-from typing import TypedDict, Annotated
 
-from langgraph.graph import StateGraph, START, END, add_messages
-from langgraph.types import Send
+import operator
+from typing import Annotated, TypedDict
+
 from langchain_core.messages import AnyMessage
+from langgraph.graph import END, START, StateGraph, add_messages
+from langgraph.types import Send
 
 from xiao_wen import intent
 from xiao_wen.intent import SubTask
@@ -28,9 +29,12 @@ _AGENT_NAMES = [m["INTENT"] for m in discover()]
 
 def _agent(intent_name: str):
     """懒加载子 Agent：派发到该意图时才加载模块（与 system 同一注册表，调度增强不动子 Agent）"""
+
     def node(state):
         return load_agent(intent_name).run(state)
+
     return node
+
 
 # ---- 2. State（增加调度优化字段） ----
 class State(TypedDict):
@@ -41,23 +45,29 @@ class State(TypedDict):
     reason: str
     answer: str
     subtasks: list[SubTask]  # 多意图拆分（SubTask 对象，不下沉 dict）
-    current_task: SubTask    # Send 分支内当前子任务
+    current_task: SubTask  # Send 分支内当前子任务
     collected: Annotated[list[dict], operator.add]  # 并行结果收集（归约器拼接）
 
+
 # ---- 3. 意图识别：多意图拆分（单一来源 xiao_wen.intent，C3） ----
+
 
 def classify_intent(state):
     r = intent.classify(state["recent"], state["user_input"])
     return {"intent": r.intent, "reason": r.reason, "subtasks": r.subtasks}
 
+
 # ---- 4. 并行执行：dispatcher（Send fan-out）+ 包装节点 + merge（fan-in） ----
 def make_parallel(agent):
     """把原子 Agent 包成并行节点：读 Send 分支的 current_task，输出 collected（不覆盖 answer）"""
+
     def node(state):
         sub = state["current_task"]
         out = agent({**state, "user_input": sub.text})
         return {"collected": [{"intent": sub.intent, "text": sub.text, "answer": out["answer"]}]}
+
     return node
+
 
 def dispatch(state):
     """fan-out 条件边函数：多意图 → Send 列表（并行执行）；单意图 → 字符串路由"""
@@ -65,6 +75,7 @@ def dispatch(state):
     if subs:
         return [Send(f"p_{s.intent}", {"current_task": s}) for s in subs]
     return state["intent"]
+
 
 def merge(state):
     parts = state["collected"]
@@ -74,6 +85,7 @@ def merge(state):
         lines.append(p["answer"])
         lines.append("")
     return {"answer": "\n".join(lines)}
+
 
 # ---- 5. 组装图 ----
 graph = StateGraph(State)
@@ -103,6 +115,7 @@ app = graph.compile()
 # ---- 6. 演示：单意图回归 + 多意图并行 ----
 if __name__ == "__main__":
     from xiao_wen.session import chat
+
     demo = [
         # ① 单意图回归（subtasks 为空 → 原路由，不破坏）
         "10月8日去北京开会4天",

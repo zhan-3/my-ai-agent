@@ -3,6 +3,7 @@
 
 跑法：uv run pytest -m integration
 """
+
 import pytest
 
 from xiao_wen import system as _sys
@@ -19,6 +20,7 @@ def _invoke(user_input: str) -> str:
 def memory(monkeypatch, tmp_path):
     """本次测试的记忆文件隔离（偏好 → 行程 → 历史 共用）"""
     import xiao_wen.memory as ms
+
     monkeypatch.setattr(ms, "MEMORY_PATH", tmp_path / "memory.json")
     yield
 

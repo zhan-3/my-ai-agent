@@ -3,7 +3,7 @@
 跑法：uv run python scripts/screenshot_demo.py（需 webapp 已启动）
 产出：docs/screenshots/ 下 6 张演示截图
 """
-import sys
+
 import time
 from pathlib import Path
 

@@ -11,3 +11,9 @@ The five canonical roles map to label strings with matching names: `needs-triage
 ### Domain docs
 
 Single-context layout: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Quality gate
+
+Before committing code changes, run the gate checks in this order (fast first):
+`uv run ruff check src tests plugins scripts` → `uv run pytest -m "not integration"` → `uv run mypy src/xiao_wen`.
+The full delivery gate (`python scripts/delivery.py gate`) additionally runs integration tests and smoke, and requires `.env` + network.

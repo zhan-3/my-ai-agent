@@ -2,6 +2,7 @@
 
 对应原要求：动态发现 / 自动扫描注册 / 懒加载（未使用不加载）/ 渐进式披露（意图识别阶段仅加载元数据）
 """
+
 from xiao_wen import plugin_registry as reg
 
 
@@ -10,11 +11,12 @@ def test_discover_reads_metadata_without_executing(tmp_path, monkeypatch):
     monkeypatch.setattr(reg, "AGENT_DIR", tmp_path)
     monkeypatch.setattr(reg, "PLUGIN_DIR", tmp_path)
     (tmp_path / "boom.py").write_text(
-        "raise RuntimeError('discover 不应该执行子 Agent 代码！')\n"
-        "INTENT = '爆炸'\nDESCRIPTION = 'x'\n", encoding="utf-8")
+        "raise RuntimeError('discover 不应该执行子 Agent 代码！')\nINTENT = '爆炸'\nDESCRIPTION = 'x'\n",
+        encoding="utf-8",
+    )
     found = reg.discover()
     assert len(found) == 1
-    assert found[0]["INTENT"] == "爆炸"   # AST 能读到元数据，但代码从未执行
+    assert found[0]["INTENT"] == "爆炸"  # AST 能读到元数据，但代码从未执行
 
 
 def test_discover_finds_six_builtin_subagents():
@@ -37,8 +39,7 @@ def test_discover_merges_external_extensions():
 def test_builtin_takes_priority_over_external(tmp_path, monkeypatch):
     """内置优先：外部扩展与内置同意图 → 外部被忽略（防意图撞车）"""
     monkeypatch.setattr(reg, "PLUGIN_DIR", tmp_path)
-    (tmp_path / "dup.py").write_text(
-        "INTENT = '行程规划'\nDESCRIPTION = '外部重复实现'\n", encoding="utf-8")
+    (tmp_path / "dup.py").write_text("INTENT = '行程规划'\nDESCRIPTION = '外部重复实现'\n", encoding="utf-8")
     found = reg.discover()
     matching = [m for m in found if m["INTENT"] == "行程规划"]
     assert len(matching) == 1
@@ -67,10 +68,8 @@ def test_hot_extension_add_is_discovered(tmp_path, monkeypatch):
     """热插拔：运行中新增外部子 Agent → 重新 discover 自动注册（动态发现的灵魂）"""
     monkeypatch.setattr(reg, "AGENT_DIR", tmp_path)
     monkeypatch.setattr(reg, "PLUGIN_DIR", tmp_path)
-    (tmp_path / "a.py").write_text(
-        "INTENT = '差旅统计'\nDESCRIPTION = 'd'\n", encoding="utf-8")
+    (tmp_path / "a.py").write_text("INTENT = '差旅统计'\nDESCRIPTION = 'd'\n", encoding="utf-8")
     assert [m["INTENT"] for m in reg.discover()] == ["差旅统计"]
     # 运行中新增第二个
-    (tmp_path / "b.py").write_text(
-        "INTENT = '报销提醒'\nDESCRIPTION = 'd2'\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text("INTENT = '报销提醒'\nDESCRIPTION = 'd2'\n", encoding="utf-8")
     assert {m["INTENT"] for m in reg.discover()} == {"差旅统计", "报销提醒"}

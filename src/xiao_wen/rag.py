@@ -2,21 +2,24 @@
 跑法：uv run python -m xiao_wen.rag
 依赖：.env 里 DASHSCOPE_API_KEY（阿里云百炼）；numpy / chromadb（已装）
 
-方案演进：早期用关键词检索（jieba 分词 + BM25）暴露语义天花板（「延长出差时间」误命中环保文档）后，换成向量检索；现行方案即向量版。
+方案演进：早期用关键词检索（jieba 分词 + BM25）暴露语义天花板
+（「延长出差时间」误命中环保文档）后，换成向量检索；现行方案即向量版。
 
 设计要点：
 - 索引构建一次性：8 份文档分块 → 批量 embedding → Chroma 磁盘持久化
 - 查询：问题 embedding → 余弦相似度 top-k（向量检索，无需查询改写）
 - 生成：命中块拼进提示词 → LLM 依据资料回答
 """
+
 import os
 import time
 from functools import lru_cache
+from http import HTTPStatus
+
+import chromadb
+import dashscope
 from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
-import dashscope
-from http import HTTPStatus
-import chromadb
 
 from xiao_wen import ROOT, llm
 from xiao_wen.stability import with_retry
@@ -28,7 +31,7 @@ DOCS_DIR = ROOT / "docs" / "documents"
 CHROMA_DIR = ROOT / "data" / "chroma"
 EMB_MODEL = "text-embedding-v3"
 EMB_DIM = 1024
-BATCH = 10          # 每次 API 调用批量 embedding 条数
+BATCH = 10  # 每次 API 调用批量 embedding 条数
 COLLECTION = "travel_docs"
 
 # ---- 1. LLM（知识生成，走单一接缝，懒构建）----
@@ -39,16 +42,14 @@ _EMBED_ENV_VAR = "DASHSCOPE_API_KEY"
 def _validate_dashscope() -> None:
     key = os.environ.get(_EMBED_ENV_VAR)
     if not key:
-        raise RuntimeError(
-            f"缺少 embedding 必需环境变量：{_EMBED_ENV_VAR}（请在 .env 中配置）")
+        raise RuntimeError(f"缺少 embedding 必需环境变量：{_EMBED_ENV_VAR}（请在 .env 中配置）")
     dashscope.api_key = key
 
 
 @with_retry(retries=2, base_delay=0.5)
 def _embed_batch(batch: list[str]):
     """单批 embedding（指数退避重试，容忍免费 API 抖动）"""
-    resp = dashscope.TextEmbedding.call(
-        model=EMB_MODEL, input=batch, dimension=EMB_DIM)
+    resp = dashscope.TextEmbedding.call(model=EMB_MODEL, input=batch, dimension=EMB_DIM)
     if resp.status_code != HTTPStatus.OK:
         raise RuntimeError(f"embedding 失败: {resp.code} {resp.message}")
     return resp
@@ -65,13 +66,14 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         time.sleep(0.2)  # 限速，避免触发频率限制
     return vecs
 
+
 # ---- 3. 分块（标题和内容同块）----
 def load_chunks(max_len: int = 400):
     chunks = []
     for path in sorted(DOCS_DIR.glob("*.txt")):
         para: list[str] = []
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
             if not line:
                 if para:
                     chunks.append((path.stem, " ".join(para)))
@@ -81,15 +83,17 @@ def load_chunks(max_len: int = 400):
         if para:
             chunks.append((path.stem, " ".join(para)))
     final = []
-    for stem, text in chunks:
-        while len(text) > max_len:
-            cut = text.rfind("。", 0, max_len)
+    for stem, chunk in chunks:
+        rest = chunk
+        while len(rest) > max_len:
+            cut = rest.rfind("。", 0, max_len)
             cut = cut if cut > 0 else max_len
-            final.append((stem, text[: cut + 1]))
-            text = text[cut + 1 :]
-        if text:
-            final.append((stem, text))
+            final.append((stem, rest[: cut + 1]))
+            rest = rest[cut + 1 :]
+        if rest:
+            final.append((stem, rest))
     return final
+
 
 def merge_tiny_chunks(chunks, min_len: int = 20):
     merged = []
@@ -104,11 +108,12 @@ def merge_tiny_chunks(chunks, min_len: int = 20):
             i += 1
     return merged
 
+
 # ---- 4. 向量库索引（chromadb 持久化 + HNSW 近似最近邻）----
 def get_collection():
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-    return client.get_or_create_collection(
-        COLLECTION, metadata={"hnsw:space": "cosine"})  # 余弦距离
+    return client.get_or_create_collection(COLLECTION, metadata={"hnsw:space": "cosine"})  # 余弦距离
+
 
 def build_index(chunks):
     """文档块 → dashscope embedding → 存入 chroma（磁盘持久化）
@@ -130,28 +135,38 @@ def build_index(chunks):
         time.sleep(0.2)
     return col
 
+
 def search(query: str, col, k: int = 5):
     """问题 embedding → chroma 余弦检索 top-k（HNSW 近似最近邻）"""
     qv = embed_texts([query])[0]
     res = col.query(query_embeddings=[qv], n_results=k)
     out = []
-    for doc, meta, dist in zip(res["documents"][0], res["metadatas"][0], res["distances"][0]):
-        sim = 1 - dist          # 余弦距离 → 相似度
+    for doc, meta, dist in zip(res["documents"][0], res["metadatas"][0], res["distances"][0], strict=True):
+        sim = 1 - dist  # 余弦距离 → 相似度
         out.append((sim, meta["source"], doc))
     return out
 
+
 # ---- 5. 增强 + 生成 ----
-knowledge_prompt = ChatPromptTemplate.from_messages([
-    ("system", """你是晓问公司的差旅政策顾问。严格依据【参考资料】回答用户问题。
+knowledge_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """你是晓问公司的差旅政策顾问。严格依据【参考资料】回答用户问题。
 规则：
 - 只能依据资料中的内容回答；资料没有提到的，明确说「资料中没有提到」
 - 回答用中文，简洁准确，可以直接引用原文数据（如金额、天数、标准）
-- 不要编造政策"""),
-    ("human", "【参考资料】\n{context}\n\n问题：{query}"),
-])
+- 不要编造政策""",
+        ),
+        ("human", "【参考资料】\n{context}\n\n问题：{query}"),
+    ]
+)
+
+
 @lru_cache
 def _knowledge_model():
     return knowledge_prompt | llm.get_llm()
+
 
 def knowledge_qa(query: str) -> str:
     chunks = merge_tiny_chunks(load_chunks())
@@ -159,11 +174,10 @@ def knowledge_qa(query: str) -> str:
     hits = search(query, col)
     if not hits:
         return "资料中没有找到相关内容。"
-    context = "\n\n".join(
-        f"--- 来源 {stem} ---\n{text}" for _, stem, text in hits
-    )
+    context = "\n\n".join(f"--- 来源 {stem} ---\n{text}" for _, stem, text in hits)
     r = _knowledge_model().invoke({"context": context, "query": query})
     return f"（向量检索 top-{len(hits)}，来源：{', '.join(s for _, s, _ in hits)}）\n\n{r.content}"
+
 
 if __name__ == "__main__":
     tests = [
@@ -171,8 +185,8 @@ if __name__ == "__main__":
         "报销要在多长时间内提交？",
         "紧急情况下应该联系谁？",
         "出差可以带家属吗？",
-        "临时要延长出差时间怎么办",        # 语义题：关键词版容易检索偏，向量版应命中 FAQ
-        "出差可以带宠物吗？",              # 负例：应诚实说「资料中没有提到」
+        "临时要延长出差时间怎么办",  # 语义题：关键词版容易检索偏，向量版应命中 FAQ
+        "出差可以带宠物吗？",  # 负例：应诚实说「资料中没有提到」
     ]
     for q in tests:
         print("=" * 50)

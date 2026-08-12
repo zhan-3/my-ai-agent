@@ -6,9 +6,11 @@
   bind_tools / with_structured_output 的派生对象同样被守卫——一处守卫，全部链继承
 - 注入点：override 参数供测试传假模型（跳过 env 校验）；overrides 覆盖默认构造参数
 """
+
 import os
 from functools import lru_cache
 from typing import Any
+
 from dotenv import load_dotenv
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables import Runnable
@@ -24,8 +26,8 @@ REQUIRED_ENV_VARS = ("DEEPSEEK_MODEL", "DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY")
 
 _DEFAULT_CONFIG: dict[str, Any] = {
     "temperature": 0,
-    "max_retries": 2,   # 工程稳定性：LLM 失败自动重试 2 次
-    "timeout": 30,      # 工程稳定性：30s 无响应即放弃
+    "max_retries": 2,  # 工程稳定性：LLM 失败自动重试 2 次
+    "timeout": 30,  # 工程稳定性：30s 无响应即放弃
     "extra_body": {"thinking": {"type": "disabled"}},
 }
 
@@ -91,10 +93,12 @@ def get_llm(*, override: BaseChatModel | None = None, **overrides) -> _GuardedLL
     if overrides:
         _validate_env()
         config = {**_DEFAULT_CONFIG, **overrides}
-        return _GuardedLLM(ChatOpenAI(
-            model=os.environ["DEEPSEEK_MODEL"],
-            base_url=os.environ["DEEPSEEK_BASE_URL"],
-            api_key=SecretStr(os.environ["DEEPSEEK_API_KEY"]),
-            **config,
-        ))
+        return _GuardedLLM(
+            ChatOpenAI(
+                model=os.environ["DEEPSEEK_MODEL"],
+                base_url=os.environ["DEEPSEEK_BASE_URL"],
+                api_key=SecretStr(os.environ["DEEPSEEK_API_KEY"]),
+                **config,
+            )
+        )
     return _GuardedLLM(_default_model())

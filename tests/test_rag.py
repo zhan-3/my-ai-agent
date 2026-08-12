@@ -4,20 +4,26 @@
 - 单元层（纯本地零 API）：分块管线（覆盖全部文档、长度上限、小块合并）
 - 集成层（-m integration，真实 embedding）：向量检索相关性与排序
 """
+
 import pytest
 
 from xiao_wen import rag
 
-
 # ---------------- 单元层：分块管线 ----------------
+
 
 def test_load_chunks_covers_all_8_docs():
     chunks = rag.load_chunks()
     sources = {stem for stem, _ in chunks}
     assert sources == {
-        "01_travel_standards", "02_reimbursement_policy", "03_booking_guide",
-        "04_faq", "05_emergency_procedures", "06_platform_guide",
-        "07_city_specific_tips", "08_environmental_initiatives",
+        "01_travel_standards",
+        "02_reimbursement_policy",
+        "03_booking_guide",
+        "04_faq",
+        "05_emergency_procedures",
+        "06_platform_guide",
+        "07_city_specific_tips",
+        "08_environmental_initiatives",
     }, f"应有 8 份文档，实际 {len(sources)} 份"
     assert len(chunks) > 100
 
@@ -35,10 +41,12 @@ def test_merge_tiny_chunks_merges_short():
 
 # ---------------- 单元层：embedding 鲁棒性（懒校验 + 重试，全本地） ----------------
 
+
 def test_import_does_not_require_dashscope(monkeypatch):
     """导入模块不读 env（键值从导入期赋值改为首次调用校验）"""
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
     import importlib
+
     mod = importlib.reload(rag)
     assert hasattr(mod, "embed_texts")
 
@@ -61,9 +69,7 @@ def test_embed_retries_transient_failure(monkeypatch):
             calls["n"] += 1
             if calls["n"] < 3:
                 return types.SimpleNamespace(status_code=500, code="X", message="限流")
-            return types.SimpleNamespace(
-                status_code=200,
-                output={"embeddings": [{"embedding": [0.1] * 1024}]})
+            return types.SimpleNamespace(status_code=200, output={"embeddings": [{"embedding": [0.1] * 1024}]})
 
     monkeypatch.setattr(rag.dashscope, "TextEmbedding", FakeTextEmbedding)
     monkeypatch.setenv("DASHSCOPE_API_KEY", "dummy")
@@ -74,11 +80,12 @@ def test_embed_retries_transient_failure(monkeypatch):
 
 # ---------------- 集成层：向量检索（真实 embedding，-m integration） ----------------
 
+
 @pytest.mark.integration
 def test_vector_search_relevant_and_sorted():
     """真实 embedding 检索：top-1 应命中差旅标准文档，相似度降序"""
     chunks = rag.load_chunks()
-    col = rag.build_index(chunks)          # 复用持久化索引，不重复构建
+    col = rag.build_index(chunks)  # 复用持久化索引，不重复构建
     hits = rag.search("出差住宿标准是什么", col, k=5)
     assert hits, "应有检索结果"
     top_source = hits[0][1]
