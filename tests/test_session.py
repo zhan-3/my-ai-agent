@@ -35,7 +35,7 @@ def test_chat_loop_four_actions():
     assert "上一轮" in graph.calls[0]["recent"]
     assert graph.calls[0]["user_input"] == "新问题"
     # 写回两轮
-    msgs = memory_store.load_memory()["messages"]
+    msgs = memory_store.get_recent_messages(6)
     assert [m["role"] for m in msgs[-2:]] == ["user", "assistant"]
     assert [m["content"] for m in msgs[-2:]] == ["新问题", "答"]
 
@@ -53,16 +53,16 @@ def test_chat_uses_injected_store():
     calls = []
 
     class FakeStore:
-        def format_recent_messages(self, n):
+        def format_recent_messages(self, n, *, session_id="default"):
             return "无历史"
 
-        def add_message(self, role, content):
-            calls.append((role, content))
+        def add_message(self, role, content, *, session_id="default"):
+            calls.append((role, content, session_id))
 
     graph = FakeGraph()
-    r = chat("hi", graph=graph, store=FakeStore())
+    r = chat("hi", session_id="会话A", graph=graph, store=FakeStore())
     assert r.answer == "答"
-    assert calls == [("user", "hi"), ("assistant", "答")]
+    assert calls == [("user", "hi", "会话A"), ("assistant", "答", "会话A")]
     assert graph.calls[0]["recent"] == "无历史"
 
 
@@ -86,3 +86,109 @@ def test_chat_default_graph_is_parallel_supervisor(monkeypatch):
     assert r.answer == "答"
     assert seen["parallel"] is True, "默认图应为调度图（多意图并行）"
     assert seen["state"]["recent"] is not None
+
+
+def test_chat_session_isolation_with_fake_graph():
+    """会话隔离验收（无 LLM）：A 写记忆 → B 读不到；State 携带 session_id 到图"""
+    from xiao_wen import memory as memory_store
+
+    captured = {}
+
+    class RecGraph:
+        def invoke(self, state):
+            captured["session_id"] = state.get("session_id")
+            captured["recent"] = state["recent"]
+            return {"answer": "答", "intent": "其他", "reason": "测试"}
+
+    chat("A的第一个问题", session_id="会话A", graph=RecGraph())
+    chat("A的第二个问题", session_id="会话A", graph=RecGraph())
+    chat("B的问题", session_id="会话B", graph=RecGraph())
+
+    # State 携带 session_id（产品路径：图内 agent 可感知会话）
+    assert captured["session_id"] == "会话B"
+    # A 的记忆有 A 的两轮（2 轮 × 用户/助手 2 条）；B 只有 B 自己的
+    msgs_a = memory_store.get_recent_messages(6, session_id="会话A")
+    msgs_b = memory_store.get_recent_messages(6, session_id="会话B")
+    assert [m["content"] for m in msgs_a] == ["A的第一个问题", "答", "A的第二个问题", "答"]
+    assert [m["content"] for m in msgs_b] == ["B的问题", "答"]
+    assert memory_store.get_recent_messages(6, session_id="default") == []
+
+
+def test_agents_use_state_session_id(monkeypatch):
+    """preference/history agent 从 State 取 session_id 写入对应会话（无 LLM：短路模型）"""
+    from xiao_wen.agents import history_agent, preference_agent
+    from xiao_wen.memory import get_preferences
+
+    rec = preference_agent.PreferenceRecord(category="常驻城市", content="上海", is_update=True)
+
+    def _fake_pref_model():
+        class M:
+            def invoke(self, _):
+                return rec
+
+        return M()
+
+    monkeypatch.setattr(preference_agent, "_pref_model", _fake_pref_model)
+    out = preference_agent.run({"user_input": "我现在常住上海", "session_id": "会话A"})
+    assert "上海" in out["answer"]
+    assert [p["content"] for p in get_preferences("常驻城市", session_id="会话A")] == ["上海"]
+    assert get_preferences("常驻城市", session_id="会话B") == []
+
+    # history agent：从 State 取 session_id 传给 get_itineraries
+    seen = {}
+
+    def fake_get_itineraries(*args, **kwargs):
+        seen["session_id"] = kwargs.get("session_id")
+        return [
+            {
+                "to_city": "北京",
+                "from_city": "上海",
+                "start_date": "2026-10-08",
+                "duration_days": 4,
+                "summary": "北京出差",
+            }
+        ]
+
+    monkeypatch.setattr(history_agent, "get_itineraries", fake_get_itineraries)
+    out = history_agent.run({"session_id": "会话B"})
+    assert seen["session_id"] == "会话B"
+    assert "北京" in out["answer"]
+
+
+def test_itinerary_agent_passes_session_to_trip_planner(monkeypatch):
+    """行程 agent：State 的 session_id 贯穿到 trip_planner 的 add_itinerary（无 LLM：短路模型链）"""
+    from xiao_wen import trip_planner
+    from xiao_wen.agents import itinerary_agent
+
+    captured = {}
+
+    def fake_add_itinerary(facts, summary, *, session_id="default"):
+        captured["session_id"] = session_id
+        captured["summary"] = summary
+        return {"summary": summary, "ts": "t"}
+
+    monkeypatch.setattr(trip_planner, "add_itinerary", fake_add_itinerary)
+    req = trip_planner.TripRequest(
+        from_city="上海", to_city="北京", start_date="2026-10-08", duration_days=4, hotel_pref="无", budget_pref="中等"
+    )
+    plan = trip_planner.ItineraryPlan(
+        days=[],
+        summary="北京出差 4 天",
+        reasons=["靠近会场"],
+    )
+
+    class FakeExtract:
+        def invoke(self, _):
+            return req
+
+    class FakePlan:
+        def invoke(self, _):
+            return plan
+
+    monkeypatch.setattr(trip_planner, "_extract_model", FakeExtract)
+    monkeypatch.setattr(trip_planner, "_plan_model", FakePlan)
+
+    out = itinerary_agent.run({"user_input": "我10月8日去北京开会4天", "session_id": "会话A"})
+    assert captured["session_id"] == "会话A"  # 行程写进 A 会话
+    assert captured["summary"] == "北京出差 4 天"
+    assert "北京" in out["answer"]

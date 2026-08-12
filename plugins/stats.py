@@ -18,8 +18,8 @@ DESCRIPTION = "统计历史出差的目的地、出差次数、常用城市"
 
 
 def run(state: dict) -> dict:
-    """统一子 Agent 接口：读长期记忆的历史行程做统计"""
-    its = get_itineraries()
+    """统一子 Agent 接口：读长期记忆的历史行程做统计（按会话隔离）"""
+    its = get_itineraries(session_id=state.get("session_id", "default"))
     if not its:
         return {"answer": "📭 暂无历史行程记录"}
     dests = Counter(i.get("to_city", "未知") for i in its if i.get("to_city") not in ("待定", "未知"))
@@ -27,5 +27,5 @@ def run(state: dict) -> dict:
     top = dests.most_common(5)
     lines = [f"📊 差旅统计：共 {trips} 次行程", ""]
     lines += [f"  · {city} ×{n} 次" for city, n in top]
-    lines.append("\n（数据来自长期记忆：data/memory.json）")
+    lines.append("\n（数据来自长期记忆，按会话隔离）")
     return {"answer": "\n".join(lines)}

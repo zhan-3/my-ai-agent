@@ -52,6 +52,7 @@ def run(state) -> dict:
     r = _pref_model().invoke({"input": state["user_input"]})
     assert isinstance(r, PreferenceRecord)
     # 追加/覆盖区分：is_update=True 时替换同类别旧条目（如「我现在常住上海」）
-    rec = add_or_update_preference(r.category, r.content, r.is_update)
+    session_id = state.get("session_id", "default")
+    rec = add_or_update_preference(r.category, r.content, r.is_update, session_id=session_id)
     act = "更新" if r.is_update else "新增"
     return {"answer": f"✅ 已{act}偏好：{rec['category']}｜{rec['content']}（{rec['ts']}）"}

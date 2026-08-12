@@ -17,7 +17,7 @@ from xiao_wen.trip_planner import plan as _trip_plan  # noqa: E402
 
 def run(state) -> dict:
     """两阶段管线（要素提取→行程生成）收口于 trip_planner.plan（ADR-0003）"""
-    r = _trip_plan(state["user_input"])
+    r = _trip_plan(state["user_input"], session_id=state.get("session_id", "default"))
     if isinstance(r, NeedsInfo):
         return {"answer": needs_info_text(r)}
     return {"answer": format_plan(r.plan)}

@@ -19,17 +19,8 @@ def _invoke(user_input: str) -> str:
     return out.get("answer", "")
 
 
-@pytest.fixture()
-def memory(monkeypatch, tmp_path):
-    """本次测试的记忆文件隔离（偏好 → 行程 → 历史 共用）"""
-    import xiao_wen.memory as ms
-
-    monkeypatch.setattr(ms, "MEMORY_PATH", tmp_path / "memory.json")
-    yield
-
-
 @pytest.mark.integration
-def test_two_layer_memory_loop(memory):
+def test_two_layer_memory_loop():
     # ① 偏好记录（长期记忆）
     ans = _invoke("我不吃辣，住宿喜欢安静")
     assert "已新增偏好" in ans
@@ -52,7 +43,7 @@ def test_two_layer_memory_loop(memory):
 
 
 @pytest.mark.integration
-def test_external_agent_end_to_end_dispatch(memory):
+def test_external_agent_end_to_end_dispatch():
     """外部扩展子 Agent（差旅统计）经真实主管图端到端派发：
     注册表发现 → 词汇表注入 → 意图识别 → 条件边路由 → 懒加载执行"""
     ans = _invoke("统计一下我的出差情况")
@@ -60,7 +51,7 @@ def test_external_agent_end_to_end_dispatch(memory):
 
 
 @pytest.mark.integration
-def test_parallel_multi_intent_end_to_end(memory):
+def test_parallel_multi_intent_end_to_end():
     """多意图并行（产品默认图 = 调度图）：一句话拆两个子任务 → Send fan-out → merge 汇总
     （Q7：并行能力进产品的验收——单意图回归由其余 e2e 覆盖）"""
     ans = _invoke("帮我查下出差住宿标准是什么，顺便看看北京今天天气怎么样")

@@ -13,6 +13,7 @@ dependencies = [
     "langchain-openai>=1.4.2",
     "langgraph>=1.2.10",
     "numpy>=2.4.6",
+    "psycopg[binary]>=3.3.4",
     "python-dotenv>=1.2.2",
     "requests>=2.34.2",
     "uvicorn[standard]>=0.52.1",

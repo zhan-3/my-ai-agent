@@ -88,17 +88,15 @@ def test_safe_call_returns_fallback():
     assert safe_call(ok, "fallback") == "正常"
 
 
-def test_health_check_memory_default_single_source(tmp_path, monkeypatch):
-    """健康检查写出的空记忆结构必须与 memory._default() 单一来源一致（C7 防漂移）"""
-    import json as _json
-
-    from xiao_wen import memory as ms
+def test_health_check_memory_inmemory_backend_ready(monkeypatch):
+    """无 POSTGRES_URL 时健康检查报告记忆存储 = ✅（InMemory 演示兜底，探活不崩溃）"""
     from xiao_wen import stability as st
 
-    monkeypatch.setattr(st, "DATA_DIR", tmp_path)
-    st.health_check()
-    written = _json.loads((tmp_path / "memory.json").read_text(encoding="utf-8"))
-    assert written == ms._default()
+    monkeypatch.delenv("POSTGRES_URL", raising=False)
+    report = st.health_check()
+    mem_item = next(i for i in report if i["项"] == "记忆存储")
+    assert mem_item["状态"] == "✅"
+    assert "内存后端" in mem_item["详情"]
 
 
 def test_health_check_env_report_keys_follow_seam(monkeypatch):

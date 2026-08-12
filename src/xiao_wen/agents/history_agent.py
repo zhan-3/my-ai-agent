@@ -10,7 +10,7 @@ from xiao_wen.memory import get_itineraries  # noqa: E402
 
 
 def run(state) -> dict:
-    its = get_itineraries()
+    its = get_itineraries(session_id=state.get("session_id", "default"))
     if not its:
         return {"answer": "📭 暂无历史行程记录。"}
     lines = ["🗂️ 历史行程："]

@@ -40,12 +40,3 @@ def test_itinerary_and_common_destinations():
     assert dests[0] == "北京"
     assert len(dests) == 2
     assert len(ms.get_itineraries()) == 3
-
-
-def test_load_memory_survives_corrupt_file(tmp_path, monkeypatch):
-    """记忆文件被清空/写坏时 load_memory 应兜底重置，绝不抛 JSONDecodeError（回归）"""
-    monkeypatch.setattr(ms, "MEMORY_PATH", tmp_path / "memory.json")
-    (tmp_path / "memory.json").write_text("", encoding="utf-8")  # 0 字节空文件
-    assert ms.load_memory() == {"preferences": [], "itineraries": [], "messages": []}
-    (tmp_path / "memory.json").write_text("{not json!!", encoding="utf-8")  # 非法 JSON
-    assert ms.load_memory() == {"preferences": [], "itineraries": [], "messages": []}

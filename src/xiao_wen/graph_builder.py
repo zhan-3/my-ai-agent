@@ -39,6 +39,7 @@ class State(TypedDict):
     subtasks: NotRequired[list[SubTask]]  # 多意图拆分子任务（单意图时为空数组）
     current_task: NotRequired[SubTask]  # Send 分支内当前子任务
     collected: NotRequired[Annotated[list[dict], operator.add]]  # 并行结果收集（归约器拼接）
+    session_id: NotRequired[str]  # 会话维度（记忆隔离；未传时 agent 兑底 "default"）
 
 
 # ---- 分类节点（唯一实现：恒返回 subtasks，由 parallel 参数决定是否使用） ----

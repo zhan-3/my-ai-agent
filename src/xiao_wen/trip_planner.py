@@ -122,21 +122,21 @@ def _missing(req: TripRequest) -> list[str]:
     return miss
 
 
-def plan(user_input: str) -> PlanResult | NeedsInfo:
+def plan(user_input: str, *, session_id: str = "default") -> PlanResult | NeedsInfo:
     """编排：提取 → 常驻城市补全 → 缺项检查（短路）→ 生成 → 写回长期记忆
 
     顺序是产品行为（ADR-0003），勿改。
     """
     req = _extract_model().invoke({"input": user_input})
     assert isinstance(req, TripRequest)
-    # 常驻城市补全：先于缺项检查（“用户没说出发城市但记忆里有”不算缺项）
-    hc = get_home_city()
+    # 常驻城市补全：先于缺项检查（"用户没说出发城市但记忆里有"不算缺项）
+    hc = get_home_city(session_id=session_id)
     if (not req.from_city or req.from_city in ("待定", "未知")) and hc:
         req.from_city = hc
     miss = _missing(req)
     if miss:
         return NeedsInfo(missing=miss)
-    prefs = get_preferences()
+    prefs = get_preferences(session_id=session_id)
     prefs_text = "；".join(f"{p['category']}:{p['content']}" for p in prefs) or "无"
     plan = _plan_model().invoke(
         {
@@ -146,7 +146,7 @@ def plan(user_input: str) -> PlanResult | NeedsInfo:
         }
     )
     assert isinstance(plan, ItineraryPlan)
-    add_itinerary(req.model_dump(), plan.summary)
+    add_itinerary(req.model_dump(), plan.summary, session_id=session_id)
     return PlanResult(plan=plan)
 
 

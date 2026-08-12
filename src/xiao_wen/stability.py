@@ -10,7 +10,6 @@
 """
 
 import functools
-import json
 import logging
 import os
 import time
@@ -129,21 +128,19 @@ def health_check() -> list[dict]:
     )
     report.append({"项": "向量索引", "状态": index_status, "详情": index_detail})
 
-    # ③ 记忆文件可读可写（缺失时写入合法空结构，结构与 memory._default() 单一来源，防漂移）
-    from xiao_wen.memory import _default as memory_default
+    # ③ 记忆后端就绪（无 POSTGRES_URL = InMemory 演示兜底恒可用；Postgres 探活）
+    from xiao_wen import memory as memory_mod
 
-    mem = DATA_DIR / "memory.json"
-    writable = True
     try:
-        if not mem.exists():
-            mem.write_text(json.dumps(memory_default(), ensure_ascii=False), encoding="utf-8")
+        backend = memory_mod._get_backend()
+        if hasattr(backend, "health_check"):
+            backend.health_check()
+            mem_status, mem_detail = "✅", "Postgres 连接正常（会话隔离持久化）"
         else:
-            mem.touch(exist_ok=True)
-    except OSError:
-        writable = False
-    report.append(
-        {"项": "记忆存储", "状态": "✅" if writable else "⚠️", "详情": f"{mem} 可写" if writable else f"{mem} 不可写"}
-    )
+            mem_status, mem_detail = "✅", "内存后端（演示，重启即失；设 POSTGRES_URL 持久化）"
+    except Exception:
+        mem_status, mem_detail = "⚠️", "Postgres 连接失败（检查 POSTGRES_URL 与容器）"
+    report.append({"项": "记忆存储", "状态": mem_status, "详情": mem_detail})
 
     # ④ 外部扩展子 Agent 目录（插件化；计数口径与注册中心 discover() 一致：只数外部扩展、
     #    过滤缺 INTENT/DESCRIPTION 元数据的文件，不数内置 agents/）

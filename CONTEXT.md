@@ -41,6 +41,10 @@ _Avoid_: 聊天、交互（泛指时用）
 最近 N 轮对话消息。每轮 invoke 前注入（克制截断）、invoke 后写回用户与助手两轮。对应 LangChain 的 checkpointer+thread 概念。
 _Avoid_: 上下文、最近对话（口语用）
 
+**会话隔离**:
+记忆按 session_id 划分（默认 `default`），链路贯穿 webapp → chat → 图 State → 子 Agent → 存储后端；存储经后端协议分派：`POSTGRES_URL` 时 Postgres（持久化 + 隔离），否则 InMemory（演示兜底，重启即失）。对应 LangGraph checkpointer 的 thread 维度语义（ADR-0006）。
+_Avoid_: 多用户（认证未做，session 维度 ≠ 用户维度）
+
 **长期记忆**:
 跨会话持久信息，两类：偏好（含常驻城市，支持追加/覆盖）与历史行程。对应 LangChain 的 store 概念。
 

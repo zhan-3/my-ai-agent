@@ -34,14 +34,15 @@ def chat(text: str, session_id: str = "default", *, graph=None, store=None) -> C
     if store is None:
         store = memory
 
-    recent = store.format_recent_messages(6)
+    recent = store.format_recent_messages(6, session_id=session_id)
     r = graph.invoke(
         {
             "messages": [("human", text)],
             "user_input": text,
             "recent": recent,
+            "session_id": session_id,
         }
     )
-    store.add_message("user", text)
-    store.add_message("assistant", r["answer"])
+    store.add_message("user", text, session_id=session_id)
+    store.add_message("assistant", r["answer"], session_id=session_id)
     return ChatResult(answer=r["answer"], intent=r["intent"], reason=r["reason"])
