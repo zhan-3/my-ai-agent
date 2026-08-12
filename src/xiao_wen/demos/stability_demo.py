@@ -82,10 +82,10 @@ if __name__ == "__main__":
     from xiao_wen import intent as intent_mod
     # monkeypatch：把意图识别模型的 LLM 换成坏 key（注入点 = intent._intent_model 懒构建工厂；
     # system.classify_intent → intent.classify 在调用时模块级懒查找该工厂，替换即生效；
-    # BAD_LLM 仍是刻意绕过接缝的故障模型）
+    # 分类 prompt 由当前词汇表动态构建（_build_prompt(_intents())）；BAD_LLM 仍是刻意绕过接缝的故障模型）
     @lru_cache
     def _bad_intent_model():
-        return intent_mod.intent_prompt | BAD_LLM.with_structured_output(
+        return intent_mod._build_prompt(intent_mod._intents()) | BAD_LLM.with_structured_output(
             intent_mod.Intent, method="json_mode")
     intent_mod._intent_model = _bad_intent_model
     state = {"user_input": "10月8日去北京开会4天", "recent": ""}

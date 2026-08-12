@@ -15,11 +15,11 @@ INTENT = "差旅统计"
 DESCRIPTION = "统计历史出差的目的地、出差次数、常用城市"
 
 
-def run(query: str) -> str:
-    """统一插件接口：读长期记忆的历史行程做统计"""
+def run(state: dict) -> dict:
+    """统一子 Agent 接口：读长期记忆的历史行程做统计"""
     its = get_itineraries()
     if not its:
-        return "📭 暂无历史行程记录"
+        return {"answer": "📭 暂无历史行程记录"}
     dests = Counter(i.get("to_city", "未知") for i in its
                     if i.get("to_city") not in ("待定", "未知"))
     trips = len(its)
@@ -27,4 +27,4 @@ def run(query: str) -> str:
     lines = [f"📊 差旅统计：共 {trips} 次行程", ""]
     lines += [f"  · {city} ×{n} 次" for city, n in top]
     lines.append("\n（数据来自长期记忆：data/memory.json）")
-    return "\n".join(lines)
+    return {"answer": "\n".join(lines)}

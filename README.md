@@ -8,7 +8,7 @@
 
 ## 1. 项目简介
 
-差旅场景有明确的**多角色分工**特点：识别用户要什么（意图）→ 决定派谁去做（调度）→ 各专职 Agent 分别处理（规划行程 / 记偏好 / 查历史 / 答政策 / 查实时信息）。本项目把这些能力拆成 6 个可独立开发、独立验证、再组装的工作单元（Worker），由一个 LLM 意图主管统一调度，形成「**主管-工人（Supervisor–Workers）**」多 Agent 架构。
+差旅场景有明确的**多角色分工**特点：识别用户要什么（意图）→ 决定派谁去做（调度）→ 各专职子 Agent 分别处理（规划行程 / 记偏好 / 查历史 / 答政策 / 查实时信息）。本项目把六个内置子 Agent（+ 外部扩展）作为**可动态发现的实体**（注册表扫描注册 / 懒加载 / 渐进式披露），由一个 LLM 意图主管统一调度，形成「**主管-子 Agent**」多 Agent 架构。
 
 ## 2. 技术栈
 
@@ -24,9 +24,9 @@
 | 联网数据 | open-meteo（天气/空气质量）、exchangerate-api（汇率） | 免费公开 API，无需 key |
 | 包管理 | uv | 依赖锁定（pyproject.toml + uv.lock） |
 | 类型检查 | mypy（dev 依赖） | 全项目 0 警告 |
-| 插件机制 | 自研插件注册中心 | 动态发现/懒加载/渐进式披露 |
+| 插件机制 | 子 Agent 注册中心 | 动态发现/懒加载/渐进式披露（内置+外部） |
 | 稳定性层 | 自研 + LangChain 内置 | 重试/超时/熔断/兑底/日志/健康检查 |
-| 测试框架 | pytest 9 + pytest.mark | 分层测试 31 个：单元 22（无 LLM）+ 集成 9（真实模型） |
+| 测试框架 | pytest 9 + pytest.mark | 分层测试 66 个：单元 53（无 LLM）+ 集成 13（真实模型） |
 
 ## 3. 系统架构
 
@@ -107,21 +107,28 @@ uv run python scripts/delivery.py all   # 交付三连：门禁(pytest+mypy+冒�
 ```
 src/xiao_wen/               ★ 成品包（正式命名，src 布局）
   __init__.py              包元信息
-  system.py                ★ 完整系统（主管图 + 6 Worker 全做实，主入口）
-  scheduler.py             ★ 调度优化（Send 并行执行，复用 system worker）
+  system.py                ★ 完整系统（主管图 + 子 Agent 注册表驱动组装，主入口）
+  scheduler.py             ★ 调度优化（Send 并行执行，注册表驱动 worker）
   llm.py                   ★ 模型单一接缝（懒构造 + 缺失变量快速失败 + 熔断守卫）
   session.py               ★ 会话循环收口（读最近对话 → 注入 → invoke → 写回两轮）
-  intent.py                ★ 意图识别单一来源（六意图 + 多意图拆分）
+  intent.py                ★ 意图识别单一来源（词汇表 = 注册表 manifest 动态生成 + 多意图拆分）
   trip_planner.py          ★ 行程规划管线（提取→补全→缺项→生成→写回）
+  agents/                  ★ 内置子 Agent 实体（每个 = INTENT + DESCRIPTION + run(state)）
+    itinerary_agent.py     行程规划（trip_planner 收口）
+    preference_agent.py    偏好记录（提取 + memory 追加/覆盖）
+    history_agent.py       历史查询（读长期记忆）
+    knowledge_agent.py     知识问答（rag 向量检索）
+    web_agent.py           联网查询（web ToolNode ReAct + 指代消解）
+    other_agent.py         其他（边界兜底）
   memory.py                两层记忆（短期消息 + 长期偏好/行程，JSON 持久化）
   rag.py                   知识问答（向量检索 + Chroma，dashscope embedding）
   web.py                   联网查询（ToolNode + ReAct：天气/汇率/空气质量）
-  plugin_registry.py       插件注册中心（discover / AST 元数据 / load_plugin）
+  plugin_registry.py       子 Agent 注册中心（discover / AST 元数据 / load_agent，内置优先）
   stability.py             稳定性层（with_retry / CircuitBreaker / safe_call / health_check）
   webapp.py                ★ 可视化 Web 界面（FastAPI 后端，复用 system 完整系统）
   static/index.html        Web 前端（聊天气泡 + 建议 chips + 打字机，无外部 CDN）
   demos/
-    plugin_demo.py         插件化演示（插件式主管 + 四幕：发现/懒加载/热插拔/边界）
+    plugin_demo.py         多 Agent 机制演示（发现/懒加载/热插拔/外部扩展真实路由）
     stability_demo.py      稳定性演示（重试/熔断/真实故障注入/健康检查）
 
 scripts/                工具脚本
@@ -133,16 +140,14 @@ tests/                  自动化测试（pytest）
   conftest.py           记忆隔离到 tmp_path（绝不碰真实数据）
   test_memory.py        记忆：追加/覆盖/常驻城市/历史/常用目的地
   test_itinerary.py     缺失检查 + 结果可读性格式
-  test_plugin.py        插件注册中心（含「加载即爆炸」零执行验证）
+  test_plugin.py        子 Agent 注册中心（发现 6 内置+外部 / 懒加载 / 内置优先 / 热插拔）
   test_stability.py     熔断三态/重试/兑底
   test_rag.py           RAG 验证：分块管线（单元）+ 向量检索（集成）
   test_intent.py        （集成）意图识别 7 用例含边界
   test_endtoend.py      （集成）两层记忆闭环
 
-plugins/                插件目录（每个插件 = INTENT + DESCRIPTION + run()）
-  policy.py             插件：知识问答（复用 xiao_wen.rag 向量 RAG）
-  weather.py            插件：联网查询（复用 xiao_wen.web 天气工具）
-  stats.py              插件：差旅统计（新功能，演示动态发现）
+plugins/                外部扩展子 Agent 目录（每个 = INTENT + DESCRIPTION + run(state)）
+  stats.py              子 Agent：差旅统计（第七意图，真实路由；演示动态发现）
 data/memory.json        记忆数据（自动生成，已 gitignore）
 data/chroma/            向量索引（自动生成，已 gitignore）
 ```
@@ -181,9 +186,9 @@ text-embedding-v3 + Chroma 余弦检索 top-5，命中块拼进提示词生成�
 
 一句话含多个独立请求时拆分子任务，Send 并行执行（fan-out/fan-in），归约器 `collected` 拼接结果，避免多 Worker 写同一 key 互相覆盖。
 
-### 6.7 插件化架构
+### 6.7 多 Agent / 子 Agent 注册机制
 
-`discover()` 扫描 `plugins/` 目录；AST 渐进式披露（意图识别阶段不执行插件代码）；派发时才懒加载；支持运行中热插拔。
+`plugin_registry.discover()` 扫描内置 `src/xiao_wen/agents/` + 外部 `plugins/` 目录；AST 渐进式披露（意图识别阶段只读 INTENT/DESCRIPTION 元数据，不执行子 Agent 代码）；`load_agent()` 派发时才加载（懒加载，未使用的子 Agent 不加载）；主管图由 manifest 动态组装——**新增子 Agent（丢一个文件）→ 重新发现 → 主管自动认识新意图**（运行中热插拔，plugin_demo 第3幕演示）。内置优先，外部扩展同意图时被忽略。
 
 ### 6.8 工程稳定性
 
@@ -251,7 +256,7 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 
 | 功能 | 能力要求 | 完成情况 |
 |---|---|---|
-| A 多 Agent 基本架构 | ≥5 个分工 Agent | ✅ 6 个 Worker，职责边界清晰 |
+| A 多 Agent 基本架构 | ≥5 个分工 Agent | ✅ 6 个内置子 Agent（可动态发现实体），职责边界清晰 |
 | B 自然语言意图识别 | LLM 语义识别 + 提取关键信息 | ✅ LLM 六分类路由（json_mode），要素提取做实 |
 | C 行程规划主流程 | 识别→抽要素→调子 Agent→生成完整行程 | ✅ 端到端（案例一） |
 | D 基础记忆能力 | 可持续记忆，下一轮能引用 | ✅ 偏好+历史+常驻城市（案例二） |
@@ -263,9 +268,9 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 |---|---|---|
 | A 两层记忆架构 | ✅ 完整 | 短期（最近 6 轮对话注入）+ 长期（偏好/历史/常驻城市）+ **追加/覆盖区分** |
 | B 调度优化 | ✅ 完整 | 按任务类型动态路由 + 多请求 Send 并行执行 + 先收集信息再规划（要素提取） |
-| C 插件化、模块化架构 | ✅ 完整 | 插件注册中心：动态发现（目录扫描）+ 渐进式披露（AST 元数据）+ 懒加载 + 热插拔演示 |
+| C 插件化、模块化架构 | ✅ 完整 | 子 Agent 注册中心：动态发现（目录扫描）+ 自动扫描注册 + 渐进式披露（AST 元数据，意图识别阶段仅加载元数据）+ 懒加载（未使用模块不加载）+ 热插拔演示 |
 | D 工程稳定性 | ✅ 完整 | 六件套：LLM 重试（max_retries+指数退避）/ 超时控制 / 熔断三态 / 异常兜底 / 日志 / 健康检查；含真实故障注入演示（坏 key → 裸调用 401 崩溃 vs 优雅降级） |
-| E 评测与测试 | ✅ 完整 | 分层自动化测试 31 个：单元层 22（记忆/行程/插件/稳定性/RAG 分块，无 LLM）+ 集成层 9（意图识别 7 用例含边界、端到端记忆闭环、向量 RAG 检索）；`uv run pytest` / `-m integration` |
+| E 评测与测试 | ✅ 完整 | 分层自动化测试 66 个：单元层 53（记忆/行程/注册中心/稳定性/RAG 分块，无 LLM）+ 集成层 13（意图识别 7 用例含边界 + 外部扩展识别 2 + 多意图拆分 2、端到端记忆闭环、向量 RAG 检索）；`uv run pytest` / `-m integration` |
 | F 可视化界面 | ✅ 完整 | FastAPI + 原生 JS Web 界面（聊天气泡/chips/打字机），复用 `xiao_wen.system` 完整系统零重写；演示截图 6 张见 docs/screenshots/ |
 
 ## 10. 已知问题或后续优化方向
@@ -290,6 +295,6 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 
 | 目录 | 内容 | 是否进交付包 |
 |---|---|---|
-| `src/` `tests/` `plugins/` `scripts/` `docs/` | 系统代码（`src/xiao_wen/` 成品包）+ 测试 + 插件 + 工具 + 知识库/截图 | ✅ 成品 |
+| `src/` `tests/` `plugins/` `scripts/` `docs/` | 系统代码（`src/xiao_wen/` 成品包，含 `agents/` 内置子 Agent）+ 测试 + 外部扩展 + 工具 + 知识库/截图 | ✅ 成品 |
 | `README.md` `pyproject.toml` `uv.lock` | 说明 + 依赖锁定 | ✅ 成品 |
 | `AGENTS.md` `.scratch/` | 本仓库 Agent 协作配置与本地 issue tracker | ❌ 内部 |

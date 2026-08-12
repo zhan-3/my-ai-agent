@@ -1,6 +1,6 @@
 """调度优化模块：同优先级任务并行执行（Send API fan-out/fan-in）
 跑法：uv run python -m xiao_wen.scheduler
-依赖：xiao_wen.system（复用六个 worker 节点函数）
+依赖：xiao_wen.plugin_registry（子 Agent 注册表，懒加载 worker）
 
 设计（对比「固定顺序串行」）：
 - 动态路由：按意图选 worker（条件边）
@@ -18,12 +18,18 @@ from langgraph.graph import StateGraph, START, END, add_messages
 from langgraph.types import Send
 from langchain_core.messages import AnyMessage
 
-# ---- 1. 复用 xiao_wen.system 的六个 worker 节点函数（模块化：调度增强不动 worker） ----
-from xiao_wen import system as base
-from xiao_wen.intent import SubTask, classify as _classify
+from xiao_wen import intent
+from xiao_wen.intent import SubTask
+from xiao_wen.plugin_registry import discover, load_agent
 
-WORKERS = {"行程规划": base.itinerary, "偏好记录": base.preference, "历史查询": base.history,
-           "知识问答": base.knowledge, "联网查询": base.web_node, "其他": base.other}
+# ---- 1. 子 Agent 清单（注册表自动发现：内置六 + 外部扩展）与懒加载 worker ----
+_WORKER_NAMES = [m["INTENT"] for m in discover()]
+
+def _worker(intent_name: str):
+    """懒加载 worker：派发到该意图时才加载子 Agent 模块（与 system 同一注册表，调度增强不动子 Agent）"""
+    def node(state):
+        return load_agent(intent_name).run(state)
+    return node
 
 # ---- 2. State（增加调度优化字段） ----
 class State(TypedDict):
@@ -40,7 +46,7 @@ class State(TypedDict):
 # ---- 3. 意图识别：多意图拆分（单一来源 xiao_wen.intent，C3） ----
 
 def classify_intent(state):
-    r = _classify(state["recent"], state["user_input"])
+    r = intent.classify(state["recent"], state["user_input"])
     return {"intent": r.intent, "reason": r.reason, "subtasks": r.subtasks}
 
 # ---- 4. 并行执行：dispatcher（Send fan-out）+ 包装节点 + merge（fan-in） ----
@@ -71,10 +77,10 @@ def merge(state):
 # ---- 5. 组装图 ----
 graph = StateGraph(State)
 graph.add_node(classify_intent)
-for name, fn in WORKERS.items():
-    graph.add_node(name, fn)
-for intent in WORKERS:
-    graph.add_node(f"p_{intent}", make_parallel(WORKERS[intent]))
+for name in _WORKER_NAMES:
+    graph.add_node(name, _worker(name))
+for name in _WORKER_NAMES:
+    graph.add_node(f"p_{name}", make_parallel(_worker(name)))
 graph.add_node(merge)
 
 graph.add_edge(START, "classify_intent")
@@ -82,13 +88,13 @@ graph.add_edge(START, "classify_intent")
 graph.add_conditional_edges(
     "classify_intent",
     dispatch,
-    {name: name for name in WORKERS},
+    {name: name for name in _WORKER_NAMES},
 )
 # 并行组：p_* → merge（fan-in）
-for intent in WORKERS:
-    graph.add_edge(f"p_{intent}", "merge")
+for name in _WORKER_NAMES:
+    graph.add_edge(f"p_{name}", "merge")
 graph.add_edge("merge", END)
-for name in WORKERS:
+for name in _WORKER_NAMES:
     graph.add_edge(name, END)
 
 app = graph.compile()

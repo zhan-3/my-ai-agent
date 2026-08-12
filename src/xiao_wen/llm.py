@@ -8,6 +8,7 @@
 """
 import os
 from functools import lru_cache
+from typing import Any
 from dotenv import load_dotenv
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables import Runnable
@@ -21,7 +22,7 @@ load_dotenv()
 # 接缝校验的环境变量（唯一来源；health_check 复用见 C7）
 REQUIRED_ENV_VARS = ("DEEPSEEK_MODEL", "DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY")
 
-_DEFAULT_CONFIG = {
+_DEFAULT_CONFIG: dict[str, Any] = {
     "temperature": 0,
     "max_retries": 2,   # 工程稳定性：LLM 失败自动重试 2 次
     "timeout": 30,      # 工程稳定性：30s 无响应即放弃
@@ -79,8 +80,8 @@ def _default_model() -> ChatOpenAI:
     )
 
 
-def get_llm(*, override: BaseChatModel | None = None, **overrides) -> BaseChatModel:
-    """模型单一接缝：返回熔断守卫的 LLM
+def get_llm(*, override: BaseChatModel | None = None, **overrides) -> _GuardedLLM:
+    """模型单一接缝：返回熔断守卫的 LLM 代理
 
     - override：测试注入假模型 / 故障模型（跳过 env 校验）
     - overrides：覆盖默认构造参数（如 max_retries=1, timeout=10），每次现构

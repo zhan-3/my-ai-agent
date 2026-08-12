@@ -1,62 +1,29 @@
-"""完整系统模块：多 Agent 主管总装（六个 Worker 全部做实）
+"""完整系统模块：多 Agent 主管总装（注册表驱动的子 Agent 图）
 跑法：uv run python -m xiao_wen.system
 依赖：.env（DEEPSEEK_* + DASHSCOPE_API_KEY）；xiao_wen.memory（记忆，短期+长期两层）
       xiao_wen.rag（向量知识问答）、xiao_wen.web（联网查询图）
 
-架构（主管-工人 Supervisor–Workers）：
-- 意图识别：LLM 主管（六分类，json_mode）+ 注入最近对话（短期记忆）
-- 行程规划：两阶段管线（要素提取→行程生成）+ 偏好注入 + 常驻城市补全 + 行程写回记忆
-- 偏好记录 / 历史查询：长期记忆（JSON），偏好支持追加/覆盖（is_update）
-- 知识问答：向量检索（dashscope text-embedding-v3 + chromadb，来自 xiao_wen.rag）
-- 联网查询：ToolNode ReAct 循环（天气/汇率/空气质量，来自 xiao_wen.web）+ 上下文注入（指代消解）
-- 其他：兜底（产品边界外的请求）
+架构（多 Agent：主管 + 可发现的子 Agent）：
+- 子 Agent 层：六个内置子 Agent 实体在 src/xiao_wen/agents/（+ 外部扩展 plugins/），
+  每个模块声明 INTENT/DESCRIPTION/run(state)，由注册中心（xiao_wen.plugin_registry）
+  自动扫描注册、AST 渐进式披露、派发时懒加载——新增子 Agent 主管零改动
+- 意图识别：LLM 主管（意图词汇表 = 注册表 manifest 动态生成，含六内置 + 外部扩展）
+  + 注入最近对话（短期记忆）；多意图拆分子任务由调度增强（scheduler）并行处理
+- 本模块职责：把注册表 manifest 组装成主管图（节点 = 懒加载代理，路由 = manifest 意图）
 
 记忆分层（对应 LangChain 官方 memory 概念）：
 - 短期记忆：最近 N 轮对话（memory.messages），每轮 invoke 前注入 —— 对应 checkpointer+thread
 - 长期记忆：偏好（含常驻城市，追加/覆盖）、历史行程 —— 对应 store
 - hot path 权衡：注入克制（截断最近 6 轮），避免全量历史塞上下文（变慢、变贵、干扰）
 """
-from typing import Any, TypedDict, Annotated, Literal
-from functools import lru_cache
+from typing import Any, Hashable, TypedDict, Annotated
 from langgraph.graph import StateGraph, START, END, add_messages
 from langchain_core.messages import AnyMessage
-from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel, Field
 
-from xiao_wen import llm
-from xiao_wen.memory import add_or_update_preference, get_itineraries
-from xiao_wen.trip_planner import NeedsInfo, format_plan, needs_info_text, plan as _trip_plan
+from xiao_wen import intent
+from xiao_wen.plugin_registry import discover, load_agent
 
-# ---- 1. LLM：单一接缝（xiao_wen.llm，懒构造 + 熔断守卫；链在本模块懒构建） ----
-
-# ---- 2. Schema（与 0006 一致） ----
-class PreferenceRecord(BaseModel):
-    """用户偏好记录"""
-    category: Literal["住宿", "餐饮", "交通", "预算", "常驻城市", "其他"]
-    content: str = Field(description="偏好内容的一句话")
-    is_update: bool = Field(default=False, description="True=覆盖同类别旧条目；False=新增")
-
-# ---- 3. 偏好提示词（行程规划两阶段提示词已随管线迁入 xiao_wen.trip_planner，ADR-0003） ----
-pref_prompt = ChatPromptTemplate.from_messages([
-    ("system", """你是企业差旅助手的偏好提取器，输出严格 JSON。
-从用户原话提取偏好，键名必须严格为英文：
-- category：严格是六词之一：住宿、餐饮、交通、预算、常驻城市、其他
-- content：偏好内容一句话
-- is_update：布尔。用户表达「现在/改成/以后/不再/其实是」等更新语气时 true，否则 false。
-  示例：「我喜欢住汉庭」→ false（新增）；「我现在常住上海」→ true（更新常驻城市）
-输出示例：{{"category": "住宿", "content": "喜欢住全季酒店", "is_update": false}}，
-更新示例：{{"category": "常驻城市", "content": "上海", "is_update": true}}。"""),
-    ("human", "{input}"),
-])
-@lru_cache
-def _pref_model():
-    return pref_prompt | llm.get_llm().with_structured_output(PreferenceRecord, method="json_mode")
-
-# ---- 4. 导入外部 worker 模块（xiao_wen.rag 向量知识问答、xiao_wen.web 联网查询图）----
-from xiao_wen import rag   # rag.knowledge_qa(query) -> str
-from xiao_wen import web   # web.app 图 + web.SYSTEM
-
-# ---- 5. State ----
+# ---- 1. State ----
 class State(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     user_input: str
@@ -65,78 +32,37 @@ class State(TypedDict):
     reason: str
     answer: str
 
-# ---- 6. 主管：意图分类（单一来源 xiao_wen.intent，真 LLM） ----
-from xiao_wen.intent import Intent, classify as _classify
-
+# ---- 2. 主管：意图分类（单一来源 xiao_wen.intent，词汇表 = 注册表 manifest） ----
 def classify_intent(state):
-    r = _classify(state["recent"], state["user_input"])
+    r = intent.classify(state["recent"], state["user_input"])
+    # 兜底：LLM 幻觉意图不在词汇表内 → 归「其他」（避免路由 KeyError）
     return {"intent": r.intent, "reason": r.reason}
 
-# ---- 7. 六个 worker（全部做实） ----
-def preference(state):
-    r = _pref_model().invoke({"input": state["user_input"]})
-    assert isinstance(r, PreferenceRecord)
-    # 追加/覆盖区分：is_update=True 时替换同类别旧条目（如「我现在常住上海」）
-    rec = add_or_update_preference(r.category, r.content, r.is_update)
-    act = "更新" if r.is_update else "新增"
-    return {"answer": f"✅ 已{act}偏好：{rec['category']}｜{rec['content']}（{rec['ts']}）"}
+# ---- 3. 组装主管图（注册表驱动：manifest 动态生成节点 + 路由） ----
+manifest = discover()
+intent.set_intents(manifest)  # 注入动态意图词汇表（含外部扩展，如 差旅统计）
 
-def history(state):
-    its = get_itineraries()
-    if not its:
-        return {"answer": "📭 暂无历史行程记录。"}
-    lines = ["🗂️ 历史行程："]
-    for it in reversed(its[-5:]):  # 最多显示最近 5 条
-        lines.append(f"· {it.get('start_date', '?')} {it.get('from_city', '?')}→{it.get('to_city', '?')}，{it.get('duration_days', '?')}天：{it.get('summary', '')[:40]}")
-    return {"answer": "\n".join(lines)}
+def _make_node(intent_name: str):
+    """懒加载代理节点：派发到该意图时才加载子 Agent 模块（未使用的子 Agent 不加载）"""
+    def node(state):
+        return load_agent(intent_name).run(state)
+    return node
 
-def itinerary(state):
-    """行程规划：两阶段管线收口于 xiao_wen.trip_planner.plan（ADR-0003）"""
-    r = _trip_plan(state["user_input"])
-    if isinstance(r, NeedsInfo):
-        return {"answer": needs_info_text(r)}
-    return {"answer": format_plan(r.plan)}
-
-def knowledge(state):
-    """真实现：向量检索知识问答（embedding + chromadb）"""
-    return {"answer": rag.knowledge_qa(state["user_input"])}
-
-def web_query(question: str, ctx: str = "无") -> str:
-    """调 xiao_wen.web 的 ToolNode 图（ReAct 循环），返回最终回答文本。ctx=短期记忆上下文，支持指代消解"""
-    msgs: list[Any] = [web.SYSTEM]
-    if ctx != "无":
-        msgs.append(("system", f"以下是本次对话上文，新问题可能省略了主语（如「那上海呢」）：\n{ctx}"))
-    msgs.append(("human", question))
-    result = web.app.invoke({"messages": msgs})
-    return result["messages"][-1].content
-
-def web_node(state):
-    """真实现：联网查询（0009：天气/汇率/空气质量）+ 短期记忆上下文"""
-    return {"answer": web_query(state["user_input"], state.get("recent", "无"))}
-
-def other(state):
-    return {"answer": f"抱歉，这不在企业差旅助手的服务范围内（如个人休闲旅游、非差旅问题）。当前仅支持：行程规划、偏好、历史行程、差旅政策、实时信息。"}
-
-# ---- 8. 组装图（与 0006 相同拓扑） ----
 graph = StateGraph(State)
 graph.add_node(classify_intent)
-for name, fn in [("itinerary", itinerary), ("preference", preference), ("history", history),
-                 ("knowledge", knowledge), ("web", web_node), ("other", other)]:
-    graph.add_node(name, fn)
+ROUTES: dict[Hashable, str] = {}
+for m in manifest:
+    graph.add_node(m["INTENT"], _make_node(m["INTENT"]))
+    ROUTES[m["INTENT"]] = m["INTENT"]
 
 graph.add_edge(START, "classify_intent")
-graph.add_conditional_edges(
-    "classify_intent",
-    lambda s: s["intent"],
-    {"行程规划": "itinerary", "偏好记录": "preference", "历史查询": "history",
-     "知识问答": "knowledge", "联网查询": "web", "其他": "other"},
-)
-for name in ["itinerary", "preference", "history", "knowledge", "web", "other"]:
+graph.add_conditional_edges("classify_intent", lambda s: s["intent"], ROUTES)
+for name in ROUTES.values():
     graph.add_edge(name, END)
 
 app = graph.compile()
 
-# ---- 9. 演示：三类案例端到端 ----
+# ---- 4. 演示：三类案例端到端 ----
 if __name__ == "__main__":
     from xiao_wen.session import chat
     demo = [
@@ -152,7 +78,9 @@ if __name__ == "__main__":
         "那上海呢",
         # ⑥ 历史查询（读长期记忆）
         "我上次的行程是什么",
-        # ⑦ 边界（应归「其他」）
+        # ⑦ 外部扩展子 Agent：差旅统计（第七意图，由注册表动态发现）
+        "统计一下我的出差情况",
+        # ⑧ 边界（应归「其他」）
         "这个暑假去哪里玩",
     ]
     for t in demo:
