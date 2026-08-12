@@ -105,6 +105,7 @@ uv run pytest                  # 自动化测试：单元层 26 个（无 LLM，
 uv run pytest -m integration   # 自动化测试：集成层 8 个（真实 LLM，约 1 分钟）
 uv run python homework/0014_webapp.py    # 可视化 Web 界面（加分项 F）→ http://127.0.0.1:8000
 uv run python scripts/screenshot_demo.py # 无头浏览器生成演示截图 → docs/screenshots/
+uv run python scripts/delivery.py all   # 交付三连：门禁(pytest+mypy+冒烟) → 打包 → 邮件模板
 ```
 
 > 首次运行 `0010_system.py` 中知识问答会构建向量索引（一次性，约 386 个文本块），之后复用磁盘索引，秒级返回。

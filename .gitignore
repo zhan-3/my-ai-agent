@@ -14,3 +14,4 @@ wheels/
 data/memory.json
 data/embeddings.npy
 data/chroma/
+delivery/
