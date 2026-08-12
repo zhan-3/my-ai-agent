@@ -22,7 +22,7 @@
 | 大模型 | DeepSeek（OpenAI 兼容接口） | 意图识别、要素提取、行程生成、问答、工具调用 |
 | Embedding | 阿里 DashScope text-embedding-v3（1024 维） | 知识库向量化 |
 | 向量库 | Chroma 1.5.9（磁盘持久化） | 政策文档语义检索 |
-| 关键词检索 | jieba 分词 + BM25 | 检索效果对照实验（第七课） |
+| 关键词检索 | jieba 分词 + BM25 | 早期方案，检索效果对照 |
 | 记忆存储 | 本地 JSON 文件（`data/memory.json`） | 短期对话 + 长期偏好/历史（分层设计，见 §6.4） |
 | 联网数据 | open-meteo（天气/空气质量）、exchangerate-api（汇率） | 免费公开 API，无需 key |
 | 包管理 | uv | 依赖锁定（pyproject.toml + uv.lock） |
@@ -157,7 +157,7 @@ llm = ChatOpenAI(..., extra_body={"thinking": {"type": "disabled"}})
 model = prompt | llm.with_structured_output(Schema, method="json_mode")
 ```
 
-配套三条纪律：**键名英文写死、JSON 花括号转义、字段形状在提示词里钉死**。教训：结构化输出「上下文一变就要重新验证」（第七课 RAG 时结构漂移过）。
+配套三条纪律：**键名英文写死、JSON 花括号转义、字段形状在提示词里钉死**。教训：结构化输出「上下文一变就要重新验证」（RAG 升级时结构漂移过）。
 
 ### 6.2 行程规划：两阶段管线 + 质量保障
 
@@ -188,7 +188,7 @@ model = prompt | llm.with_structured_output(Schema, method="json_mode")
 
 ### 6.6 工程组装：先桩后实 + 模块化
 
-第六课先搭「主管 + 6 Worker 桩」骨架，之后逐个做实（行程→记忆→知识→联网），第十课总装只做「导入 + 挂图」，拓扑零改动。Worker 间统一「输入 state → 输出 answer」接口契约。
+先搭「主管 + 6 Worker 桩」骨架，之后逐个做实（行程→记忆→知识→联网），总装只做「导入 + 挂图」，拓扑零改动。Worker 间统一「输入 state → 输出 answer」接口契约。
 
 ### 6.7 调度优化：多请求并行执行
 
