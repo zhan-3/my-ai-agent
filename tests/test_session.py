@@ -115,7 +115,7 @@ def test_stream_chat_filters_nested_chain_events():
 
     from xiao_wen.session import stream_chat
 
-    events = [
+    events: list[dict] = [
         {"event": "on_chain_start", "name": "行程规划"},
         {"event": "on_chain_start", "name": "RunnableLambda"},  # 嵌套链（应被过滤）
         {"event": "on_chain_end", "name": "RunnableLambda"},

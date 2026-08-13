@@ -42,9 +42,11 @@ def test_plan_or_none_ignores_extra_keys():
 
 def test_memory_snapshot_tolerates_extra_fields():
     """记忆条目带 ts 等额外字段：契约模型忽略（pydantic 默认）"""
-    snap = MemorySnapshot(
-        preferences=[{"category": "常驻城市", "content": "上海", "ts": "2026-01-01"}],
-        itineraries=[{"from_city": "上海", "to_city": "北京", "ts": "2026-01-01"}],
+    snap = MemorySnapshot.model_validate(
+        {
+            "preferences": [{"category": "常驻城市", "content": "上海", "ts": "2026-01-01"}],
+            "itineraries": [{"from_city": "上海", "to_city": "北京", "ts": "2026-01-01"}],
+        }
     )
     assert snap.preferences[0].category == "常驻城市"
     assert snap.itineraries[0].from_city == "上海"

@@ -4,6 +4,8 @@
 Authorization Bearer 解出用户名作为 session_id，客户端不再自填。
 """
 
+from typing import ClassVar
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -60,6 +62,7 @@ class TestMemoryEndpoint:
             answer = "行程如下（文本）"
             intent = "行程规划"
             reason = "r"
+            plan: ClassVar[dict] = {}  # 类型占位：结构不符的 plan 在运行时后置覆盖
 
         FakeResult.plan = {"summary": "缺 days"}  # 结构不符契约
         monkeypatch.setattr(webapp, "run_chat", lambda text, session_id: FakeResult())
@@ -162,8 +165,9 @@ class TestChatAuthEnforced:
             answer = "行程如下"
             intent = "行程规划"
             reason = "r"
+            plan: ClassVar[dict] = {}  # 类型占位：真实 plan 后置覆盖（类体里查不到外层局部变量）
 
-        FakeResult.plan = plan  # 类体里 plan = plan 查不到外层局部变量（LOAD_NAME 不闭包），故后置
+        FakeResult.plan = plan
         monkeypatch.setattr(webapp, "run_chat", lambda text, session_id: FakeResult())
         token = client.post("/api/auth/register", json={"username": "zhang", "password": "pass123"}).json()["token"]
         r = client.post(
