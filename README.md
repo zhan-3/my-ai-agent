@@ -28,7 +28,7 @@
 | 代码检查 | ruff（dev 依赖） | E/F/I/UP/B/SIM 等规则全绿，门禁一部分 |
 | 插件机制 | 子 Agent 注册中心 | 动态发现/懒加载/渐进式披露（内置+外部） |
 | 稳定性层 | 自研 + LangChain 内置 | 重试/超时/熔断/兜底/日志/健康检查 |
-| 测试框架 | pytest 9 + pytest.mark | 分层测试 108 个：单元 93（无 LLM，含 6 个 Postgres 条件跑）+ 集成 15（真实模型） |
+| 测试框架 | pytest 9 + pytest.mark | 分层测试 115 个：单元 100（无 LLM，含 6 个 Postgres 条件跑）+ 集成 15（真实模型） |
 
 ## 3. 系统架构
 
@@ -105,8 +105,6 @@ uv run mypy src/xiao_wen       # 类型检查（0 警告）
 uv run pytest                  # 自动化测试：单元层（无 LLM，秒级）
 uv run pytest -m integration   # 自动化测试：集成层（真实 LLM，约 1 分钟）
 uv run xiao-wen                # 可视化 Web 界面（等价 python -m xiao_wen.webapp）→ http://127.0.0.1:8000
-uv run python scripts/screenshot_demo.py # 无头浏览器生成演示截图 → docs/screenshots/
-uv run python scripts/delivery.py all   # 交付三连：门禁(ruff+pytest+mypy+冒烟) → 打包 → 邮件模板
 ```
 
 > 持久化记忆（可选）：`docker compose up -d postgres` 起本地 Postgres，然后
@@ -190,11 +188,6 @@ export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 │   ├── documents/               # 知识库语料（8 份政策文档）
 │   ├── agents/                  # Agent 技能协作文档
 │   └── screenshots/             # 演示截图 6 张
-│
-├── scripts/
-│   ├── smoke.py                 # 交付冒烟（真 LLM / --import-only 离线自检）
-│   ├── screenshot_demo.py       # 无头浏览器演示截图
-│   └── delivery.py              # 交付三连：门禁 → 打包 → 邮件模板
 │
 ├── data/                        # 运行数据（自动生成，gitignored）
 │   ├── chroma/                  # 向量索引
@@ -332,7 +325,7 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 | B 调度优化 | ✅ 完整 | 按任务类型动态路由 + 多请求 Send 并行执行 + 先收集信息再规划（要素提取） |
 | C 插件化、模块化架构 | ✅ 完整 | 子 Agent 注册中心：动态发现（目录扫描）+ 自动扫描注册 + 渐进式披露（AST 元数据，意图识别阶段仅加载元数据）+ 懒加载（未使用模块不加载）+ 热插拔演示 |
 | D 工程稳定性 | ✅ 完整 | 六件套：LLM 重试（max_retries+指数退避）/ 超时控制 / 熔断三态 / 异常兜底 / 日志 / 健康检查；含真实故障注入演示（坏 key → 裸调用 401 崩溃 vs 优雅降级） |
-| E 评测与测试 | ✅ 完整 | 分层自动化测试 108 个：单元层 93（记忆/行程/注册中心/稳定性/RAG 分块/图工厂/会话隔离/认证/webapp 端点，无 LLM；其中 6 个 Postgres 真库测试需本地容器+`POSTGRES_TEST_URL` 才跑）+ 集成层 15（意图识别 7 用例含边界 + 外部扩展识别 2 + 多意图拆分 2、端到端记忆闭环 + 外部扩展端到端派发 + 多意图并行、向量 RAG 检索）；`uv run pytest` / `-m integration` |
+| E 评测与测试 | ✅ 完整 | 分层自动化测试 115 个：单元层 100（记忆/行程/注册中心/稳定性/RAG 分块/图工厂/会话隔离/认证/webapp 端点，无 LLM；其中 6 个 Postgres 真库测试需本地容器+`POSTGRES_TEST_URL` 才跑）+ 集成层 15（意图识别 7 用例含边界 + 外部扩展识别 2 + 多意图拆分 2、端到端记忆闭环 + 外部扩展端到端派发 + 多意图并行、向量 RAG 检索）；`uv run pytest` / `-m integration` |
 | F 可视化界面 | ✅ 完整 | FastAPI + 原生 JS Web 界面（聊天气泡/chips/打字机），复用 `xiao_wen.system` 完整系统零重写；演示截图 6 张见 docs/screenshots/ |
 
 ## 10. 已知问题或后续优化方向
@@ -346,7 +339,6 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 
 **后续优化方向**
 - 行程校验层：行程生成后过「RAG 政策校验 + 实时班次/天气合理性检查」（把知识 Agent 与联网 Agent 组合）。
-- 调度优化：优先级调度、收集信息后再触发规划。
 - 记忆精确化：支持「上次住的什么酒店」级细粒度历史查询（当前按行程摘要级别存储）。
 - 记忆扩展：短期对话迁移 LangGraph checkpointer（thread 维度随时恢复）、长期记忆语义检索
   （PostgresStore + pgvector）——存储层已收口到 `memory.py` 后端协议，可平滑演进（ADR-0006）。
@@ -355,10 +347,12 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 
 ## 项目结构
 
-交付压缩包（`python scripts/delivery.py package`）只含成品：
+交付压缩包（一条命令，只含已提交的成品文件，自动排除 `.env`/`data`/未跟踪文档）：
+`git archive HEAD README.md pyproject.toml uv.lock src tests plugins docs Dockerfile docker-compose.yml .dockerignore .github/workflows/ci.yml --format=zip -o delivery/xiao-wen.zip`
 
 | 目录 | 内容 | 是否进交付包 |
 |---|---|---|
-| `src/` `tests/` `plugins/` `scripts/` `docs/` | 系统代码（`src/xiao_wen/` 成品包，含 `agents/` 内置子 Agent）+ 测试 + 外部扩展 + 工具 + 知识库/截图 | ✅ 成品 |
+| `src/` `tests/` `plugins/` `docs/` | 系统代码（`src/xiao_wen/` 成品包，含 `agents/` 内置子 Agent）+ 测试 + 外部扩展 + 知识库/截图 | ✅ 成品 |
 | `README.md` `pyproject.toml` `uv.lock` | 说明 + 依赖锁定 | ✅ 成品 |
+| `Dockerfile` `docker-compose.yml` `.dockerignore` `.github/workflows/ci.yml` | 生产部署（app + postgres 一条命令）+ 镜像构建 + CI | ✅ 成品 |
 | `AGENTS.md` `.scratch/` | 本仓库 Agent 协作配置与本地 issue tracker | ❌ 内部 |

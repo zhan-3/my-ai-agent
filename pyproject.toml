@@ -1,7 +1,7 @@
 [project]
-name = "my-ai-agent"
+name = "xiao-wen"
 version = "0.1.0"
-description = "Add your description here"
+description = "企业差旅多 Agent 助手：意图主管 + 子 Agent 注册中心 + 两层记忆 + 知识检索 + 联网查询"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -26,7 +26,7 @@ dependencies = [
 xiao-wen = "xiao_wen.webapp:main"
 
 [tool.uv.build-backend]
-# src 布局：模块目录名与项目名（my-ai-agent → my_ai_agent）不同，显式声明
+# src 布局：模块目录名与项目名（xiao-wen → xiao_wen）不同，显式声明
 module-name = "xiao_wen"
 module-root = "src"
 
@@ -37,7 +37,6 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "mypy>=2.3.0",
-    "playwright>=1.62.0",
     "pytest>=9.1.1",
     "ruff>=0.16.2",
 ]

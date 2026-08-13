@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   unit:
-    name: 单元层（ruff + mypy + 单元测试）
+    name: Unit tests
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -40,31 +40,31 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: 安装 uv（带依赖缓存，加速重建）
+      - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
-      - name: 同步依赖（含 dev）
+      - name: Sync dependencies
         run: uv sync --frozen --all-groups
 
-      - name: 代码检查（ruff）
-        run: uv run ruff check src tests plugins scripts
+      - name: Lint (ruff)
+        run: uv run ruff check src tests plugins
 
-      - name: 格式检查
+      - name: Format check
         run: uv run ruff format --check src tests
 
-      - name: 单元测试（含 PG 真库条件测试）
+      - name: Run unit tests
         env:
           POSTGRES_TEST_URL: postgresql://postgres:123456@localhost:5432/xiao_wen_test
         run: uv run pytest -q -m "not integration"
 
-      - name: 类型检查（mypy）
+      - name: Type check (mypy)
         run: uv run mypy src/xiao_wen tests
 
   integration:
-    name: 集成层（真实 LLM）
+    name: Integration tests
     needs: unit
     runs-on: ubuntu-latest
     # 只对主分支推送跑真 LLM（PR 不跑，省配额）
@@ -75,16 +75,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: 安装 uv（带依赖缓存）
+      - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
-      - name: 同步依赖（含 dev）
+      - name: Sync dependencies
         run: uv sync --frozen --all-groups
 
-      - name: 集成测试（真实 LLM，约 1 分钟）
+      - name: Run integration tests
         # 仓库未配 secrets（如 fork）→ 自动跳过，防密钥泄露
         if: ${{ env.HAS_LLM_KEY == 'true' }}
         env:
@@ -95,7 +95,7 @@ jobs:
         run: uv run pytest -q -m integration
 
   docker:
-    name: Docker 镜像构建
+    name: Build Docker image
     needs: unit
     runs-on: ubuntu-latest
     permissions:
@@ -104,10 +104,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: 设置 buildx（docker-container driver，gha 缓存导出必需）
+      - name: Set up buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: 构建镜像（gha 层缓存，重建走缓存）
+      - name: Build image
         uses: docker/build-push-action@v6
         with:
           context: .

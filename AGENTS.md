@@ -15,5 +15,4 @@ Single-context layout: one `CONTEXT.md` and `docs/adr/` at the repo root. See `d
 ### Quality gate
 
 Before committing code changes, run the gate checks in this order (fast first):
-`uv run ruff check src tests plugins scripts` → `uv run pytest -m "not integration"` → `uv run mypy src/xiao_wen`.
-The full delivery gate (`python scripts/delivery.py gate`) additionally runs integration tests and smoke, and requires `.env` + network.
+`uv run ruff check src tests plugins` → `uv run pytest -m "not integration"` → `uv run mypy src/xiao_wen`.

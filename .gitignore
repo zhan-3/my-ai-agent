@@ -20,3 +20,6 @@ delivery/
 .pi/
 __pycache__/
 data/*.log
+
+# 作业题目文档（老师下发，仅本地参考，不进仓库/交付包）
+docs/差旅*.md
