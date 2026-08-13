@@ -302,3 +302,33 @@ def test_itinerary_agent_confirms_vague_date(monkeypatch):
     )
     out_exact = run_with(exact)
     assert "重新排" not in out_exact
+
+
+def test_preference_agent_skips_questions_no_garbage(monkeypatch):
+    """疑问句（「我常住哪里」）→ 提取器返回空 records → 不写任何记忆、给引导提示"""
+    from xiao_wen.agents import preference_agent
+    from xiao_wen.memory import get_preferences
+
+    recs = preference_agent.PreferenceList(records=[])
+
+    def _empty_model():
+        class M:
+            def invoke(self, _):
+                return recs
+
+        return M()
+
+    monkeypatch.setattr(preference_agent, "_pref_model", _empty_model)
+    out = preference_agent.run({"user_input": "我常住哪里", "session_id": "会话C"})
+    assert "询问" in out["answer"]
+    assert get_preferences(session_id="会话C") == [], "疑问句绝不能写进长期记忆"
+
+
+def test_history_agent_shows_preferences(monkeypatch):
+    """记忆查询（如「我常住哪里」）→ 历史查询 Agent 输出记忆偏好（含常驻城市）"""
+    from xiao_wen.agents import history_agent
+    from xiao_wen.memory import add_or_update_preference
+
+    add_or_update_preference("常驻城市", "上海", True, session_id="会话D")
+    out = history_agent.run({"session_id": "会话D"})
+    assert "常驻城市 上海" in out["answer"]
