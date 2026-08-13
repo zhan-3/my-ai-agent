@@ -104,6 +104,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: 设置 buildx（docker-container driver，gha 缓存导出必需）
+        uses: docker/setup-buildx-action@v3
+
       - name: 构建镜像（gha 层缓存，重建走缓存）
         uses: docker/build-push-action@v6
         with:
