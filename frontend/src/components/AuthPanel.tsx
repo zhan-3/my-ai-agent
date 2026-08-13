@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -23,9 +24,12 @@ export default function AuthPanel({ onAuthed }: { onAuthed: (username: string) =
     setBusy(true)
     try {
       const data = await authenticate(mode, u, password)
+      toast.success(mode === 'register' ? `注册成功，已自动登录：${data.username}` : `欢迎回来，${data.username}`)
       onAuthed(data.username)
     } catch (e) {
-      setError(e instanceof Error ? e.message : '失败，请重试')
+      const msg = e instanceof Error ? e.message : '失败，请重试'
+      setError(msg)
+      toast.error(msg)
     } finally {
       setBusy(false)
     }
@@ -63,10 +67,10 @@ export default function AuthPanel({ onAuthed }: { onAuthed: (username: string) =
           {error && <p className="text-sm text-destructive">{error}</p>}
           <div className="grid grid-cols-2 gap-2">
             <Button disabled={busy} onClick={() => submit('login')}>
-              登录
+              {busy ? '登录中…' : '登录'}
             </Button>
             <Button disabled={busy} variant="secondary" onClick={() => submit('register')}>
-              注册
+              {busy ? '注册中…' : '注册'}
             </Button>
           </div>
         </CardContent>
