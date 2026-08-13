@@ -1,0 +1,32 @@
+{"input": "帮我规划10月1日去广州出差2天的行程", "expected": "行程规划", "note": "E2E#1 完整规划"}
+{"input": "帮我去北京开会", "expected": "行程规划", "note": "E2E#2 缺日期→追问"}
+{"input": "我10月1日去出差3天", "expected": "行程规划", "note": "E2E#2 缺城市→追问"}
+{"input": "帮我规划10月1日去成都出差3天，预算每天500以内", "expected": "行程规划", "note": "E2E#2 含预算"}
+{"input": "帮我规划10月5日去西安出差2天", "expected": "行程规划", "note": "E2E#2 常驻城市补全"}
+{"input": "帮我订一张去北京的机票", "expected": "行程规划", "note": "边界：订票动作→行程规划"}
+{"input": "帮我订一个上海火车站附近的酒店", "expected": "行程规划", "note": "边界：订酒店动作→行程规划"}
+{"input": "那住宿预算呢", "recent": "user: 帮我规划10月5日去西安出差2天\nassistant: 已为你安排西安行程", "expected": "行程规划", "note": "指代消解：沿用上文行程规划"}
+{"input": "那天气呢", "recent": "user: 帮我规划10月5日去西安出差2天\nassistant: 已为你安排西安行程", "expected": "联网查询", "note": "指代消解：问西安天气"}
+{"input": "我喜欢住汉庭酒店", "expected": "偏好记录", "note": "E2E#1 偏好陈述"}
+{"input": "我常住上海，不吃辣", "expected": "偏好记录", "note": "E2E#1 双偏好陈述"}
+{"input": "我之前说不吃辣，现在改成吃辣", "expected": "偏好记录", "note": "E2E#2 更新语气"}
+{"input": "我现在常住深圳", "expected": "偏好记录", "note": "E2E#2 常驻城市更新"}
+{"input": "我喜欢坐高铁出差", "expected": "偏好记录", "note": "交通偏好"}
+{"input": "我住哪里比较好", "expected": "其他", "note": "E2E#2 疑问句非陈述（非差旅咨询）"}
+{"input": "我上次的行程是什么", "expected": "历史查询", "note": "E2E#1 历史行程"}
+{"input": "我常住哪里", "expected": "历史查询", "note": "E2E#2 记忆偏好"}
+{"input": "我上次住的酒店叫什么", "expected": "历史查询", "note": "边界：带住宿词但是查记忆"}
+{"input": "我的住宿偏好是什么", "expected": "历史查询", "note": "查询型偏好"}
+{"input": "我上次的行程是什么，还有北京明天天气怎么样", "expected": "历史查询", "note": "E2E#1 多意图，主导=历史查询", "subtasks": ["历史查询", "联网查询"]}
+{"input": "出差打车能报销吗", "expected": "知识问答", "note": "E2E#2 政策"}
+{"input": "一线城市的住宿标准是多少", "expected": "知识问答", "note": "E2E#1 RAG"}
+{"input": "高铁二等座能报销吗", "expected": "知识问答", "note": "政策"}
+{"input": "出差住宿标准是多少，还有北京今天天气怎么样", "expected": "知识问答", "note": "多意图，主导=知识问答", "subtasks": ["知识问答", "联网查询"]}
+{"input": "北京明天天气怎么样", "expected": "联网查询", "note": "E2E#1 天气"}
+{"input": "今天美元兑人民币汇率多少", "expected": "联网查询", "note": "E2E#2 汇率"}
+{"input": "上海现在空气质量怎么样", "expected": "联网查询", "note": "空气质量"}
+{"input": "帮我查一下广州明天的天气", "expected": "联网查询", "note": "查询型带动作词→按内容归类"}
+{"input": "杭州有什么好玩的旅游景点", "expected": "其他", "note": "个人休闲"}
+{"input": "帮我写一首诗", "expected": "其他", "note": "无关"}
+{"input": "今天股市怎么样", "expected": "其他", "note": "无关"}
+{"input": "你好", "expected": "其他", "note": "闲聊→其他（当前实现）"}
