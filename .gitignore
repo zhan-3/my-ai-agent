@@ -21,5 +21,11 @@ delivery/
 __pycache__/
 data/*.log
 
+# ---- 前端（frontend/，React + Vite） ----
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+frontend/.vite/
+
 # 作业题目文档（老师下发，仅本地参考，不进仓库/交付包）
 docs/差旅*.md
