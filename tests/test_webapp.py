@@ -212,3 +212,20 @@ class TestChatAuthEnforced:
             client.post("/api/chat", json={"user_input": "hi"}, headers={"Authorization": f"Bearer {ta}"})
         client.post("/api/chat", json={"user_input": "hi"}, headers={"Authorization": f"Bearer {tb}"})
         assert seen == {"userA": 2, "userB": 1}
+
+
+class TestFrontendServing:
+    """旧单文件 index.html 退役后：GET / 服务 React 构建产物（frontend/dist）；未构建给指引"""
+
+    def test_index_hints_when_frontend_not_built(self, client, monkeypatch):
+        monkeypatch.setattr(webapp, "DIST", "/nonexistent/dist")
+        r = client.get("/")
+        assert r.status_code == 200
+        assert "pnpm build" in r.text and "晓问前端未构建" in r.text
+
+    def test_index_serves_built_frontend(self, client, monkeypatch, tmp_path):
+        (tmp_path / "index.html").write_text("<div id=root>晓问 React 前端</div>", encoding="utf-8")
+        monkeypatch.setattr(webapp, "DIST", str(tmp_path))
+        r = client.get("/")
+        assert r.status_code == 200
+        assert "<div id=root>晓问 React 前端</div>" in r.text

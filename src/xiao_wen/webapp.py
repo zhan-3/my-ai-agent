@@ -19,6 +19,7 @@ import os
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from xiao_wen import auth
@@ -61,13 +62,6 @@ def _current_user(authorization: str | None = None) -> str:
     if user is None:
         raise HTTPException(status_code=401, detail="登录已失效，请重新登录")
     return user
-
-
-@app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    """前端页面（单文件 HTML，无外部 CDN，离线可用）"""
-    with open(HTML_PATH, encoding="utf-8") as f:
-        return f.read()
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -160,8 +154,23 @@ def memory(authorization: str | None = Header(default=None)) -> MemorySnapshot:
     )
 
 
-# ---- 前端页面（随文件存放，同目录 static/index.html） ----
-HTML_PATH = os.path.join(os.path.dirname(__file__), "static", "index.html")
+# ---- React 前端（frontend/dist 构建产物；开发模式走 vite dev :5173，/api 代理到本服务） ----
+DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend", "dist")
+
+_FRONTEND_HINT = """<!doctype html><meta charset="utf-8"><title>晓问 · 差旅出行助手</title>
+<h3>晓问前端未构建</h3>
+<p>请先执行：<code>cd frontend && pnpm build</code>，再刷新本页。</p>
+<p>开发模式：<code>cd frontend && pnpm dev</code> → http://127.0.0.1:5173（/api 自动代理到本服务）</p>"""
+
+
+@app.get("/", response_class=HTMLResponse)
+def index() -> str:
+    """React 前端入口：frontend/dist 构建产物；未构建时给出构建指引"""
+    html = os.path.join(DIST, "index.html")
+    if os.path.exists(html):
+        with open(html, encoding="utf-8") as f:
+            return f.read()
+    return _FRONTEND_HINT
 
 
 @app.get("/healthz")
@@ -172,11 +181,17 @@ def healthz() -> dict:
     return {"checks": health_check()}
 
 
+if os.path.isdir(DIST):
+    # 静态资源（assets/、favicon.svg、icons.svg）：构建产物存在时挂载（须在所有 API 路由之后注册）
+    app.mount("/", StaticFiles(directory=DIST, html=True), name="frontend")
+
+
 def main() -> None:
     """启动 Web 服务（控制台入口）"""
-    if not os.path.exists(HTML_PATH):
-        print(f"⚠️ 前端页面缺失：{HTML_PATH}，请确认 static/index.html 存在")
-        raise SystemExit(1)
+    if not os.path.isdir(DIST):
+        print("ℹ️ React 前端未构建（frontend/dist 不存在）：")
+        print("   - 访问 http://127.0.0.1:8000：先 cd frontend && pnpm build")
+        print("   - 开发模式：cd frontend && pnpm dev（http://127.0.0.1:5173，/api 代理到本服务）")
     print("=" * 56)
     print("晓问 · 差旅出行助手 Web 界面")
     print("  浏览器打开：http://127.0.0.1:8000")

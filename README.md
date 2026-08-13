@@ -156,8 +156,10 @@ export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 │       ├── demos/
 │       │   ├── plugin_demo.py       # 多 Agent 机制演示（发现/懒加载/热插拔/真实路由）
 │       │   └── stability_demo.py    # 稳定性演示（重试/熔断/故障注入/健康检查）
-│       └── static/
-│           └── index.html           # Web 前端（聊天气泡 + chips，无外部 CDN）
+│
+├── frontend/                   # React 19 + Vite + TS + Tailwind v4 + shadcn（生产：pnpm build → dist）
+│   ├── src/                    # 组件/API 层（契约类型由 pnpm gen:api 从后端 OpenAPI 生成）
+│   ├── dist/                   # 构建产物（FastAPI 直接服务；dev 模式走 vite :5173 代理）
 │
 ├── plugins/                     # 外部扩展子 Agent 目录（注册表自动发现）
 │   └── stats.py                 # 差旅统计（第七意图，真实路由）
