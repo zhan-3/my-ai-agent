@@ -530,3 +530,26 @@ def test_history_agent_shows_preferences(monkeypatch):
     add_or_update_preference("常驻城市", "上海", True, session_id="会话D")
     out = history_agent.run({"session_id": "会话D"})
     assert "常驻城市 上海" in out["answer"]
+
+
+def test_history_agent_answers_what_was_asked(monkeypatch):
+    """意图对齐：问「上次的行程」只答行程（无则明确空态），不无差别倒出偏好"""
+    from xiao_wen.agents import history_agent
+    from xiao_wen.memory import add_or_update_preference
+
+    add_or_update_preference("餐饮", "不吃辣", True, session_id="会话E")
+    add_or_update_preference("住宿", "喜欢安静", True, session_id="会话E")
+
+    # 行程向问题：只有偏好没有行程 → 明确「暂无历史行程」，不列偏好（原实现答非所问）
+    out = history_agent.run({"user_input": "我上次的行程是什么", "session_id": "会话E"})
+    assert "暂无历史行程记录" in out["answer"]
+    assert "不吃辣" not in out["answer"]
+
+    # 偏好向问题：只答偏好
+    out2 = history_agent.run({"user_input": "我的饮食偏好是什么", "session_id": "会话E"})
+    assert "不吃辣" in out2["answer"]
+    assert "暂无历史行程" not in out2["answer"]
+
+    # 综合查询（无关键词）：全答，且空态也说明
+    out3 = history_agent.run({"session_id": "会话E"})
+    assert "不吃辣" in out3["answer"] and "暂无历史行程记录" in out3["answer"]
