@@ -374,13 +374,19 @@ def test_itinerary_agent_returns_structured_plan(monkeypatch):
     from xiao_wen.agents import itinerary_agent
 
     req = trip_planner.TripRequest(
-        from_city="上海", to_city="北京", start_date="2026-10-08", duration_days=4,
-        hotel_pref="无", budget_pref="中等",
+        from_city="上海",
+        to_city="北京",
+        start_date="2026-10-08",
+        duration_days=4,
+        hotel_pref="无",
+        budget_pref="中等",
     )
     plan = trip_planner.ItineraryPlan(
-        days=[trip_planner.DayPlan(
-            date="2026-10-08", transport="高铁 G1", hotel="汉庭", activities=["上午开会"], notes=""
-        )],
+        days=[
+            trip_planner.DayPlan(
+                date="2026-10-08", transport="高铁 G1", hotel="汉庭", activities=["上午开会"], notes=""
+            )
+        ],
         summary="北京出差 4 天",
         reasons=["按差旅标准选住宿"],
     )
@@ -489,7 +495,12 @@ def test_itinerary_agent_confirms_vague_date(monkeypatch):
         return itinerary_agent.run({"user_input": "x", "session_id": "会话A"})["answer"]
 
     vague = trip_planner.TripRequest(
-        from_city="北京", to_city="杭州", start_date="2026-08-17", duration_days=3, hotel_pref="无", budget_pref="中等",
+        from_city="北京",
+        to_city="杭州",
+        start_date="2026-08-17",
+        duration_days=3,
+        hotel_pref="无",
+        budget_pref="中等",
         date_is_vague=True,
     )
     out_vague = run_with(vague)

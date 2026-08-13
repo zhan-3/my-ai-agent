@@ -48,7 +48,7 @@ pref_prompt = ChatPromptTemplate.from_messages(
   {{"category": "住宿", "content": "喜欢住汉庭", "is_update": false}},
   {{"category": "常驻城市", "content": "上海", "is_update": true}}
 ]}}
-单个偏好：「我喜欢住全季」→ {{"records": [{{"category": "住宿", "content": "喜欢住全季", "is_update": false}}]}}。"""
+单个偏好：「我喜欢住全季」→ {{"records": [{{"category": "住宿", "content": "喜欢住全季", "is_update": false}}]}}。""",
         ),
         ("human", "{input}"),
     ]

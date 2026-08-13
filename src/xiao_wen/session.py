@@ -56,9 +56,7 @@ def chat(text: str, session_id: str = "default", *, graph=None, store=None) -> C
     return ChatResult(answer=answer, intent=r["intent"], reason=r["reason"], plan=r.get("plan"))
 
 
-async def stream_chat(
-    text: str, session_id: str = "default", *, graph=None, store=None
-) -> AsyncIterator[dict]:
+async def stream_chat(text: str, session_id: str = "default", *, graph=None, store=None) -> AsyncIterator[dict]:
     """流式会话循环（SSE 阶段事件）：与 chat() 同一条图、同一记忆闭环，但逐个产出事件：
 
     - {"type": "stage", "status": "start"}                           请求已受理

@@ -94,6 +94,15 @@ jobs:
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
         run: uv run pytest -q -m integration
 
+      - name: Golden intent regression (LLM)
+        # 黄金测试集门禁：阈值=实测基线（本地 4 次全 100%）留余量，防 LLM 波动 flaky
+        if: ${{ env.HAS_LLM_KEY == 'true' }}
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_BASE_URL: ${{ secrets.DEEPSEEK_BASE_URL }}
+          DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL }}
+        run: uv run python scripts/golden_intents.py --threshold 0.95
+
   docker:
     name: Build Docker image
     needs: unit

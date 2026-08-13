@@ -74,9 +74,7 @@ def make_parallel(agent):
         sub = state["current_task"]
         out = agent({**state, "user_input": sub.text})
         return {
-            "collected": [
-                {"intent": sub.intent, "text": sub.text, "answer": out["answer"], "plan": out.get("plan")}
-            ]
+            "collected": [{"intent": sub.intent, "text": sub.text, "answer": out["answer"], "plan": out.get("plan")}]
         }
 
     return node
@@ -94,9 +92,7 @@ def dispatch(state):
         sends: list[Send] = []
         primary = state["intent"]
         if not any(s.intent == primary for s in subs):
-            sends.append(
-                Send(f"p_{primary}", {"current_task": SubTask(intent=primary, text=state["user_input"])})
-            )
+            sends.append(Send(f"p_{primary}", {"current_task": SubTask(intent=primary, text=state["user_input"])}))
         sends.extend(Send(f"p_{s.intent}", {"current_task": s}) for s in subs)
         return sends
     return state["intent"]

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """黄金测试集回归：真实 LLM 批量意图分类，统计准确率（第三阶段标尺）。
 
-用法：uv run python scripts/golden_intents.py [--verbose]
+用法：uv run python scripts/golden_intents.py [--verbose] [--threshold 0.95]
 数据：tests/data/intent_golden.jsonl（每条 {input, recent?, expected, subtasks?}）
-不进 pytest（LLM 波动 + 烧 token）：作为手动回归工具，改动 prompt/schema 前后对比。
+不进 pytest（LLM 波动 + 烧 token）：作为手动回归工具与 CI integration 门禁
+（阈值由实测基线留余量得出，不用 100% 避免 flaky 假红）。
 """
 
 import argparse
@@ -19,6 +20,7 @@ DATA = Path(__file__).resolve().parent.parent / "tests" / "data" / "intent_golde
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--threshold", type=float, default=1.0, help="通过率下限（0-1），低于则退出码 1")
     args = ap.parse_args()
 
     cases = [json.loads(line) for line in DATA.read_text().splitlines() if line.strip()]
@@ -41,8 +43,10 @@ def main() -> int:
         else:
             wrong.append((c, r.intent, ",".join(s.intent for s in r.subtasks)))
             if args.verbose:
-                print(f"  ✗ {c['input'][:34]!r} → {r.intent} (期望 {c['expected']})"
-                      f" | subtasks={[s.intent for s in r.subtasks]} | {r.reason[:40]}")
+                print(
+                    f"  ✗ {c['input'][:34]!r} → {r.intent} (期望 {c['expected']})"
+                    f" | subtasks={[s.intent for s in r.subtasks]} | {r.reason[:40]}"
+                )
 
     print(f"\n黄金测试集：{total} 条 | 通过 {total - len(wrong)} | 失败 {len(wrong)}")
     print(f"整体准确率：{(total - len(wrong)) / total:.0%}")
@@ -52,10 +56,12 @@ def main() -> int:
         print("\n失败明细：")
         for c, got, subs in wrong:
             print(
-                f"  · {c['input'][:40]} | 期望 {c['expected']} | 实际 {got} | "
-                f"subtasks=[{subs}] | {c.get('note', '')}"
+                f"  · {c['input'][:40]} | 期望 {c['expected']} | 实际 {got} | subtasks=[{subs}] | {c.get('note', '')}"
             )
-    return 1 if wrong else 0
+    rate = (total - len(wrong)) / total
+    ok = rate >= args.threshold
+    print(f"通过率 {rate:.0%} vs 阈值 {args.threshold:.0%} → {'PASS' if ok else 'FAIL'}")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

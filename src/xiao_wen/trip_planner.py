@@ -25,6 +25,7 @@ def _today_cn() -> str:
     d = date.today()
     return f"{d.isoformat()}（{_WEEKDAYS[d.weekday()]}）"
 
+
 # ---- Schema（与领域契约一致） ----
 
 
@@ -36,7 +37,8 @@ class TripRequest(BaseModel):
     hotel_pref: str = Field(description="没有则填'无'")
     budget_pref: str = Field(description="没有则填'中等'")
     date_is_vague: bool = Field(
-        default=False, description="日期表达模糊（只说了下周/过几天等，无法确定到具体哪天）时为 true；给了具体日期或星期几时为 false"
+        default=False,
+        description="日期表达模糊（只说了下周/过几天等，无法确定到具体哪天）时为 true；给了具体日期或星期几时为 false",
     )
 
 
