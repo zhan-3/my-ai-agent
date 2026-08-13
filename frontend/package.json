@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "concurrently -k -n backend,ui -c yellow,cyan \"cd .. && uv run python -m xiao_wen.webapp\" \"vite\"",
     "dev:ui": "vite",
+    "dev:kill": "pkill -f \"[v]ite\" ; pkill -f \"[x]iao_wen.webapp\" ; echo 已清理 5173/8000 端口占用（如仍在用请勿执行）",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
