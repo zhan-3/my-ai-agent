@@ -1,6 +1,6 @@
 # 测试地图（答辩速查）
 
-分层测试共 115 个：**单元层 100**（无 LLM，秒级，`uv run pytest`）+ **集成层 15**（真实模型，`uv run pytest -m integration`）。
+分层测试共 116 个：**单元层 101**（无 LLM，秒级，`uv run pytest`）+ **集成层 15**（真实模型，`uv run pytest -m integration`）。
 单元层里有 6 个 Postgres 真库测试，本地没起 PG 容器时自动跳过（`skip`），CI 里配了 `POSTGRES_TEST_URL` 会真跑。
 
 | 测试文件 | 测什么 | 被问时一句话 |

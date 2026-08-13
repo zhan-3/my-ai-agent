@@ -72,10 +72,22 @@ def make_parallel(agent):
 
 
 def dispatch(state):
-    """fan-out 条件边函数：多意图 → Send 列表（并行执行）；单意图 → 字符串路由"""
+    """fan-out 条件边函数：多意图 → Send 列表（并行执行）；单意图 → 字符串路由
+
+    主导意图兜底：LLM 有时只把次要请求放进 subtasks、漏掉主导意图
+    （如「帮我安排行程，喜欢住连锁酒店」→ subtasks 仅含偏好记录），
+    此时用完整输入补一条主导意图分支，避免主导意图被静默丢弃。
+    """
     subs = state.get("subtasks")
     if subs:
-        return [Send(f"p_{s.intent}", {"current_task": s}) for s in subs]
+        sends: list[Send] = []
+        primary = state["intent"]
+        if not any(s.intent == primary for s in subs):
+            sends.append(
+                Send(f"p_{primary}", {"current_task": SubTask(intent=primary, text=state["user_input"])})
+            )
+        sends.extend(Send(f"p_{s.intent}", {"current_task": s}) for s in subs)
+        return sends
     return state["intent"]
 
 

@@ -33,6 +33,21 @@ def test_dispatch_string_route_when_single():
     assert gb.dispatch(state) == "历史查询"
 
 
+def test_dispatch_prepends_primary_when_omitted_from_subtasks():
+    """LLM 漏掉主导意图时，用完整输入补一条主导意图分支（防行程规划被静默丢弃）"""
+    state = {
+        "subtasks": [SubTask(intent="偏好记录", text="喜欢住连锁酒店")],
+        "intent": "行程规划",
+        "user_input": "我下周从北京去杭州出差三天，喜欢住连锁酒店，帮我安排一下行程。",
+    }
+    out = gb.dispatch(state)
+    assert isinstance(out, list) and len(out) == 2
+    assert [s.node for s in out] == ["p_行程规划", "p_偏好记录"]
+    primary = out[0]
+    assert primary.arg["current_task"].intent == "行程规划"
+    assert primary.arg["current_task"].text == state["user_input"]
+
+
 def test_make_parallel_routes_current_task():
     seen = []
 
