@@ -39,6 +39,7 @@ class ChatResponse(BaseModel):
     answer: str
     intent: str
     reason: str
+    plan: dict | None = None  # 结构化行程（slice 1）：前端数据驱动渲染；非行程为 None
 
 
 class AuthResponse(BaseModel):
@@ -75,7 +76,9 @@ def chat(req: ChatRequest, authorization: str | None = Header(default=None)) -> 
         raise HTTPException(status_code=400, detail="输入不能为空")
     try:
         r = run_chat(text, user)
-        return ChatResponse(answer=r.answer, intent=r.intent, reason=r.reason)
+        return ChatResponse(
+            answer=r.answer, intent=r.intent, reason=r.reason, plan=getattr(r, "plan", None)
+        )
     except Exception as e:
         from xiao_wen.stability import logger
 

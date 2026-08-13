@@ -18,6 +18,7 @@ class ChatResult:
     answer: str
     intent: str
     reason: str
+    plan: dict | None = None  # 结构化行程（slice 1：行程 Agent 产出；非行程为 None）
 
 
 def chat(text: str, session_id: str = "default", *, graph=None, store=None) -> ChatResult:
@@ -45,4 +46,4 @@ def chat(text: str, session_id: str = "default", *, graph=None, store=None) -> C
     )
     store.add_message("user", text, session_id=session_id)
     store.add_message("assistant", r["answer"], session_id=session_id)
-    return ChatResult(answer=r["answer"], intent=r["intent"], reason=r["reason"])
+    return ChatResult(answer=r["answer"], intent=r["intent"], reason=r["reason"], plan=r.get("plan"))

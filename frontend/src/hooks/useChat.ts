@@ -2,11 +2,13 @@ import { useCallback, useRef, useState } from 'react'
 import { sendMessage, type ChatResponse } from '@/api/chat'
 import { ApiError } from '@/api/client'
 import { getStoredToken } from '@/lib/storage'
+import type { TripPlan } from '@/lib/trip'
 
 export interface ChatMessage {
   role: 'user' | 'ai'
   text: string
   intent?: string
+  plan?: TripPlan | null
 }
 
 const NETWORK_FALLBACK = '⚠️ 网络错误，请确认后端已启动。'
@@ -27,14 +29,17 @@ export function useChat({ onUnauthorized }: { onUnauthorized: () => void }) {
       setMessages((m) => [...m, { role: 'user', text: t }])
       try {
         const res = await sendMessage(t, getStoredToken() ?? '')
-        setMessages((m) => [...m, { role: 'ai', text: res.answer, intent: res.intent }])
+        setMessages((m) => [
+          ...m,
+          { role: 'ai', text: res.answer, intent: res.intent, plan: res.plan ?? null },
+        ])
         return res
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) {
           onUnauthorized() // 登录失效：登出，不追加错误消息
           return null
         }
-        setMessages((m) => [...m, { role: 'ai', text: NETWORK_FALLBACK }])
+        setMessages((m) => [...m, { role: 'ai', text: NETWORK_FALLBACK, plan: null }])
         return null
       } finally {
         busyRef.current = false

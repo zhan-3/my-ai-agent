@@ -8,7 +8,8 @@ import TripCard from '@/components/TripCard'
 export default function MessageBubble({ msg }: { msg: ChatMessage }) {
   const [shown, setShown] = useState(msg.role === 'user' ? msg.text : '')
 
-  const isTrip = msg.role === 'ai' && isTripAnswer(msg.intent ?? '', msg.text)
+  // slice 1：后端带结构化 plan 即行程；旧后端回退到「意图+文本特征」判断
+  const isTrip = msg.role === 'ai' && (msg.plan != null || isTripAnswer(msg.intent ?? '', msg.text))
 
   useEffect(() => {
     if (msg.role !== 'ai' || isTrip) {
@@ -48,7 +49,7 @@ export default function MessageBubble({ msg }: { msg: ChatMessage }) {
       </div>
       {isTrip ? (
         <div className="max-w-[85%]">
-          <TripCard text={msg.text} />
+          <TripCard text={msg.text} plan={msg.plan} />
         </div>
       ) : (
         <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-tl-sm bg-muted px-4 py-2.5 text-sm">

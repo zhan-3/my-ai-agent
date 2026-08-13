@@ -6,7 +6,16 @@ import { ApiError } from '@/api/client'
 
 vi.mock('@/api/chat', () => ({ sendMessage: vi.fn() }))
 
-const okResponse: chatApi.ChatResponse = { answer: '答', intent: '其他', reason: 'r' }
+const okPlan = {
+  summary: '北京出差 4 天',
+  reasons: ['按差旅标准选住宿'],
+  date_is_vague: false,
+  days: [
+    { date: '2026-10-08', transport: '高铁 G1', hotel: '汉庭', activities: ['上午开会'], notes: '' },
+  ],
+}
+
+const okResponse: chatApi.ChatResponse = { answer: '答', intent: '行程规划', reason: 'r', plan: okPlan }
 
 describe('useChat 发送流', () => {
   beforeEach(() => {
@@ -24,7 +33,7 @@ describe('useChat 发送流', () => {
 
     expect(result.current.messages).toEqual([
       { role: 'user', text: '你好' },
-      { role: 'ai', text: '答', intent: '其他' },
+      { role: 'ai', text: '答', intent: '行程规划', plan: okPlan },
     ])
     expect(result.current.busy).toBe(false)
   })
@@ -76,6 +85,7 @@ describe('useChat 发送流', () => {
     expect(result.current.messages.at(-1)).toEqual({
       role: 'ai',
       text: '⚠️ 网络错误，请确认后端已启动。',
+      plan: null,
     })
   })
 })

@@ -27,8 +27,14 @@ from xiao_wen import intent
 from xiao_wen.intent import SubTask
 from xiao_wen.plugin_registry import discover, load_agent
 
-
 # ---- State（统一：并行字段可空，单意图图不填即不触发并行路径） ----
+
+
+def _first_plan(a: dict | None, b: dict | None) -> dict | None:
+    """plan 归约器：单意图直写与并行 merge 都可能写 plan，取第一个非空（主导意图优先）"""
+    return a if a is not None else b
+
+
 class State(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     user_input: str
@@ -40,6 +46,7 @@ class State(TypedDict):
     current_task: NotRequired[SubTask]  # Send 分支内当前子任务
     collected: NotRequired[Annotated[list[dict], operator.add]]  # 并行结果收集（归约器拼接）
     session_id: NotRequired[str]  # 会话维度（记忆隔离；未传时 agent 兑底 "default"）
+    plan: NotRequired[Annotated[dict | None, _first_plan]]  # 结构化行程（行程 Agent 产出；非行程为 None）
 
 
 # ---- 分类节点（唯一实现：恒返回 subtasks，由 parallel 参数决定是否使用） ----
@@ -66,7 +73,11 @@ def make_parallel(agent):
     def node(state):
         sub = state["current_task"]
         out = agent({**state, "user_input": sub.text})
-        return {"collected": [{"intent": sub.intent, "text": sub.text, "answer": out["answer"]}]}
+        return {
+            "collected": [
+                {"intent": sub.intent, "text": sub.text, "answer": out["answer"], "plan": out.get("plan")}
+            ]
+        }
 
     return node
 
@@ -98,7 +109,9 @@ def merge(state):
         lines.append(f"【{p['intent']}】{p['text']}")
         lines.append(p["answer"])
         lines.append("")
-    return {"answer": "\n".join(lines)}
+    # 结构化 plan：多路结果取第一个非空（主导意图优先，其余分支通常无 plan）
+    plan = next((p.get("plan") for p in parts if p.get("plan")), None)
+    return {"answer": "\n".join(lines), "plan": plan}
 
 
 # ---- 指纹缓存（热插拔：manifest 变化自动重建） ----

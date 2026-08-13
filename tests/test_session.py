@@ -31,6 +31,7 @@ def test_chat_loop_four_actions():
 
     assert isinstance(r, ChatResult)
     assert r.answer == "答" and r.intent == "其他" and r.reason == "测试"
+    assert r.plan is None, "图未产出 plan 时 ChatResult.plan 应为 None"
     # 注入的 recent 包含历史
     assert "上一轮" in graph.calls[0]["recent"]
     assert graph.calls[0]["user_input"] == "新问题"
@@ -38,6 +39,23 @@ def test_chat_loop_four_actions():
     msgs = memory_store.get_recent_messages(6)
     assert [m["role"] for m in msgs[-2:]] == ["user", "assistant"]
     assert [m["content"] for m in msgs[-2:]] == ["新问题", "答"]
+
+
+def test_chat_propagates_structured_plan():
+    """图产出结构化 plan → ChatResult.plan 原样透传（slice 1：前端数据驱动的数据源）"""
+    plan = {
+        "summary": "北京出差 4 天",
+        "reasons": ["按差旅标准选住宿"],
+        "date_is_vague": False,
+        "days": [{"date": "2026-10-08", "transport": "高铁 G1", "hotel": "汉庭", "activities": ["开会"], "notes": ""}],
+    }
+
+    class PlanGraph:
+        def invoke(self, state):
+            return {"answer": "行程如下", "intent": "行程规划", "reason": "r", "plan": plan}
+
+    r = chat("规划行程", graph=PlanGraph())
+    assert r.plan == plan
 
 
 def test_chat_propagates_exceptions():
@@ -221,6 +239,59 @@ def test_itinerary_agent_passes_session_to_trip_planner(monkeypatch):
     assert captured["session_id"] == "会话A"  # 行程写进 A 会话
     assert captured["summary"] == "北京出差 4 天"
     assert "北京" in out["answer"]
+
+
+def test_itinerary_agent_returns_structured_plan(monkeypatch):
+    """行程 agent：生成成功 → 返回结构化 plan（slice 1 数据驱动源）；缺项 → plan 为 None"""
+    from xiao_wen import trip_planner
+    from xiao_wen.agents import itinerary_agent
+
+    req = trip_planner.TripRequest(
+        from_city="上海", to_city="北京", start_date="2026-10-08", duration_days=4,
+        hotel_pref="无", budget_pref="中等",
+    )
+    plan = trip_planner.ItineraryPlan(
+        days=[trip_planner.DayPlan(
+            date="2026-10-08", transport="高铁 G1", hotel="汉庭", activities=["上午开会"], notes=""
+        )],
+        summary="北京出差 4 天",
+        reasons=["按差旅标准选住宿"],
+    )
+
+    class FakeExtract:
+        def invoke(self, _):
+            return req
+
+    class FakePlan:
+        def invoke(self, _):
+            return plan
+
+    monkeypatch.setattr(trip_planner, "_extract_model", FakeExtract)
+    monkeypatch.setattr(trip_planner, "_plan_model", FakePlan)
+    monkeypatch.setattr(
+        trip_planner, "add_itinerary", lambda facts, summary, *, session_id="default": {"summary": summary}
+    )
+    monkeypatch.setattr(itinerary_agent, "get_weather", type("W", (), {"invoke": lambda self, a: "晴"})())
+
+    out = itinerary_agent.run({"user_input": "10月8日去北京开会4天", "session_id": "会话A"})
+    assert out["plan"] == {
+        **plan.model_dump(),
+        "date_is_vague": False,
+    }
+    assert out["plan"]["days"][0]["transport"] == "高铁 G1"
+
+    # 缺项（NeedsInfo）：plan 为 None，前端走文本回退
+    vague_req = trip_planner.TripRequest(
+        from_city="上海", to_city="", start_date="", duration_days=0, hotel_pref="无", budget_pref="中等"
+    )
+
+    class FakeExtract2:
+        def invoke(self, _):
+            return vague_req
+
+    monkeypatch.setattr(trip_planner, "_extract_model", FakeExtract2)
+    out2 = itinerary_agent.run({"user_input": "帮我规划", "session_id": "会话A"})
+    assert out2.get("plan") is None
 
 
 def test_itinerary_agent_appends_weather_reminder(monkeypatch):

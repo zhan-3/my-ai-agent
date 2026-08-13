@@ -22,7 +22,7 @@ def run(state) -> dict:
     """两阶段管线（要素提取→行程生成）收口于 trip_planner.plan（ADR-0003）；生成成功后附加目的地天气提醒"""
     r = _trip_plan(state["user_input"], session_id=state.get("session_id", "default"))
     if isinstance(r, NeedsInfo):
-        return {"answer": needs_info_text(r)}
+        return {"answer": needs_info_text(r), "plan": None}
     answer = format_plan(r.plan)
     req = r.request
     if req and req.date_is_vague:
@@ -38,4 +38,7 @@ def run(state) -> dict:
     if req and req.to_city not in ("待定", "未知", "") and req.start_date not in ("待定", ""):
         with suppress(Exception):  # 天气是锦上添花：查不到（超 7 天/网络异常）不影响行程主答案
             answer += f"\n\n🌤️ 目的地天气提醒：{get_weather.invoke({'city': req.to_city, 'date': req.start_date})}"
-    return {"answer": answer}
+    # 结构化 plan（slice 1）：展示层数据驱动。预算/天气刻意留在文本，前端从文本解析附加块
+    plan = r.plan.model_dump()
+    plan["date_is_vague"] = bool(req and req.date_is_vague)
+    return {"answer": answer, "plan": plan}

@@ -1,8 +1,11 @@
+import { useMemo } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
-import { parseTrip, type ParsedTrip } from '@/lib/trip'
+import { parseTrip, planToParsed, type TripPlan } from '@/lib/trip'
 
-// 行程卡片：数据驱动渲染（来源：旧 renderTripCard 的展示结构，解析收口到 lib/trip 纯函数）
-// slice 1 后端返回结构化 plan 后，本组件改为直接吃 plan（解析函数保留作回退兜底）
+// 行程卡片：数据驱动渲染。
+// slice 1：后端 /api/chat 带结构化 plan → 直接按 plan 渲染；旧后端/缺 plan → 解析文本回退。
+// 两种来源先归一化成同一渲染形状（planToParsed / parseTrip），卡片只画一种结构；
+// 💰预算/🌤️天气/📅日期提示等附加块刻意留在文本里，无论哪种来源都从文本解析补上。
 
 const ROW_CLS: Record<string, string> = {
   交通: 'text-blue-600 dark:text-blue-400',
@@ -12,8 +15,16 @@ const ROW_CLS: Record<string, string> = {
   备注: 'text-muted-foreground',
 }
 
-export default function TripCard({ text }: { text: string }) {
-  const trip: ParsedTrip = parseTrip(text)
+export default function TripCard({ text, plan }: { text: string; plan?: TripPlan | null }) {
+  const trip = useMemo(() => {
+    const parsed = parseTrip(text)
+    if (!plan) return parsed // 文本回退：旧后端/无 plan
+    return {
+      ...planToParsed(plan),
+      budget: parsed.budget, // 附加块不在 plan 里，从文本取
+      reminders: parsed.reminders,
+    }
+  }, [text, plan])
 
   return (
     <Card className="border-primary/20">
@@ -48,6 +59,9 @@ export default function TripCard({ text }: { text: string }) {
             </div>
           </div>
         ))}
+        {trip.budget && (
+          <div className="whitespace-pre-wrap rounded-lg bg-muted/50 p-3 text-sm">{trip.budget}</div>
+        )}
         {trip.reminders.map((r, i) => (
           <div key={`r${i}`} className="text-sm text-muted-foreground">
             {r.text}

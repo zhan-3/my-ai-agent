@@ -35,6 +35,42 @@ def test_parallel_is_superset_of_single():
     assert business <= parallel, f"调度图缺失单意图图的业务节点：{business - parallel}"
 
 
+def test_merge_picks_first_nonempty_plan():
+    """并行 merge：多路结果中取第一个非空 plan（主导意图优先，其余分支无 plan）"""
+    plan = {"summary": "北京出差", "days": [], "reasons": []}
+    out = gb.merge(
+        {
+            "collected": [
+                {"intent": "偏好记录", "text": "x", "answer": "记好了", "plan": None},
+                {"intent": "行程规划", "text": "y", "answer": "行程如下", "plan": plan},
+                {"intent": "知识问答", "text": "z", "answer": "标准如下", "plan": None},
+            ]
+        }
+    )
+    assert out["plan"] == plan
+    assert "同时为你处理了 3 个请求" in out["answer"]
+
+
+def test_merge_without_plan_returns_none():
+    """并行 merge：无任何分支产出 plan → plan 为 None（前端走文本回退渲染）"""
+    out = gb.merge(
+        {
+            "collected": [
+                {"intent": "知识问答", "text": "q", "answer": "标准如下", "plan": None},
+            ]
+        }
+    )
+    assert out["plan"] is None
+
+
+def test_plan_reducer_keeps_first_nonempty():
+    """plan 归约器：第一个非空值胜出（单意图直写 / 并行 merge 双来源安全）"""
+    plan = {"summary": "s", "days": [], "reasons": []}
+    assert gb._first_plan(None, None) is None
+    assert gb._first_plan(None, plan) == plan
+    assert gb._first_plan(plan, {"summary": "other"}) == plan, "已有 plan 时后续写入不覆盖（主导优先）"
+
+
 # ---------------- 指纹缓存（热插拔：manifest 变化自动重建） ----------------
 
 

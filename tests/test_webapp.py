@@ -105,6 +105,39 @@ class TestChatAuthEnforced:
         assert r.status_code == 200
         assert calls == [("你好", "zhang")]  # 客户端自填被忽略
 
+    def test_chat_returns_structured_plan(self, client, monkeypatch):
+        """slice 1：run_chat 产出 plan → /api/chat 响应带 plan；无 plan → None（非行程）"""
+        plan = {"summary": "北京出差", "days": [], "reasons": [], "date_is_vague": False}
+
+        class FakeResult:
+            answer = "行程如下"
+            intent = "行程规划"
+            reason = "r"
+
+        FakeResult.plan = plan  # 类体里 plan = plan 查不到外层局部变量（LOAD_NAME 不闭包），故后置
+        monkeypatch.setattr(webapp, "run_chat", lambda text, session_id: FakeResult())
+        token = client.post(
+            "/api/auth/register", json={"username": "zhang", "password": "pass123"}
+        ).json()["token"]
+        r = client.post(
+            "/api/chat", json={"user_input": "10月8日去北京开会4天"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        assert r.json()["plan"] == plan
+
+        class PlainResult:
+            answer = "标准如下"
+            intent = "知识问答"
+            reason = "r"
+
+        monkeypatch.setattr(webapp, "run_chat", lambda text, session_id: PlainResult())
+        r2 = client.post(
+            "/api/chat", json={"user_input": "差旅标准"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r2.status_code == 200 and r2.json()["plan"] is None
+
     def test_two_users_isolated(self, client, monkeypatch):
         """用户 A/B 各自 token → 会话维度各自独立"""
         seen: dict[str, int] = {}
