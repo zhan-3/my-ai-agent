@@ -67,9 +67,11 @@ jobs:
     name: 集成层（真实 LLM）
     needs: unit
     runs-on: ubuntu-latest
-    # 只对主分支推送跑真 LLM（PR 不跑，省配额）；secrets 上下文在 job 级 if 不可用
-    # （GitHub 限制）→ 判断放 step 级，job 级仅限 push
+    # 只对主分支推送跑真 LLM（PR 不跑，省配额）
     if: github.event_name == 'push'
+    # secrets 上下文不能在 if 里用（GitHub 硬限制）→ 用 env 中转布尔，env 在 if 里可用
+    env:
+      HAS_LLM_KEY: ${{ secrets.DEEPSEEK_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -84,7 +86,7 @@ jobs:
 
       - name: 集成测试（真实 LLM，约 1 分钟）
         # 仓库未配 secrets（如 fork）→ 自动跳过，防密钥泄露
-        if: ${{ secrets.DEEPSEEK_API_KEY != '' }}
+        if: ${{ env.HAS_LLM_KEY == 'true' }}
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DEEPSEEK_BASE_URL: ${{ secrets.DEEPSEEK_BASE_URL }}
