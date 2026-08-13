@@ -22,6 +22,10 @@ class ChatResult:
     plan: dict | None = None  # 结构化行程（slice 1：行程 Agent 产出；非行程为 None）
 
 
+# 防御：任何 Agent 返回空/缺失 answer 时的兜底文案（LLM 偶发 None/空串）
+_FALLBACK_ANSWER = "（暂无回复，请换个说法再试一次）"
+
+
 def chat(text: str, session_id: str = "default", *, graph=None, store=None) -> ChatResult:
     """一轮对话闭环。
 
@@ -46,8 +50,10 @@ def chat(text: str, session_id: str = "default", *, graph=None, store=None) -> C
         }
     )
     store.add_message("user", text, session_id=session_id)
-    store.add_message("assistant", r["answer"], session_id=session_id)
-    return ChatResult(answer=r["answer"], intent=r["intent"], reason=r["reason"], plan=r.get("plan"))
+    raw = r.get("answer") if isinstance(r, dict) else getattr(r, "answer", "")
+    answer = raw or _FALLBACK_ANSWER
+    store.add_message("assistant", answer, session_id=session_id)
+    return ChatResult(answer=answer, intent=r["intent"], reason=r["reason"], plan=r.get("plan"))
 
 
 async def stream_chat(
@@ -97,6 +103,10 @@ async def stream_chat(
                 stage = _stage_event(node, "done")
                 if stage:
                     yield stage
+                out = ev.get("data", {}).get("output")
+                if isinstance(out, dict):
+                    # 普通函数节点不产生 stream chunk，其写入（如行程 plan）在 output 里
+                    final = {**(final or {}), **out}
             elif etype == "on_chain_stream":
                 chunk = ev.get("data", {}).get("chunk")
                 if chunk is None:
@@ -117,13 +127,16 @@ async def stream_chat(
     from xiao_wen.stability import logger
 
     store.add_message("user", text, session_id=session_id)
-    store.add_message("assistant", final.get("answer", ""), session_id=session_id)
+    answer = final.get("answer") or _FALLBACK_ANSWER
+    store.add_message("assistant", answer, session_id=session_id)
+    plan = plan_or_none(final.get("plan"))
     yield {
         "type": "done",
-        "answer": final.get("answer", ""),
+        "answer": answer,
         "intent": final.get("intent", ""),
         "reason": final.get("reason", ""),
-        "plan": plan_or_none(final.get("plan")),
+        # SSE 由 json.dumps 手写序列化：plan 必须输出 dict（与 POST /api/chat 响应体一致）
+        "plan": plan.model_dump() if plan else None,
     }
 
 

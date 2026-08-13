@@ -75,6 +75,7 @@ extract_prompt = ChatPromptTemplate.from_messages(
 键名必须严格为英文：from_city、to_city、start_date（YYYY-MM-DD）、duration_days（数字）、
 hotel_pref（没有填"无"）、budget_pref（经济/中等/舒适，没有填"中等"）、
 date_is_vague（布尔：日期表达模糊如「下周」「过几天」时为 true；给了具体日期或星期几如「8月17日」「下周一」「明天」时为 false）。
+from_city/to_city：只在原文明确提到城市时才填（如「从广州」「去北京」）；没提到就填"待定"，绝不编造或从其他词猜测城市。
 相对时间（如「下周」「明天」「下周一」「后天」）必须按「今天」推算成具体 YYYY-MM-DD，不要填"待定"；完全没提日期才填"待定"。
 示例：{{"from_city": "北京", "to_city": "杭州", "start_date": "2026-08-20", "duration_days": 3, "hotel_pref": "无", "budget_pref": "中等", "date_is_vague": false}}，
 模糊示例：{{"from_city": "北京", "to_city": "杭州", "start_date": "2026-08-17", "duration_days": 3, "hotel_pref": "无", "budget_pref": "中等", "date_is_vague": true}}（用户只说了「下周」）""",
@@ -126,10 +127,11 @@ def _plan_model():
 
 def _missing(req: TripRequest) -> list[str]:
     """检查必填要素缺失，返回缺失清单（基础项 E：缺失信息提示）"""
+    _UNKNOWN = ("待定", "未知", "出差")
     miss = []
-    if not req.to_city or req.to_city in ("待定", "未知"):
+    if not req.to_city or req.to_city in _UNKNOWN:
         miss.append("目的城市")
-    if not req.from_city or req.from_city in ("待定", "未知"):
+    if not req.from_city or req.from_city in _UNKNOWN:
         miss.append("出发城市")
     if req.start_date in ("待定", ""):
         miss.append("出发日期")
@@ -147,7 +149,7 @@ def plan(user_input: str, *, session_id: str = "default") -> PlanResult | NeedsI
     assert isinstance(req, TripRequest)
     # 常驻城市补全：先于缺项检查（"用户没说出发城市但记忆里有"不算缺项）
     hc = get_home_city(session_id=session_id)
-    if (not req.from_city or req.from_city in ("待定", "未知")) and hc:
+    if (not req.from_city or req.from_city in ("待定", "未知", "出差")) and hc:
         req.from_city = hc
     miss = _missing(req)
     if miss:

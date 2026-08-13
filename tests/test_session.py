@@ -103,7 +103,7 @@ def test_stream_chat_emits_stages_then_done():
     done = out[-1]
     assert done["type"] == "done"
     assert done["answer"] == "行程如下" and done["intent"] == "行程规划"
-    assert done["plan"].model_dump() == plan  # 契约层验证后返回 TripPlan 实例
+    assert done["plan"] == plan  # 契约层验证后输出 dict（与 POST /api/chat 响应体一致）
     # 记忆写回两轮（与 chat() 一致）
     msgs = memory_store.get_recent_messages(6)
     assert [m["content"] for m in msgs[-2:]] == ["规划行程", "行程如下"]
@@ -553,3 +553,58 @@ def test_history_agent_answers_what_was_asked(monkeypatch):
     # 综合查询（无关键词）：全答，且空态也说明
     out3 = history_agent.run({"session_id": "会话E"})
     assert "不吃辣" in out3["answer"] and "暂无历史行程记录" in out3["answer"]
+
+
+def test_stream_chat_plan_from_on_chain_end_output():
+    """普通函数节点不产生 stream chunk——plan 写在 on_chain_end 的 output 里，也必须捕获"""
+    import asyncio
+
+    from xiao_wen.session import stream_chat
+
+    plan = {"summary": "广州出差", "days": [], "reasons": [], "date_is_vague": False}
+    events = [
+        ("on_chain_start", "classify_intent", None, None),
+        ("on_chain_stream", "classify_intent", {"intent": "行程规划", "reason": "r"}, None),
+        ("on_chain_end", "classify_intent", None, None),
+        ("on_chain_start", "行程规划", None, None),
+        # 无 on_chain_stream：行程 agent 是普通函数节点，只产出 on_chain_end.output
+        ("on_chain_end", "行程规划", None, {"answer": "行程如下", "plan": plan}),
+    ]
+
+    class FakeStreamGraph:
+        async def astream_events(self, state, **kwargs):
+            for etype, node, chunk, output in events:
+                yield {
+                    "event": etype,
+                    "name": node,
+                    "metadata": {"langgraph_node": node},
+                    "data": {"chunk": chunk, "output": output},
+                }
+
+    out = []
+
+    async def run():
+        async for ev in stream_chat("规划行程", graph=FakeStreamGraph()):
+            out.append(ev)
+
+    asyncio.run(run())
+
+    done = out[-1]
+    assert done["type"] == "done"
+    assert done["answer"] == "行程如下"
+    assert done["plan"] == plan  # on_chain_end output 捕获后同样输出 dict
+
+
+def test_chat_falls_back_on_empty_answer(monkeypatch):
+    """防御：Agent 返回空/缺失 answer → 兜底文案，不向前端吐空串"""
+    from xiao_wen import session as sess
+
+    class FakeGraph:
+        def invoke(self, state):
+            return {"answer": "", "intent": "其他", "reason": "r"}
+
+    store = memory_store
+    r = sess.chat("你好", graph=FakeGraph(), store=store)
+    assert r.answer == sess._FALLBACK_ANSWER
+    msgs = store.get_recent_messages(6)
+    assert msgs[-1]["content"] == sess._FALLBACK_ANSWER

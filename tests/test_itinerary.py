@@ -173,3 +173,10 @@ def test_format_budget_readable():
     assert "G31" in text and "553" in text
     assert "400 元/晚 × 2 晚" in text and "≈ 800 元" in text
     assert "参考价" in text and "合计" in text
+
+
+def test_missing_treats_garbage_city_as_missing(monkeypatch):
+    """提取器被 LLM 填了垃圾城市值（如「出差」）时仍应视为缺项——不能编造无目的地行程"""
+    assert "目的城市" in _it._missing(_req(to_city="出差"))
+    assert "出发城市" in _it._missing(_req(from_city="出差"))
+    assert _it._missing(_req(to_city="杭州", from_city="上海")) == []
