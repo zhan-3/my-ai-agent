@@ -113,6 +113,9 @@ async def stream_chat(
     if final is None:  # 防御：图没产出任何 state
         yield {"type": "error", "message": "⚠️ 服务暂时不可用，请稍后再试。"}
         return
+    from xiao_wen.contract import plan_or_none
+    from xiao_wen.stability import logger
+
     store.add_message("user", text, session_id=session_id)
     store.add_message("assistant", final.get("answer", ""), session_id=session_id)
     yield {
@@ -120,7 +123,7 @@ async def stream_chat(
         "answer": final.get("answer", ""),
         "intent": final.get("intent", ""),
         "reason": final.get("reason", ""),
-        "plan": final.get("plan"),
+        "plan": plan_or_none(final.get("plan")),
     }
 
 

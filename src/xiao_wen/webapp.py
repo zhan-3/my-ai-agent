@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from xiao_wen import auth
+from xiao_wen.contract import Itinerary, MemorySnapshot, Preference, TripPlan, plan_or_none
 from xiao_wen.session import chat as run_chat  # 会话循环收口（默认 = 图工厂调度图，多意图并行）
 from xiao_wen.session import stream_chat  # 流式会话循环（SSE 阶段事件）
 
@@ -41,7 +42,7 @@ class ChatResponse(BaseModel):
     answer: str
     intent: str
     reason: str
-    plan: dict | None = None  # 结构化行程（slice 1）：前端数据驱动渲染；非行程为 None
+    plan: TripPlan | None = None  # 结构化行程（契约 TripPlan，OpenAPI 自动出 schema）；非行程/结构不符为 None
 
 
 class AuthResponse(BaseModel):
@@ -79,7 +80,7 @@ def chat(req: ChatRequest, authorization: str | None = Header(default=None)) -> 
     try:
         r = run_chat(text, user)
         return ChatResponse(
-            answer=r.answer, intent=r.intent, reason=r.reason, plan=getattr(r, "plan", None)
+            answer=r.answer, intent=r.intent, reason=r.reason, plan=plan_or_none(getattr(r, "plan", None))
         )
     except Exception as e:
         from xiao_wen.stability import logger
@@ -147,16 +148,16 @@ def me(authorization: str | None = Header(default=None)) -> dict:
     return {"username": _current_user(authorization)}
 
 
-@app.get("/api/memory")
-def memory(authorization: str | None = Header(default=None)) -> dict:
+@app.get("/api/memory", response_model=MemorySnapshot)
+def memory(authorization: str | None = Header(default=None)) -> MemorySnapshot:
     """当前用户记忆快照：偏好 + 历史行程（前端记忆侧栏可视化，体现 Agent 长期记忆）"""
     user = _current_user(authorization)
     from xiao_wen.memory import get_itineraries, get_preferences
 
-    return {
-        "preferences": get_preferences(session_id=user),
-        "itineraries": get_itineraries(session_id=user),
-    }
+    return MemorySnapshot(
+        preferences=[Preference(**p) for p in get_preferences(session_id=user)],
+        itineraries=[Itinerary(**it) for it in get_itineraries(session_id=user)],
+    )
 
 
 # ---- 前端页面（随文件存放，同目录 static/index.html） ----

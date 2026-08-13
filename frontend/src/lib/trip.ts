@@ -25,19 +25,11 @@ export interface ParsedTrip {
   reminders: TripReminder[]
 }
 
-// slice 1 结构化 plan：后端 ItineraryPlan + date_is_vague（/api/chat → plan）
-export interface TripPlan {
-  summary: string
-  reasons: string[]
-  date_is_vague?: boolean
-  days: {
-    date: string
-    transport: string
-    hotel: string
-    activities: string[]
-    notes: string
-  }[]
-}
+// slice 1 结构化 plan：契约类型来自后端 OpenAPI（src/api/contract.ts，pnpm gen:api 生成）
+import type { TripPlan } from '@/api/contract'
+
+export type { TripPlan }
+
 
 const ROW_RE = /^(交通|住宿|活动|用餐|备注)[：:]\s*(.*)$/
 

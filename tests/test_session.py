@@ -64,7 +64,7 @@ def test_stream_chat_emits_stages_then_done():
 
     from xiao_wen.session import stream_chat
 
-    plan = {"summary": "北京出差", "days": [], "reasons": []}
+    plan = {"summary": "北京出差", "days": [], "reasons": [], "date_is_vague": False}
     events = [
         ("on_chain_start", "classify_intent", None),
         ("on_chain_stream", "classify_intent", {"intent": "行程规划", "reason": "r"}),
@@ -102,7 +102,8 @@ def test_stream_chat_emits_stages_then_done():
     assert ("working", "classify_intent") not in stages, "内部节点不暴露为阶段"
     done = out[-1]
     assert done["type"] == "done"
-    assert done["answer"] == "行程如下" and done["plan"] == plan and done["intent"] == "行程规划"
+    assert done["answer"] == "行程如下" and done["intent"] == "行程规划"
+    assert done["plan"].model_dump() == plan  # 契约层验证后返回 TripPlan 实例
     # 记忆写回两轮（与 chat() 一致）
     msgs = memory_store.get_recent_messages(6)
     assert [m["content"] for m in msgs[-2:]] == ["规划行程", "行程如下"]
