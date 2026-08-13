@@ -39,6 +39,28 @@ def test_merge_tiny_chunks_merges_short():
     assert merged[0][1] == "标题 这是正文内容"
 
 
+def test_load_chunks_groups_sections_bug004():
+    """BUG-004：按章节聚合分块——住宿标准整节一块（含 500/400/300），不再碎成小块"""
+    chunks = rag.load_chunks()
+    hotel = [t for stem, t in chunks if stem == "01_travel_standards" and "三、住宿标准" in t]
+    assert hotel, "应存在整节的住宿标准块"
+    assert any("500元/晚" in t and "300元/晚" in t for t in hotel), (
+        "住宿标准一线与三线应在同一块内（原实现被切成 5 小块导致检索不到）"
+    )
+
+
+def test_split_compound_query():
+    """BUG-004：复合问句按并列连词拆子问句；非复合/过短不误拆"""
+    assert rag._split_compound_query("公司差旅住宿和餐补标准是怎样的？") == ["公司差旅住宿", "餐补标准是怎样的？"]
+    assert rag._split_compound_query("出差打车和住宿能报销吗") == ["出差打车", "住宿能报销吗"]
+    # 非复合（无并列连词）：原句单路
+    assert rag._split_compound_query("一线城市的住宿标准是多少") == ["一线城市的住宿标准是多少"]
+    # 城市对比句也拆（每城各自检索反而更准），但不产生空/单字符子句
+    assert rag._split_compound_query("北京和上海有什么不同") == ["北京", "上海有什么不同"]
+    # 拆出过短子句（<2 字）→ 不拆（防误伤）
+    assert rag._split_compound_query("北京和") == ["北京和"]
+
+
 # ---------------- 单元层：embedding 鲁棒性（懒校验 + 重试，全本地） ----------------
 
 

@@ -43,6 +43,15 @@ pref_prompt = ChatPromptTemplate.from_messages(
 - category：严格是六词之一：住宿、餐饮、交通、预算、常驻城市、其他
 - content：偏好内容一句话
 - is_update：布尔。用户表达「现在/改成/以后/不再/其实是」等更新语气时 true，否则 false。
+**常驻城市的边界（重要）**：只有「常住/定居/家在/目前住在」才算常驻城市；
+「去过XX」「常去XX」「之前去过XX」「到过XX」是出差经历/历史行程，**不是**常驻城市，
+应记 category=「其他」（如 content=「去过上海出差」），绝不能写进常驻城市；
+「常去的城市是北京深圳」同样不是常驻城市 → 记「其他」。
+示例：「我之前出差去过上海，住过全季酒店」→
+{{"records": [
+  {{"category": "其他", "content": "去过上海出差", "is_update": false}},
+  {{"category": "住宿", "content": "住过全季酒店", "is_update": false}}
+]}}
 示例：「我喜欢住汉庭，常住上海」→
 {{"records": [
   {{"category": "住宿", "content": "喜欢住汉庭", "is_update": false}},
@@ -56,13 +65,31 @@ pref_prompt = ChatPromptTemplate.from_messages(
 
 
 @lru_cache
+# 防御重试：json_mode 结构化输出偶发截断/非法 JSON（BUG-005，实测 ~4%），
+# 解析失败重试 2 次（同一输入，LLM 自愈），仍失败再抛（走稳定性兜底）
 def _pref_model():
     return pref_prompt | llm.get_llm().with_structured_output(PreferenceList, method="json_mode")
 
 
+def _invoke_pref_model(input_text: str, retries: int = 2) -> PreferenceList:
+    """调用偏好提取模型；解析失败（截断/非法 JSON）重试，LLM 自愈"""
+    from xiao_wen.stability import logger
+
+    last_err: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            r = _pref_model().invoke({"input": input_text})
+            assert isinstance(r, PreferenceList)
+            return r
+        except Exception as e:
+            last_err = e
+            if attempt < retries:
+                logger.warning("偏好提取解析失败（第 %d/%d 次），重试：%s", attempt + 1, retries, e)
+    raise last_err  # type: ignore[misc]  # 重试耗尽：向上抛（web 层稳定性兜底）
+
+
 def run(state) -> dict:
-    r = _pref_model().invoke({"input": state["user_input"]})
-    assert isinstance(r, PreferenceList)
+    r = _invoke_pref_model(state["user_input"])
     # 追加/覆盖区分：is_update=True 时替换同类别旧条目（如「我现在常住上海」）
     if not r.records:
         # 疑问句/非偏好陈述：不写任何记忆（防止垃圾数据污染长期记忆）

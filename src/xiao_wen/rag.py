@@ -12,6 +12,7 @@
 """
 
 import os
+import re
 import time
 from functools import lru_cache
 from http import HTTPStatus
@@ -67,18 +68,34 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     return vecs
 
 
-# ---- 3. 分块（标题和内容同块）----
+# ---- 3. 分块（按「一、二、三」章节聚合，标题和内容同块）----
+_SECTION_RE = "一二三四五六七八九十"
+
+
+def _is_section_header(line: str) -> bool:
+    """章节标题行：如「一、差旅申请流程」（标题行/正文行不拆分）"""
+    line = line.strip()
+    if len(line) < 2:
+        return False
+    return line[0] in _SECTION_RE and (line[1] in "、．." or line[1] in _SECTION_RE)
+
+
 def load_chunks(max_len: int = 400):
+    """分块：按章节聚合（一、交通标准 → 整节一块），超长按句号截断
+
+    BUG-004 修复：原先按空行切成很多碎片（如「三、住宿标准」被切成
+    一线/二线/三线/特殊地区/住宿要求 5 小块），导致「住宿标准是多少」
+    这类问题 top-5 检索不到完整标准（答出「未提及」）。按章节聚合后
+    一节一个语义完整的块，检索命中率稳定。
+    """
     chunks = []
     for path in sorted(DOCS_DIR.glob("*.txt")):
         para: list[str] = []
         for raw in path.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
-            if not line:
-                if para:
-                    chunks.append((path.stem, " ".join(para)))
-                    para = []
-                continue
+            if _is_section_header(line) and para:
+                chunks.append((path.stem, " ".join(para)))
+                para = []
             para.append(line)
         if para:
             chunks.append((path.stem, " ".join(para)))
@@ -87,9 +104,13 @@ def load_chunks(max_len: int = 400):
         rest = chunk
         while len(rest) > max_len:
             cut = rest.rfind("。", 0, max_len)
-            cut = cut if cut > 0 else max_len
-            final.append((stem, rest[: cut + 1]))
-            rest = rest[cut + 1 :]
+            if cut > 0:
+                final.append((stem, rest[: cut + 1]))
+                rest = rest[cut + 1 :]
+            else:
+                # 无句号可断：按 max_len 硬切（rest[:max_len+1] 会超限——BUG-004 顺带修复）
+                final.append((stem, rest[:max_len]))
+                rest = rest[max_len:]
         if rest:
             final.append((stem, rest))
     return final
@@ -141,15 +162,38 @@ def build_index(chunks):
     return col
 
 
+def _split_compound_query(query: str) -> list[str]:
+    """复合问句拆分：按并列连词（和/与/以及/、）切分，供多路检索
+
+    BUG-004：单路检索一个 embedding 混合多个主题时，每主题都排不进 top-k
+    （如「住宿和餐补标准」→ 住宿标准块 rank 11）。拆成子问句各自检索，
+    再合并去重，答案稳定完整。
+    防误拆：切出的子句过短（<2 字）或切不出（仅 1 段）时返回原句单路。
+    """
+    parts = [p.strip() for p in re.split(r"[和与及、以及]+", query) if p.strip()]
+    if len(parts) < 2 or any(len(p) < 2 for p in parts):
+        return [query]
+    return parts
+
+
 def search(query: str, col, k: int = 5):
-    """问题 embedding → chroma 余弦检索 top-k（HNSW 近似最近邻）"""
-    qv = embed_texts([query])[0]
-    res = col.query(query_embeddings=[qv], n_results=k)
-    out = []
-    for doc, meta, dist in zip(res["documents"][0], res["metadatas"][0], res["distances"][0], strict=True):
-        sim = 1 - dist  # 余弦距离 → 相似度
-        out.append((sim, meta["source"], doc))
-    return out
+    """问题 embedding → chroma 余弦检索 top-k（HNSW 近似最近邻）
+
+    复合问句（含和/与/以及/、）拆成子问句多路检索后合并去重：
+    每个子主题的命中块都进入候选，按相似度降序取 top-k。
+    复合问句按主题均分席位（每子问句取 ceil(k/份数)），避免单一主题霸榜。
+    """
+    subs = _split_compound_query(query)
+    per = max(1, -(-k // len(subs)))  # 每子问句席位：k 按主题数均分向上取整
+    out: dict[str, tuple[float, str, str]] = {}
+    for sub in subs:
+        qv = embed_texts([sub])[0]
+        res = col.query(query_embeddings=[qv], n_results=per)
+        for doc, meta, dist in zip(res["documents"][0], res["metadatas"][0], res["distances"][0], strict=True):
+            sim = 1 - dist  # 余弦距离 → 相似度
+            out.setdefault(doc, (sim, meta["source"], doc))
+    ranked = sorted(out.values(), key=lambda t: t[0], reverse=True)
+    return ranked[:k]
 
 
 # ---- 5. 增强 + 生成 ----

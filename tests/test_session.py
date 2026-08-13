@@ -533,6 +533,39 @@ def test_preference_agent_skips_questions_no_garbage(monkeypatch):
     assert get_preferences(session_id="会话C") == [], "疑问句绝不能写进长期记忆"
 
 
+def test_preference_agent_retries_on_parse_failure(monkeypatch):
+    """BUG-005：json_mode 结构化输出偶发截断/非法 JSON → 同一输入重试，LLM 自愈"""
+    from xiao_wen.agents import preference_agent
+
+    good = preference_agent.PreferenceList(
+        records=[preference_agent.PreferenceRecord(category="住宿", content="喜欢住全季", is_update=False)]
+    )
+
+    class _FlakyModel:
+        def __init__(self, fail_times: int = 1):
+            self.calls = 0
+            self.fail_times = fail_times
+
+        def invoke(self, _):
+            self.calls += 1
+            if self.calls <= self.fail_times:
+                raise ValueError('Failed to parse PreferenceList from completion {"records": ["截断"]}')
+            return good
+
+    flaky = _FlakyModel(fail_times=1)
+    monkeypatch.setattr(preference_agent, "_pref_model", lambda: flaky)
+    out = preference_agent.run({"user_input": "我喜欢住全季", "session_id": "会话F"})
+    assert "全季" in out["answer"]
+    assert flaky.calls == 2, "首次解析失败应自动重试一次"
+
+    # 重试耗尽仍失败（重试 2 次全失败，共 3 次调用）→ 向上抛（web 层稳定性兜底），不静默
+    bad = _FlakyModel(fail_times=99)
+    monkeypatch.setattr(preference_agent, "_pref_model", lambda: bad)
+    with pytest.raises(ValueError):
+        preference_agent.run({"user_input": "我喜欢住全季", "session_id": "会话F"})
+    assert bad.calls == 3, "重试次数应为 2（共 3 次调用）"
+
+
 def test_history_agent_shows_preferences(monkeypatch):
     """记忆查询（如「我常住哪里」）→ 历史查询 Agent 输出记忆偏好（含常驻城市）"""
     from xiao_wen.agents import history_agent
@@ -564,6 +597,50 @@ def test_history_agent_answers_what_was_asked(monkeypatch):
     # 综合查询（无关键词）：全答，且空态也说明
     out3 = history_agent.run({"session_id": "会话E"})
     assert "不吃辣" in out3["answer"] and "暂无历史行程记录" in out3["answer"]
+
+
+def test_history_agent_followup_never_empty(monkeypatch):
+    """BUG-001：筛选/追问句（无行程/偏好关键词）绝不返回空串，给明确空态文案"""
+    from xiao_wen.agents import history_agent
+
+    # 无任何记录的会话：原实现这些输入会得到 parts=[] → 空回复
+    followups = [
+        "还是没有杭州的记录，你再核实一下，我确定去的是杭州住民宿。",
+        "具体日期我记不清了，只记得在杭州住的是民宿，能帮我找出来吗？",
+        "对，杭州那次就是民宿，你帮我定位一下具体日期和地点。",
+        "我再按民宿筛选一次历史消费，单独查杭州的订单。",
+        "对了，我想起来杭州那次住的民宿好像在西湖区，你按这个范围再筛一下。",
+        "那次西湖区的民宿，我记不清具体日期了，只记得是工作日，能帮我查查入住时间吗？",
+    ]
+    for q in followups:
+        out = history_agent.run({"user_input": q, "session_id": "会话F"})
+        assert out["answer"].strip(), f"BUG-001 空回复：{q}"
+        assert "未找到" in out["answer"] or "暂无" in out["answer"], f"缺空态文案：{q}"
+
+
+def test_history_agent_filters_by_city(monkeypatch):
+    """BUG-001：提到城市时按城市过滤行程，未命中给带城市名的引导空态"""
+    from xiao_wen.agents import history_agent
+    from xiao_wen.memory import add_itinerary
+
+    add_itinerary(
+        {"from_city": "上海", "to_city": "武汉", "start_date": "2026-10-08", "duration_days": 2},
+        "武汉出差总结",
+        session_id="会话G",
+    )
+    add_itinerary(
+        {"from_city": "上海", "to_city": "杭州", "start_date": "2026-09-01", "duration_days": 3},
+        "杭州住民宿见客户",
+        session_id="会话G",
+    )
+
+    # 查杭州 → 只命中杭州那条，不把武汉的倒出来
+    out = history_agent.run({"user_input": "帮我单独查一下杭州的出差记录", "session_id": "会话G"})
+    assert "杭州" in out["answer"] and "武汉" not in out["answer"]
+
+    # 查没有的城市 → 带城市名的引导空态，而不是全部倒出
+    out2 = history_agent.run({"user_input": "有没有广州的出差记录", "session_id": "会话G"})
+    assert "未找到广州的记录" in out2["answer"]
 
 
 def test_stream_chat_plan_from_on_chain_end_output():
