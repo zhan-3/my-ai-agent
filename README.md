@@ -84,11 +84,8 @@
 # 1) 安装依赖（uv 管理）
 uv sync
 
-# 2) 配置 .env（项目根目录）
-#    DEEPSEEK_API_KEY=你的Key        （OpenAI 兼容中转或官方）
-#    DEEPSEEK_BASE_URL=https://...   （模型服务地址）
-#    DEEPSEEK_MODEL=deepseek-v4-flash
-#    DASHSCOPE_API_KEY=你的Key        （阿里云百炼，用于 text-embedding-v3）
+# 2) 配置 .env（复制模板并填入 Key；模板见 .env.example）
+cp .env.example .env
 
 # 3) 一键体验完整系统（推荐）
 uv run python -m xiao_wen.system
@@ -127,6 +124,7 @@ export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 ├── pyproject.toml               # 依赖与工具配置（uv 管理）
 ├── uv.lock                      # 依赖锁定
 ├── .gitignore                   # 忽略：.env / data 数据 / 交付包
+├── .env.example                 # 环境变量模板（复制为 .env 填 Key）
 ├── .python-version
 │
 ├── src/                         # 源码（src 布局）
@@ -348,11 +346,11 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 ## 项目结构
 
 交付压缩包（一条命令，只含已提交的成品文件，自动排除 `.env`/`data`/未跟踪文档）：
-`git archive HEAD README.md pyproject.toml uv.lock src tests plugins docs Dockerfile docker-compose.yml .dockerignore .github/workflows/ci.yml --format=zip -o delivery/xiao-wen.zip`
+`git archive HEAD README.md .env.example pyproject.toml uv.lock src tests plugins docs Dockerfile docker-compose.yml .dockerignore .github/workflows/ci.yml --format=zip -o delivery/xiao-wen.zip`
 
 | 目录 | 内容 | 是否进交付包 |
 |---|---|---|
 | `src/` `tests/` `plugins/` `docs/` | 系统代码（`src/xiao_wen/` 成品包，含 `agents/` 内置子 Agent）+ 测试 + 外部扩展 + 知识库/截图 | ✅ 成品 |
-| `README.md` `pyproject.toml` `uv.lock` | 说明 + 依赖锁定 | ✅ 成品 |
+| `README.md` `pyproject.toml` `uv.lock` `.env.example` | 说明 + 依赖锁定 + 环境变量模板 | ✅ 成品 |
 | `Dockerfile` `docker-compose.yml` `.dockerignore` `.github/workflows/ci.yml` | 生产部署（app + postgres 一条命令）+ 镜像构建 + CI | ✅ 成品 |
 | `AGENTS.md` `.scratch/` | 本仓库 Agent 协作配置与本地 issue tracker | ❌ 内部 |
