@@ -17,6 +17,6 @@ def run(state) -> dict:
     for it in reversed(its[-5:]):  # 最多显示最近 5 条
         lines.append(
             f"· {it.get('start_date', '?')} {it.get('from_city', '?')}→{it.get('to_city', '?')}，"
-            f"{it.get('duration_days', '?')}天：{it.get('summary', '')[:40]}"
+            f"{it.get('duration_days', '?')}天：{it.get('summary', '')}"
         )
     return {"answer": "\n".join(lines)}
