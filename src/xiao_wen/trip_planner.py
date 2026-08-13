@@ -54,6 +54,7 @@ class ItineraryPlan(BaseModel):
 @dataclass
 class PlanResult:
     plan: ItineraryPlan  # 生成的行程（已写回长期记忆）
+    request: TripRequest | None = None  # 提取的行程要素（供展示层附加目的地天气等）
 
 
 @dataclass
@@ -157,7 +158,7 @@ def plan(user_input: str, *, session_id: str = "default") -> PlanResult | NeedsI
     )
     assert isinstance(plan, ItineraryPlan)
     add_itinerary(req.model_dump(), plan.summary, session_id=session_id)
-    return PlanResult(plan=plan)
+    return PlanResult(plan=plan, request=req)
 
 
 # ---- 展示（可读性格式化，测试锁定） ----

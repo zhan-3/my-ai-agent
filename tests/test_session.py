@@ -221,3 +221,46 @@ def test_itinerary_agent_passes_session_to_trip_planner(monkeypatch):
     assert captured["session_id"] == "会话A"  # 行程写进 A 会话
     assert captured["summary"] == "北京出差 4 天"
     assert "北京" in out["answer"]
+
+
+def test_itinerary_agent_appends_weather_reminder(monkeypatch):
+    """行程 agent：生成成功且日期可查 → 答案附加目的地天气提醒（结合行程规划）；天气失败不影响主答案"""
+    from xiao_wen import trip_planner
+    from xiao_wen.agents import itinerary_agent
+
+    req = trip_planner.TripRequest(
+        from_city="上海", to_city="北京", start_date="2026-10-08", duration_days=4, hotel_pref="无", budget_pref="中等"
+    )
+    plan = trip_planner.ItineraryPlan(days=[], summary="北京出差 4 天", reasons=["靠近会场"])
+
+    class FakeExtract:
+        def invoke(self, _):
+            return req
+
+    class FakePlan:
+        def invoke(self, _):
+            return plan
+
+    monkeypatch.setattr(trip_planner, "_extract_model", FakeExtract)
+    monkeypatch.setattr(trip_planner, "_plan_model", FakePlan)
+    monkeypatch.setattr(
+        trip_planner, "add_itinerary", lambda facts, summary, *, session_id="default": {"summary": summary}
+    )
+
+    class FakeWeather:
+        def invoke(self, args):
+            return f"{args['city']} {args['date']} 晴 25°C"
+
+    monkeypatch.setattr(itinerary_agent, "get_weather", FakeWeather())
+    out = itinerary_agent.run({"user_input": "10月8日去北京开会4天", "session_id": "会话A"})
+    assert "北京出差 4 天" in out["answer"]
+    assert "目的地天气提醒" in out["answer"] and "晴" in out["answer"]
+
+    # 天气查询失败（网络/超期）：行程主答案不受影响
+    def boom(args):
+        raise RuntimeError("网络挂了")
+
+    monkeypatch.setattr(itinerary_agent, "get_weather", boom)
+    out2 = itinerary_agent.run({"user_input": "10月8日去北京开会4天", "session_id": "会话A"})
+    assert "北京出差 4 天" in out2["answer"]
+    assert "目的地天气提醒" not in out2["answer"]

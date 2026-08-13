@@ -11,13 +11,21 @@ DESCRIPTION = (
     "负责生成逐日行程（交通/住宿/餐饮/预算）、常驻城市补全与缺项提示，并写回长期记忆。"
 )
 
+from contextlib import suppress  # noqa: E402
+
 from xiao_wen.trip_planner import NeedsInfo, format_plan, needs_info_text  # noqa: E402
 from xiao_wen.trip_planner import plan as _trip_plan  # noqa: E402
+from xiao_wen.web import get_weather  # noqa: E402
 
 
 def run(state) -> dict:
-    """两阶段管线（要素提取→行程生成）收口于 trip_planner.plan（ADR-0003）"""
+    """两阶段管线（要素提取→行程生成）收口于 trip_planner.plan（ADR-0003）；生成成功后附加目的地天气提醒"""
     r = _trip_plan(state["user_input"], session_id=state.get("session_id", "default"))
     if isinstance(r, NeedsInfo):
         return {"answer": needs_info_text(r)}
-    return {"answer": format_plan(r.plan)}
+    answer = format_plan(r.plan)
+    req = r.request
+    if req and req.to_city not in ("待定", "未知", "") and req.start_date not in ("待定", ""):
+        with suppress(Exception):  # 天气是锦上添花：查不到（超 7 天/网络异常）不影响行程主答案
+            answer += f"\n\n🌤️ 目的地天气提醒：{get_weather.invoke({'city': req.to_city, 'date': req.start_date})}"
+    return {"answer": answer}

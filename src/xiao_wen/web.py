@@ -11,6 +11,8 @@
 
 import os
 import time
+from datetime import date as _date
+from datetime import timedelta
 from functools import lru_cache
 from typing import Annotated
 
@@ -93,21 +95,24 @@ def _geocode(city: str) -> tuple[float, float]:
 
 
 @tool
-def get_weather(city: str) -> str:
-    """查询指定城市的当前天气。city：城市名，如「北京」「上海」「杭州」"""
+def get_weather(city: str, date: str = "今天") -> str:
+    """查询指定城市指定日期的天气。city：城市名，如「北京」「上海」「杭州」；
+    date：今天/明天/后天 或 YYYY-MM-DD（仅支持未来 7 天预报）"""
     try:
-        # ① 地理编码：本地城市表优先，未收录城市走 OSM Nominatim
+        # ① 日期先本地解析（今天→0、明天→1、YYY-MM-DD→对应天）：过去日期/超 7 天立即报错，不发网络请求
+        idx = _date_index(date)
+        # ② 地理编码：本地城市表优先，未收录城市走 OSM Nominatim
         lat, lon = _geocode(city)
-        # ② 天气：open-meteo forecast（免费无需 key）
-        cur = _get_json(
+        # ③ 天气：open-meteo daily 预报（免费无需 key），按 idx 取对应天
+        daily = _get_json(
             "https://api.open-meteo.com/v1/forecast",
             params={
                 "latitude": lat,
                 "longitude": lon,
-                "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m",
+                "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
                 "timezone": "auto",
             },
-        )["current"]
+        )["daily"]
         wmo = {
             0: "晴",
             1: "大部晴朗",
@@ -131,13 +136,37 @@ def get_weather(city: str) -> str:
             96: "雷暴伴冰雹",
             99: "雷暴伴大冰雹",
         }
-        desc = wmo.get(cur["weather_code"], f"天气代码{cur['weather_code']}")
+        desc = wmo.get(daily["weather_code"][idx], f"天气代码{daily['weather_code'][idx]}")
         return (
-            f"{city}当前天气：{desc}，气温 {cur['temperature_2m']}°C，"
-            f"湿度 {cur['relative_humidity_2m']}%，风速 {cur['wind_speed_10m']} km/h"
+            f"{city} {daily['time'][idx]} 天气：{desc}，最高 {daily['temperature_2m_max'][idx]}°C / "
+            f"最低 {daily['temperature_2m_min'][idx]}°C，降水概率 {daily['precipitation_probability_max'][idx]}%"
         )
+    except ValueError as e:
+        return str(e)
     except Exception as e:
         return f"查询天气失败（服务可能不稳定，请稍后再试）：{type(e).__name__}"
+
+
+def _date_index(date: str) -> int:
+    """日期 → open-meteo daily 数组索引：今天→0、明天→1、后天→2、YYYY-MM-DD→按差值；
+    过去/超 7 天/无法识别 抛 ValueError"""
+    today = _date.today()
+    d = date.strip()
+    rel = {"今天": 0, "今日": 0, "明天": 1, "明日": 1, "后天": 2, "昨天": -1, "昨日": -1, "前天": -2}
+    if d in rel:
+        if rel[d] < 0:
+            raise ValueError(f"不支持查询过去日期：{date}")
+        return rel[d]
+    try:
+        target = _date.fromisoformat(d)
+    except ValueError:
+        raise ValueError(f"无法识别的日期：{date}（支持 今天/明天/后天 或 YYYY-MM-DD）") from None
+    diff = (target - today).days
+    if diff < 0:
+        raise ValueError(f"不支持查询过去日期：{date}")
+    if diff > 6:
+        raise ValueError(f"仅支持未来 7 天预报（{today} 至 {today + timedelta(days=6)}）")
+    return diff
 
 
 @tool
