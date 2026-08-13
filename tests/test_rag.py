@@ -78,6 +78,53 @@ def test_embed_retries_transient_failure(monkeypatch):
     assert calls["n"] == 3  # 2 次重试后成功
 
 
+# ---------------- 单元层：索引新鲜度（防 stale 索引：块数不一致必须重建） ----------------
+
+
+class FakeCol:
+    """最小 chroma 集合替身：记录 delete/upsert，模拟 count/get"""
+
+    def __init__(self, count: int):
+        self.n = count
+        self.deleted: list | None = None
+        self.upserted: list = []
+
+    def count(self) -> int:
+        return self.n
+
+    def get(self) -> dict:
+        return {"ids": [f"c{i}" for i in range(self.n)]}
+
+    def delete(self, ids=None):
+        self.deleted = ids
+
+    def upsert(self, **kw):
+        self.upserted.append(kw)
+
+
+def _fake_embeddings(texts):
+    return [[0.1] * 4 for _ in texts]
+
+
+def test_build_index_rebuilds_on_count_mismatch(monkeypatch):
+    """索引块数与当前文档块不一致（旧残留）→ 清空后重建"""
+    fake = FakeCol(count=100)  # 旧索引 100 条（文档已变成 2 块）
+    monkeypatch.setattr(rag, "get_collection", lambda: fake)
+    monkeypatch.setattr(rag, "embed_texts", _fake_embeddings)
+    rag.build_index([("a", "x" * 50)] * 2)
+    assert fake.deleted is not None and len(fake.deleted) == 100, "应清空全部旧块"
+    assert fake.upserted, "应重建新索引"
+
+
+def test_build_index_reuses_on_count_match(monkeypatch):
+    """索引块数与当前一致 → 直接复用，不删除不重建"""
+    fake = FakeCol(count=2)
+    monkeypatch.setattr(rag, "get_collection", lambda: fake)
+    monkeypatch.setattr(rag, "embed_texts", _fake_embeddings)
+    rag.build_index([("a", "x" * 50)] * 2)
+    assert fake.deleted is None and not fake.upserted, "块数一致应复用"
+
+
 # ---------------- 集成层：向量检索（真实 embedding，-m integration） ----------------
 
 

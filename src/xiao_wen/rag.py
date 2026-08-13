@@ -117,11 +117,16 @@ def get_collection():
 
 def build_index(chunks):
     """文档块 → dashscope embedding → 存入 chroma（磁盘持久化）
-    已存在（块数一致）则直接复用，不重复调 API"""
+    仅当块数与现有索引完全一致才复用，否则清空重建（防 stale 索引：
+    文档/切分变更后旧块残留导致检索错位）"""
     col = get_collection()
-    if col.count() >= len(chunks):
-        print(f"（复用 chroma 持久化索引，{col.count()} 条）")
+    existing = col.count()
+    if existing == len(chunks):
+        print(f"（复用 chroma 持久化索引，{existing} 条）")
         return col
+    if existing:
+        print(f"（索引过期：现有 {existing} 条 ≠ 当前 {len(chunks)} 块，清空重建…）")
+        col.delete(ids=col.get()["ids"])
     print(f"（构建 chroma 索引：{len(chunks)} 块 × embedding，首次 1-2 分钟…）")
     for i in range(0, len(chunks), BATCH):
         batch = chunks[i : i + BATCH]
@@ -169,14 +174,19 @@ def _knowledge_model():
 
 
 def knowledge_qa(query: str) -> str:
+    """RAG 知识问答：检索 top-5 → 组装上下文 → LLM 生成
+    检索来源写入日志（可追溯），答案不携带技术细节（前端保持干净）"""
     chunks = merge_tiny_chunks(load_chunks())
     col = build_index(chunks)
     hits = search(query, col)
     if not hits:
         return "资料中没有找到相关内容。"
+    from xiao_wen.stability import logger
+
+    logger.info("RAG 检索 top-%d 来源：%s（问题：%s）", len(hits), [s for _, s, _ in hits], query)
     context = "\n\n".join(f"--- 来源 {stem} ---\n{text}" for _, stem, text in hits)
     r = _knowledge_model().invoke({"context": context, "query": query})
-    return f"（向量检索 top-{len(hits)}，来源：{', '.join(s for _, s, _ in hits)}）\n\n{r.content}"
+    return r.content
 
 
 if __name__ == "__main__":
