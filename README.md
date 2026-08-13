@@ -346,11 +346,11 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 ## 项目结构
 
 交付压缩包（一条命令，只含已提交的成品文件，自动排除 `.env`/`data`/未跟踪文档）：
-`git archive HEAD README.md .env.example pyproject.toml uv.lock src tests plugins docs Dockerfile docker-compose.yml .dockerignore .github/workflows/ci.yml --format=zip -o delivery/xiao-wen.zip`
+`git archive HEAD README.md .env.example .python-version pyproject.toml uv.lock src tests plugins docs Dockerfile docker-compose.yml .dockerignore .github/workflows/ci.yml --format=zip -o delivery/xiao-wen.zip`
 
 | 目录 | 内容 | 是否进交付包 |
 |---|---|---|
 | `src/` `tests/` `plugins/` `docs/` | 系统代码（`src/xiao_wen/` 成品包，含 `agents/` 内置子 Agent）+ 测试 + 外部扩展 + 知识库/截图 | ✅ 成品 |
-| `README.md` `pyproject.toml` `uv.lock` `.env.example` | 说明 + 依赖锁定 + 环境变量模板 | ✅ 成品 |
+| `README.md` `pyproject.toml` `uv.lock` `.env.example` `.python-version` | 说明 + 依赖锁定 + 环境变量模板 + Python 版本 | ✅ 成品 |
 | `Dockerfile` `docker-compose.yml` `.dockerignore` `.github/workflows/ci.yml` | 生产部署（app + postgres 一条命令）+ 镜像构建 + CI | ✅ 成品 |
 | `AGENTS.md` `.scratch/` | 本仓库 Agent 协作配置与本地 issue tracker | ❌ 内部 |
