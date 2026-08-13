@@ -1,14 +1,10 @@
-import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
+import { useAuth } from '@/hooks/useAuth'
+import AuthPanel from '@/components/AuthPanel'
+import ChatShell from '@/components/ChatShell'
 
+// 顶层：有 token → 主界面；无 token → 登录/注册
 export default function App() {
-  return (
-    <Card className="max-w-sm mx-auto mt-20">
-      <CardContent className="pt-6 text-center space-y-4">
-        <h1 className="text-xl font-bold">晓问 · 差旅助手</h1>
-        <p className="text-muted-foreground text-sm">React 19 + Vite + Tailwind v4 + shadcn/ui 脚手架验证</p>
-        <Button>开始</Button>
-      </CardContent>
-    </Card>
-  )
+  const { token, username, logout } = useAuth()
+  if (!token) return <AuthPanel onAuthed={() => undefined} />
+  return <ChatShell username={username} onLogout={logout} />
 }
