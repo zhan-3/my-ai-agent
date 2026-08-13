@@ -134,3 +134,42 @@ def test_needs_info_text_lists_missing():
     text = _it.needs_info_text(_it.NeedsInfo(missing=["出发日期", "出差天数"]))
     assert "出发日期" in text and "出差天数" in text
     assert "请补充" in text
+
+
+# ---------------- 行程“实感”数据层：城市分级 + 车次票价表 + 确定性预算 ----------------
+
+
+def test_city_tier_matches_policy():
+    """城市分级与差旅政策知识库一致：一线 500 / 二线 400 / 三线 300"""
+    assert _it.city_tier("北京") == "一线"
+    assert _it.city_tier("杭州") == "二线"
+    assert _it.city_tier("兰州") == "三线"
+
+
+def test_train_table_lookup_both_directions():
+    """车次表：正向可查；反向同价；未收录线路返回 None"""
+    info = _it.train_info("北京", "杭州")
+    assert info is not None and info[0] == "G31" and info[4] == 553
+    assert _it.train_info("杭州", "北京") is not None  # 反向同线路
+    assert _it.train_info("北京", "拉萨") is None
+
+
+def test_estimate_budget_deterministic():
+    """预算估算完全确定（无 LLM）：车次真实票价 + 城市分级住宿 + 餐饮标准"""
+    req = _req(to_city="杭州", from_city="北京", duration_days=3)
+    b = _it.estimate_budget(req)
+    # 杭州=二线 400 元/晚 × 2 晚；G31 往返 553×2；餐饮 200×3
+    assert b["tier"] == "二线"
+    assert b["hotel_per_night"] == 400 and b["hotel_cost"] == 800
+    assert b["transport_cost"] == 1106
+    assert b["meal_cost"] == 600
+    assert b["total"] == 1106 + 800 + 600
+
+
+def test_format_budget_readable():
+    """预算块含真实数字锚点（车次/票价/标准价/合计），标注参考价"""
+    req = _req(to_city="杭州", from_city="北京", duration_days=3)
+    text = _it.format_budget(req)
+    assert "G31" in text and "553" in text
+    assert "400 元/晚 × 2 晚" in text and "≈ 800 元" in text
+    assert "参考价" in text and "合计" in text

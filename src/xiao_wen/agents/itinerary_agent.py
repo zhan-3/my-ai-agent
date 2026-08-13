@@ -13,7 +13,7 @@ DESCRIPTION = (
 
 from contextlib import suppress  # noqa: E402
 
-from xiao_wen.trip_planner import NeedsInfo, format_plan, needs_info_text  # noqa: E402
+from xiao_wen.trip_planner import NeedsInfo, format_budget, format_plan, needs_info_text  # noqa: E402
 from xiao_wen.trip_planner import plan as _trip_plan  # noqa: E402
 from xiao_wen.web import get_weather  # noqa: E402
 
@@ -31,6 +31,10 @@ def run(state) -> dict:
             f"\n\n📅 你只说了出发时间的大致范围，我按 {req.start_date} 开始安排——"
             "如果实际日期不同，告诉我具体日期，我重新排。"
         )
+    if req:
+        # 预算块：确定性真实票价/标准价（LLM 不编数字，避免幻觉）
+        with suppress(Exception):
+            answer += f"\n\n{format_budget(req)}"
     if req and req.to_city not in ("待定", "未知", "") and req.start_date not in ("待定", ""):
         with suppress(Exception):  # 天气是锦上添花：查不到（超 7 天/网络异常）不影响行程主答案
             answer += f"\n\n🌤️ 目的地天气提醒：{get_weather.invoke({'city': req.to_city, 'date': req.start_date})}"

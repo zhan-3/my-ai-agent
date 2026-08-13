@@ -168,6 +168,86 @@ def plan(user_input: str, *, session_id: str = "default") -> PlanResult | NeedsI
 
 # ---- 展示（可读性格式化，测试锁定） ----
 
+# 行程“实感”数据层：主流商务线路真实高铁车次/二等座票价（公开常态价，仅供演示参考）
+# 键：(出发, 到达) → (车次, 出发站, 到达站, 时长, 二等座票价元)
+TRAIN_TABLE: dict[tuple[str, str], tuple[str, str, str, str, int]] = {
+    ("北京", "杭州"): ("G31", "北京南", "杭州东", "4小时31分", 553),
+    ("杭州", "北京"): ("G36", "杭州东", "北京南", "4小时24分", 553),
+    ("北京", "上海"): ("G1", "北京南", "上海虹桥", "4小时18分", 662),
+    ("上海", "北京"): ("G2", "上海虹桥", "北京南", "4小时18分", 662),
+    ("北京", "广州"): ("G79", "北京西", "广州南", "8小时05分", 862),
+    ("广州", "北京"): ("G80", "广州南", "北京西", "7小时59分", 862),
+    ("北京", "成都"): ("G571", "北京西", "成都东", "7小时48分", 778),
+    ("成都", "北京"): ("G572", "成都东", "北京西", "7小时51分", 778),
+    ("北京", "武汉"): ("G525", "北京西", "武汉", "4小时22分", 520),
+    ("武汉", "北京"): ("G526", "武汉", "北京西", "4小时21分", 520),
+    ("北京", "西安"): ("G651", "北京西", "西安北", "4小时45分", 515),
+    ("西安", "北京"): ("G652", "西安北", "北京西", "4小时44分", 515),
+    ("上海", "杭州"): ("G7311", "上海虹桥", "杭州东", "45分钟", 73),
+    ("杭州", "上海"): ("G7302", "杭州东", "上海虹桥", "45分钟", 73),
+}
+
+# 城市分级（与差旅政策知识库一致：一线 500 / 二线 400 / 三线 300 元/晚）
+TIER1_CITIES = {"北京", "上海", "广州", "深圳"}
+TIER2_CITIES = {"杭州", "南京", "成都", "武汉", "西安", "重庆", "天津", "苏州", "长沙", "郑州"}
+HOTEL_RATE = {"一线": 500, "二线": 400, "三线": 300}
+MEAL_RATE_PER_DAY = 200  # 午晚餐 100 元/餐 × 2（早餐通常含在房费）
+
+
+def city_tier(city: str) -> str:
+    """城市分级：一线 / 二线 / 三线（与知识库差旅标准一致）"""
+    if city in TIER1_CITIES:
+        return "一线"
+    if city in TIER2_CITIES:
+        return "二线"
+    return "三线"
+
+
+def train_info(from_city: str, to_city: str) -> tuple[str, str, str, str, int] | None:
+    """查车次表（含反向），查不到返回 None"""
+    return TRAIN_TABLE.get((from_city, to_city)) or TRAIN_TABLE.get((to_city, from_city))
+
+
+def estimate_budget(req: TripRequest) -> dict:
+    """确定性预算估算：交通（车次表真实票价，查不到按中等里程档）+ 住宿（城市分级×晚数）+
+    餐饮（标准×天数）。全部参考价，不依赖 LLM 编数字（避免幻觉）"""
+    nights = max(req.duration_days - 1, 1)  # 最后一天返程，住 (天数-1) 晚，至少 1 晚
+    info = train_info(req.from_city, req.to_city)
+    if info:
+        train_fare = info[4]
+        train_line = f"高铁 {info[0]} 次 {info[1]}→{info[2]}（{info[3]}）"
+    else:
+        train_fare = 650  # 未收录线路：按中等里程二等座参考档
+        train_line = "高铁往返（具体车次以出票为准）"
+    transport_cost = train_fare * 2  # 往返
+    tier = city_tier(req.to_city)
+    hotel_per_night = HOTEL_RATE[tier]
+    hotel_cost = hotel_per_night * nights
+    meal_cost = MEAL_RATE_PER_DAY * req.duration_days
+    return {
+        "train_line": train_line,
+        "train_fare": train_fare,
+        "transport_cost": transport_cost,
+        "tier": tier,
+        "hotel_per_night": hotel_per_night,
+        "nights": nights,
+        "hotel_cost": hotel_cost,
+        "meal_cost": meal_cost,
+        "total": transport_cost + hotel_cost + meal_cost,
+    }
+
+
+def format_budget(req: TripRequest) -> str:
+    """预算块（独立于 format_plan，供展示层拼接）：真实数字锚点 → 行程有“实感”"""
+    b = estimate_budget(req)
+    return (
+        "💰 费用估算（参考价，以实际出票为准）：\n"
+        f"· 交通：{b['train_line']}，二等座约 {b['train_fare']} 元/程，往返约 {b['transport_cost']} 元\n"
+        f"· 住宿：{req.to_city}（{b['tier']}）按差旅标准 {b['hotel_per_night']} 元/晚 × {b['nights']} 晚 ≈ {b['hotel_cost']} 元\n"
+        f"· 餐饮：午晚餐 100 元/餐 × 2 × {req.duration_days} 天 ≈ {b['meal_cost']} 元\n"
+        f"· 合计：约 {b['total']} 元"
+    )
+
 
 def format_plan(plan: ItineraryPlan) -> str:
     lines = [f"📋 {plan.summary}", ""]
