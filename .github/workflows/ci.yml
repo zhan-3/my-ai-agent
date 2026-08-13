@@ -100,7 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read   # 读 GHCR 缓存层所需
+      actions: write   # gha 层缓存（cache-to: type=gha）写缓存需要
     steps:
       - uses: actions/checkout@v4
 
