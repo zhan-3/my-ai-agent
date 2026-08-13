@@ -8,6 +8,7 @@
 # ruff: noqa: E501 —— 本模块是 prompt 密集模块：发给 LLM 的提示词内容行
 # （要素示例、约束、reasons 说明）天然超行宽，拆分会改变提示词（换行=内容）。
 from dataclasses import dataclass
+from datetime import date
 from functools import lru_cache
 
 from langchain_core.prompts import ChatPromptTemplate
@@ -15,6 +16,14 @@ from pydantic import BaseModel, Field
 
 from xiao_wen import llm
 from xiao_wen.memory import add_itinerary, get_home_city, get_preferences
+
+# 相对日期解析：给提取器注入「今天」（含周几），让「下周/明天」能推算成具体日期
+_WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+
+def _today_cn() -> str:
+    d = date.today()
+    return f"{d.isoformat()}（{_WEEKDAYS[d.weekday()]}）"
 
 # ---- Schema（与领域契约一致） ----
 
@@ -59,11 +68,12 @@ extract_prompt = ChatPromptTemplate.from_messages(
         (
             "system",
             """你是企业差旅助手的要素提取器，输出严格 JSON。
-键名必须严格为英文：from_city、to_city、start_date（YYYY-MM-DD，没给日期填"待定"）、
-duration_days（数字）、hotel_pref（没有填"无"）、budget_pref（经济/中等/舒适，没有填"中等"）。
+键名必须严格为英文：from_city、to_city、start_date（YYYY-MM-DD）、duration_days（数字）、
+hotel_pref（没有填"无"）、budget_pref（经济/中等/舒适，没有填"中等"）。
+相对时间（如「下周」「明天」「下周一」「后天」）必须按「今天」推算成具体 YYYY-MM-DD，不要填"待定"；完全没提日期才填"待定"。
 示例：{{"from_city": "北京", "to_city": "杭州", "start_date": "2026-08-20", "duration_days": 3, "hotel_pref": "无", "budget_pref": "中等"}}""",
         ),
-        ("human", "{input}"),
+        ("human", "今天是 {today}。\n用户输入：{input}"),
     ]
 )
 
@@ -127,7 +137,7 @@ def plan(user_input: str, *, session_id: str = "default") -> PlanResult | NeedsI
 
     顺序是产品行为（ADR-0003），勿改。
     """
-    req = _extract_model().invoke({"input": user_input})
+    req = _extract_model().invoke({"input": user_input, "today": _today_cn()})
     assert isinstance(req, TripRequest)
     # 常驻城市补全：先于缺项检查（"用户没说出发城市但记忆里有"不算缺项）
     hc = get_home_city(session_id=session_id)
