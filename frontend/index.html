@@ -5,6 +5,18 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>晓问 · 差旅出行助手</title>
+    <script>
+      // 深浅色主题：首帧前按已保存选择（默认跟随系统）应用，避免闪烁
+      ;(function () {
+        try {
+          var t = localStorage.getItem('xw_theme') || 'system'
+          var dark =
+            t === 'dark' ||
+            (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.classList.toggle('dark', dark)
+        } catch (e) {}
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

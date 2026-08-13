@@ -5,6 +5,7 @@ import { useChat, type StageItem } from '@/hooks/useChat'
 import { AGENTS, SUGGESTIONS, agentOf } from '@/lib/agents'
 import MemorySidebar from '@/components/MemorySidebar'
 import MessageBubble from '@/components/MessageBubble'
+import ThemeToggle from '@/components/ThemeToggle'
 
 function stageLabel(s: StageItem): string {
   switch (s.intent) {
@@ -51,9 +52,12 @@ export default function ChatShell({
             <p className="text-xs text-muted-foreground">多 Agent 智能出行助手｜规划 · 记忆 · 联网 · 知识</p>
           </div>
           {username && (
-            <Button variant="ghost" size="sm" onClick={onLogout}>
-              {username} ｜ 退出
-            </Button>
+            <div className="flex items-center gap-1">
+              <ThemeToggle />
+              <Button variant="ghost" size="sm" onClick={onLogout}>
+                {username} ｜ 退出
+              </Button>
+            </div>
           )}
         </header>
 
@@ -80,7 +84,7 @@ export default function ChatShell({
                   {s.status === 'working' ? (
                     <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-primary" />
                   ) : (
-                    <span className="text-emerald-600">✓</span>
+                    <span className="text-[color:var(--success)]">✓</span>
                   )}
                   <span>{stageLabel(s)}</span>
                 </div>
@@ -95,7 +99,8 @@ export default function ChatShell({
               <button
                 key={s}
                 type="button"
-                className="rounded-full border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted"
+                disabled={busy}
+                className="rounded-full border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={() => void handleSend(s)}
               >
                 {s}

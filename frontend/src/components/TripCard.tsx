@@ -7,12 +7,12 @@ import { parseTrip, planToParsed, type TripPlan } from '@/lib/trip'
 // 两种来源先归一化成同一渲染形状（planToParsed / parseTrip），卡片只画一种结构；
 // 💰预算/🌤️天气/📅日期提示等附加块刻意留在文本里，无论哪种来源都从文本解析补上。
 
+// 行标签语义色：主题 token（--row-*），跨浅/深色稳定（备注直接用 muted-foreground）
 const ROW_CLS: Record<string, string> = {
-  交通: 'text-blue-600 dark:text-blue-400',
-  住宿: 'text-amber-600 dark:text-amber-400',
-  活动: 'text-emerald-600 dark:text-emerald-400',
-  用餐: 'text-rose-600 dark:text-rose-400',
-  备注: 'text-muted-foreground',
+  交通: 'text-[color:var(--row-transport)]',
+  住宿: 'text-[color:var(--row-hotel)]',
+  活动: 'text-[color:var(--row-activity)]',
+  用餐: 'text-[color:var(--row-meal)]',
 }
 
 export default function TripCard({ text, plan }: { text: string; plan?: TripPlan | null }) {
@@ -47,7 +47,9 @@ export default function TripCard({ text, plan }: { text: string; plan?: TripPlan
               {d.rows.map((r, j) =>
                 r.label ? (
                   <div key={j} className="flex gap-2 text-sm">
-                    <span className={`shrink-0 font-medium ${ROW_CLS[r.label] ?? ''}`}>{r.label}</span>
+                    <span className={`shrink-0 font-medium ${ROW_CLS[r.label] ?? 'text-muted-foreground'}`}>
+                      {r.label}
+                    </span>
                     <span>{r.text}</span>
                   </div>
                 ) : (

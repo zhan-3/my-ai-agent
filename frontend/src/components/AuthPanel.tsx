@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { useAuth } from '@/hooks/useAuth'
+import ThemeToggle from '@/components/ThemeToggle'
 
 // 登录/注册面板：认证成功后回调 onAuthed（App 层切换主界面）
 export default function AuthPanel({ onAuthed }: { onAuthed: (username: string) => void }) {
@@ -31,7 +32,10 @@ export default function AuthPanel({ onAuthed }: { onAuthed: (username: string) =
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-muted/30 p-4">
+    <div className="relative flex h-screen items-center justify-center bg-muted/30 p-4">
+      <div className="absolute right-4 top-4">
+        <ThemeToggle />
+      </div>
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-xl">欢迎使用晓问</CardTitle>
