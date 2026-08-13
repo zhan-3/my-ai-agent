@@ -119,12 +119,14 @@ def test_agents_use_state_session_id(monkeypatch):
     from xiao_wen.agents import history_agent, preference_agent
     from xiao_wen.memory import get_preferences
 
-    rec = preference_agent.PreferenceRecord(category="常驻城市", content="上海", is_update=True)
+    recs = preference_agent.PreferenceList(
+        records=[preference_agent.PreferenceRecord(category="常驻城市", content="上海", is_update=True)]
+    )
 
     def _fake_pref_model():
         class M:
             def invoke(self, _):
-                return rec
+                return recs
 
         return M()
 
@@ -153,6 +155,33 @@ def test_agents_use_state_session_id(monkeypatch):
     out = history_agent.run({"session_id": "会话B"})
     assert seen["session_id"] == "会话B"
     assert "北京" in out["answer"]
+
+
+def test_preference_agent_records_multiple_preferences(monkeypatch):
+    """偏好 agent：一条消息含多个偏好 → 全部写入（如「我喜欢住汉庭，常住上海」→ 住宿 + 常驻城市）"""
+    from xiao_wen.agents import preference_agent
+    from xiao_wen.memory import get_preferences
+
+    recs = preference_agent.PreferenceList(
+        records=[
+            preference_agent.PreferenceRecord(category="住宿", content="喜欢住汉庭", is_update=False),
+            preference_agent.PreferenceRecord(category="常驻城市", content="上海", is_update=True),
+        ]
+    )
+
+    def _fake_pref_model():
+        class M:
+            def invoke(self, _):
+                return recs
+
+        return M()
+
+    monkeypatch.setattr(preference_agent, "_pref_model", _fake_pref_model)
+    out = preference_agent.run({"user_input": "我喜欢住汉庭，常住上海", "session_id": "会话A"})
+    assert "住宿" in out["answer"] and "常驻城市" in out["answer"]
+    prefs = get_preferences(session_id="会话A")
+    assert {p["category"] for p in prefs} == {"住宿", "常驻城市"}
+    assert [p["content"] for p in prefs if p["category"] == "常驻城市"] == ["上海"]
 
 
 def test_itinerary_agent_passes_session_to_trip_planner(monkeypatch):
