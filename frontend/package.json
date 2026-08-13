@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -k -n backend,ui -c yellow,cyan \"cd .. && uv run python -m xiao_wen.webapp\" \"vite\"",
+    "dev:ui": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
@@ -31,6 +32,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.4",
     "@vitest/coverage-v8": "^4.1.10",
+    "concurrently": "^10.0.4",
     "jsdom": "^30.0.1",
     "openapi-typescript": "^7.13.0",
     "oxlint": "^1.75.0",
