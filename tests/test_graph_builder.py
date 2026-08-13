@@ -92,6 +92,10 @@ def test_build_reinjects_vocabulary_and_invalidates_intent_model(monkeypatch, tm
 
     monkeypatch.setattr(pr, "PLUGIN_DIR", tmp_path)
     monkeypatch.setattr(intent_mod, "_current_intents", [])  # 重置注入状态（空词汇表，teardown 自动恢复）
+    # CI 无 .env（gitignored）→ _intent_model 构造模型需 env；此处只构造 prompt 不发请求
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ci-fake-key")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://example.invalid")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "fake-model")
     intent_mod._intent_model()  # 预热：缓存一个 prompt（基线词汇表）
     assert intent_mod._intent_model.cache_info().currsize == 1
 

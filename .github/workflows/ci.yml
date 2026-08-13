@@ -38,7 +38,7 @@ jobs:
           --health-timeout 3s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: 安装 uv（带依赖缓存，加速重建）
         uses: astral-sh/setup-uv@v6
@@ -73,7 +73,7 @@ jobs:
     env:
       HAS_LLM_KEY: ${{ secrets.DEEPSEEK_API_KEY != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: 安装 uv（带依赖缓存）
         uses: astral-sh/setup-uv@v6
@@ -102,7 +102,7 @@ jobs:
       contents: read
       actions: write   # gha 层缓存（cache-to: type=gha）写缓存需要
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: 构建镜像（gha 层缓存，重建走缓存）
         uses: docker/build-push-action@v6
