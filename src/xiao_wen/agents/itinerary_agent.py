@@ -25,6 +25,12 @@ def run(state) -> dict:
         return {"answer": needs_info_text(r)}
     answer = format_plan(r.plan)
     req = r.request
+    if req and req.date_is_vague:
+        # 日期模糊（如只说了「下周」）：明示按推断日期安排，给用户确认/调整机会（业界标准：先给方案、可改）
+        answer += (
+            f"\n\n📅 你只说了出发时间的大致范围，我按 {req.start_date} 开始安排——"
+            "如果实际日期不同，告诉我具体日期，我重新排。"
+        )
     if req and req.to_city not in ("待定", "未知", "") and req.start_date not in ("待定", ""):
         with suppress(Exception):  # 天气是锦上添花：查不到（超 7 天/网络异常）不影响行程主答案
             answer += f"\n\n🌤️ 目的地天气提醒：{get_weather.invoke({'city': req.to_city, 'date': req.start_date})}"

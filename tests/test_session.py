@@ -264,3 +264,41 @@ def test_itinerary_agent_appends_weather_reminder(monkeypatch):
     out2 = itinerary_agent.run({"user_input": "10月8日去北京开会4天", "session_id": "会话A"})
     assert "北京出差 4 天" in out2["answer"]
     assert "目的地天气提醒" not in out2["answer"]
+
+
+def test_itinerary_agent_confirms_vague_date(monkeypatch):
+    """行程 agent：日期表达模糊（如只说了「下周」）→ 生成后明确提示日期是推断的、可调整；具体日期则无提示"""
+    from xiao_wen import trip_planner
+    from xiao_wen.agents import itinerary_agent
+
+    def run_with(req):
+        plan = trip_planner.ItineraryPlan(days=[], summary="杭州出差 3 天", reasons=[])
+
+        class FakeExtract:
+            def invoke(self, _):
+                return req
+
+        class FakePlan:
+            def invoke(self, _):
+                return plan
+
+        monkeypatch.setattr(trip_planner, "_extract_model", FakeExtract)
+        monkeypatch.setattr(trip_planner, "_plan_model", FakePlan)
+        monkeypatch.setattr(
+            trip_planner, "add_itinerary", lambda facts, summary, *, session_id="default": {"summary": summary}
+        )
+        monkeypatch.setattr(itinerary_agent, "get_weather", type("W", (), {"invoke": lambda self, a: "晴"})())
+        return itinerary_agent.run({"user_input": "x", "session_id": "会话A"})["answer"]
+
+    vague = trip_planner.TripRequest(
+        from_city="北京", to_city="杭州", start_date="2026-08-17", duration_days=3, hotel_pref="无", budget_pref="中等",
+        date_is_vague=True,
+    )
+    out_vague = run_with(vague)
+    assert "按 2026-08-17 开始安排" in out_vague and "重新排" in out_vague
+
+    exact = trip_planner.TripRequest(
+        from_city="北京", to_city="杭州", start_date="2026-08-17", duration_days=3, hotel_pref="无", budget_pref="中等"
+    )
+    out_exact = run_with(exact)
+    assert "重新排" not in out_exact

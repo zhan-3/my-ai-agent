@@ -35,6 +35,9 @@ class TripRequest(BaseModel):
     duration_days: int
     hotel_pref: str = Field(description="没有则填'无'")
     budget_pref: str = Field(description="没有则填'中等'")
+    date_is_vague: bool = Field(
+        default=False, description="日期表达模糊（只说了下周/过几天等，无法确定到具体哪天）时为 true；给了具体日期或星期几时为 false"
+    )
 
 
 class DayPlan(BaseModel):
@@ -70,9 +73,11 @@ extract_prompt = ChatPromptTemplate.from_messages(
             "system",
             """你是企业差旅助手的要素提取器，输出严格 JSON。
 键名必须严格为英文：from_city、to_city、start_date（YYYY-MM-DD）、duration_days（数字）、
-hotel_pref（没有填"无"）、budget_pref（经济/中等/舒适，没有填"中等"）。
+hotel_pref（没有填"无"）、budget_pref（经济/中等/舒适，没有填"中等"）、
+date_is_vague（布尔：日期表达模糊如「下周」「过几天」时为 true；给了具体日期或星期几如「8月17日」「下周一」「明天」时为 false）。
 相对时间（如「下周」「明天」「下周一」「后天」）必须按「今天」推算成具体 YYYY-MM-DD，不要填"待定"；完全没提日期才填"待定"。
-示例：{{"from_city": "北京", "to_city": "杭州", "start_date": "2026-08-20", "duration_days": 3, "hotel_pref": "无", "budget_pref": "中等"}}""",
+示例：{{"from_city": "北京", "to_city": "杭州", "start_date": "2026-08-20", "duration_days": 3, "hotel_pref": "无", "budget_pref": "中等", "date_is_vague": false}}，
+模糊示例：{{"from_city": "北京", "to_city": "杭州", "start_date": "2026-08-17", "duration_days": 3, "hotel_pref": "无", "budget_pref": "中等", "date_is_vague": true}}（用户只说了「下周」）""",
         ),
         ("human", "今天是 {today}。\n用户输入：{input}"),
     ]
