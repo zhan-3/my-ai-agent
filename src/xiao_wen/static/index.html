@@ -6,88 +6,141 @@
 <title>晓问 · 差旅出行助手</title>
 <style>
   :root {
-    --ink: #1a1a1a; --paper: #fbf9f4; --accent: #b03a2e; --muted: #8a8a8a;
-    --bubble-user: #eae6dc; --bubble-ai: #ffffff; --line: #e2ddd2;
+    --ink: #1f1d1a; --paper: #faf7f0; --card: #ffffff;
+    --accent: #b03a2e; --accent-soft: #f7e9e4; --muted: #94897a;
+    --line: #e6dfd2; --bubble-user: #efe9dd; --green: #3f8f5f;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
-    background: var(--paper); color: var(--ink); height: 100vh; display: flex;
-    flex-direction: column;
+    background: var(--paper); color: var(--ink); height: 100vh;
+    display: flex; flex-direction: column; overflow: hidden;
   }
+
+  /* ---- 顶栏 ---- */
   header {
-    padding: 14px 24px; border-bottom: 1px solid var(--line);
-    background: #fffdf8; display: flex; align-items: baseline; gap: 12px;
+    padding: 13px 24px; border-bottom: 1px solid var(--line);
+    background: rgba(250,247,240,.92); backdrop-filter: blur(6px);
+    display: flex; align-items: center; gap: 12px; flex-shrink: 0;
   }
-  header h1 { font-size: 19px; letter-spacing: .5px; }
+  header .brand { display: flex; align-items: baseline; gap: 8px; }
+  header h1 { font-size: 18px; letter-spacing: .5px; }
   header h1 .dot { color: var(--accent); }
   header .sub { color: var(--muted); font-size: 12.5px; }
-  .status { margin-left: auto; font-size: 12px; color: var(--muted); }
-  .status .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-    background: #4caf50; margin-right: 6px; animation: blink 1.6s infinite; }
+  .status { margin-left: auto; font-size: 12px; color: var(--muted); cursor: pointer;
+    display: flex; align-items: center; gap: 6px; user-select: none; }
+  .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+    animation: blink 1.8s infinite; }
   @keyframes blink { 50% { opacity: .35; } }
-  #chat { flex: 1; overflow-y: auto; padding: 22px 24px; max-width: 860px;
+
+  /* ---- 聊天主区 ---- */
+  #chatApp { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  #chat { flex: 1; overflow-y: auto; padding: 20px 22px 8px; max-width: 860px;
     width: 100%; margin: 0 auto; }
-  .msg { max-width: 78%; margin-bottom: 16px; line-height: 1.65; font-size: 14.5px; }
-  .msg .who { font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
-  .msg .bubble { padding: 10px 14px; border-radius: 10px; white-space: pre-wrap;
-    word-break: break-word; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+
+  /* 空状态欢迎 */
+  .welcome { text-align: center; margin: 9vh auto 0; max-width: 540px; padding: 0 10px; }
+  .welcome .hi { font-size: 22px; font-weight: 600; margin-bottom: 10px; }
+  .welcome .desc { color: var(--muted); font-size: 14px; line-height: 1.8; }
+
+  /* 消息 */
+  .msg { max-width: 84%; margin-bottom: 18px; line-height: 1.7; font-size: 14.5px;
+    animation: rise .28s ease; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  .msg .who { font-size: 11.5px; color: var(--muted); margin-bottom: 5px;
+    display: flex; align-items: center; gap: 8px; }
+  .msg .tag { font-size: 10.5px; color: var(--accent); background: var(--accent-soft);
+    border: 1px solid #e8c9bf; border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+  .msg .bubble { padding: 11px 15px; border-radius: 12px; white-space: pre-wrap;
+    word-break: break-word; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
   .msg.user { margin-left: auto; }
   .msg.user .bubble { background: var(--bubble-user); border: 1px solid var(--line); }
-  .msg.ai .bubble { background: var(--bubble-ai); border: 1px solid var(--line); }
-  .msg.ai .tag { font-size: 11px; color: var(--accent); margin-left: 8px; }
-  .hint { color: var(--muted); font-size: 13px; text-align: center; margin: 34px 0 8px; }
+  .msg.ai .bubble { background: var(--card); border: 1px solid var(--line); }
+
+  /* 思考中（等待后端响应） */
+  .msg.thinking .bubble { display: flex; align-items: center; gap: 9px; color: var(--muted); }
+  .dots { display: inline-flex; gap: 4px; }
+  .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+    animation: bounce 1.2s infinite; }
+  .dots i:nth-child(2) { animation-delay: .18s; }
+  .dots i:nth-child(3) { animation-delay: .36s; }
+  @keyframes bounce { 0%,60%,100% { transform: translateY(0); opacity:.35; }
+    30% { transform: translateY(-4px); opacity:1; } }
+
+  /* 建议 chips */
+  .hint { color: var(--muted); font-size: 13px; text-align: center; margin: 16px 0 10px; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
-    margin-bottom: 20px; max-width: 860px; margin-left: auto; margin-right: auto; }
+    margin-bottom: 16px; max-width: 860px; margin-left: auto; margin-right: auto;
+    padding: 0 22px; }
   .chip { font-size: 12.5px; color: var(--accent); background: #fff8f2;
-    border: 1px solid #e5c9c0; border-radius: 999px; padding: 5px 13px; cursor: pointer;
-    transition: .15s; }
-  .chip:hover { background: #fdefe6; }
-  footer { border-top: 1px solid var(--line); background: #fffdf8; padding: 12px 24px; }
+    border: 1px solid #e5c9c0; border-radius: 999px; padding: 6px 14px; cursor: pointer;
+    transition: all .15s; }
+  .chip:hover { background: #fdefe6; transform: translateY(-1px); }
+
+  /* ---- 输入区 ---- */
+  footer { border-top: 1px solid var(--line); background: rgba(250,247,240,.95);
+    padding: 12px 22px 16px; flex-shrink: 0; }
   .composer { max-width: 860px; margin: 0 auto; display: flex; gap: 10px; }
-  #input { flex: 1; border: 1px solid var(--line); border-radius: 10px; padding: 11px 14px;
-    font-size: 14.5px; background: #fff; outline: none; }
-  #input:focus { border-color: var(--accent); }
-  #send { border: none; background: var(--accent); color: #fff; border-radius: 10px;
-    padding: 0 20px; font-size: 14.5px; cursor: pointer; }
-  #send:disabled { opacity: .5; cursor: not-allowed; }
-  .typing::after { content: "▋"; color: var(--accent); animation: blink 1s infinite; }
+  #input { flex: 1; border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px;
+    font-size: 14.5px; background: #fff; outline: none;
+    transition: border-color .15s, box-shadow .15s; }
+  #input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(176,58,46,.08); }
+  #input:disabled { background: #f3efe7; cursor: not-allowed; }
+  #send { border: none; background: var(--accent); color: #fff; border-radius: 12px;
+    padding: 0 22px; font-size: 14.5px; cursor: pointer; transition: opacity .15s, transform .05s; }
+  #send:hover:not(:disabled) { opacity: .92; }
+  #send:active:not(:disabled) { transform: scale(.97); }
+  #send:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* ---- 登录面板 ---- */
+  #authPanel { max-width: 400px; margin: 10vh auto 0; text-align: center; padding: 0 20px; }
+  #authPanel h2 { font-size: 20px; margin-bottom: 6px; }
+  #authPanel p.hint { margin: 8px 0 24px; }
+  #authPanel input { width: 100%; padding: 11px 14px; border: 1px solid var(--line);
+    border-radius: 10px; font-size: 14.5px; outline: none; margin-bottom: 10px; }
+  #authPanel input:focus { border-color: var(--accent); }
+  #authPanel .row { display: flex; gap: 10px; }
+  #authPanel button { border: none; border-radius: 10px; padding: 11px 0;
+    font-size: 14.5px; cursor: pointer; }
+  #authLogin { flex: 1; background: var(--accent); color: #fff; }
+  #authRegister { flex: 1; border: 1px solid var(--accent); background: #fff; color: var(--accent); }
+  #authError { color: var(--accent); font-size: 13px; margin-top: 12px; }
 </style>
 </head>
 <body>
 
 <header>
-  <h1><span class="dot">晓问</span> · 差旅出行助手</h1>
-  <span class="sub">多 Agent 智能出行助手｜六 Worker 主管架构</span>
+  <div class="brand"><h1><span class="dot">晓问</span> · 差旅出行助手</h1></div>
+  <span class="sub">多 Agent 智能出行助手｜规划 · 记忆 · 联网 · 知识</span>
   <span class="status" id="authStatus"><span class="pulse"></span>在线</span>
 </header>
 
 <!-- 登录 / 注册（未认证时显示） -->
-<div id="authPanel" style="display:none; max-width:420px; margin:12vh auto 0; text-align:center;">
-  <h2 style="font-size:20px; margin-bottom:6px;">欢迎使用晓问</h2>
-  <p class="hint" style="margin:8px 0 22px;">登录后按账号隔离记忆（注册即登录）</p>
-  <input id="authUser" placeholder="用户名" style="width:100%; padding:11px 14px; border:1px solid var(--line); border-radius:10px; font-size:14.5px; outline:none; margin-bottom:10px;">
-  <input id="authPass" type="password" placeholder="密码" style="width:100%; padding:11px 14px; border:1px solid var(--line); border-radius:10px; font-size:14.5px; outline:none; margin-bottom:16px;">
-  <div style="display:flex; gap:10px;">
-    <button id="authLogin" style="flex:1; border:none; background:var(--accent); color:#fff; border-radius:10px; padding:11px 0; font-size:14.5px; cursor:pointer;">登录</button>
-    <button id="authRegister" style="flex:1; border:1px solid var(--accent); background:#fff; color:var(--accent); border-radius:10px; padding:11px 0; font-size:14.5px; cursor:pointer;">注册</button>
+<div id="authPanel" style="display:none;">
+  <h2>欢迎使用晓问</h2>
+  <p class="hint">登录后按账号隔离记忆（注册即登录）</p>
+  <input id="authUser" placeholder="用户名" autocomplete="username">
+  <input id="authPass" type="password" placeholder="密码" autocomplete="current-password">
+  <div class="row">
+    <button id="authLogin">登录</button>
+    <button id="authRegister">注册</button>
   </div>
-  <p id="authError" style="color:var(--accent); font-size:13px; margin-top:12px;"></p>
+  <p id="authError"></p>
 </div>
 
 <!-- 聊天主界面（已认证时显示） -->
-<div id="chatApp" style="display:none; height:100%; flex-direction:column;">
-<div id="chat"></div>
+<div id="chatApp" style="display:none;">
+  <div id="chat"></div>
 
-<div class="hint">试试问这些：</div>
-<div class="chips" id="chips"></div>
+  <div class="hint">试试问这些：</div>
+  <div class="chips" id="chips"></div>
 
-<footer>
-  <div class="composer">
-    <input id="input" placeholder="输入差旅问题，回车发送…" autocomplete="off">
-    <button id="send">发送</button>
-  </div>
-</footer>
+  <footer>
+    <div class="composer">
+      <input id="input" placeholder="输入差旅问题，回车发送…" autocomplete="off">
+      <button id="send">发送</button>
+    </div>
+  </footer>
 </div>
 
 <script>
@@ -118,13 +171,12 @@ function showAuth() {
   AUTH.style.display = "block";
   APP.style.display = "none";
   AUTH_STATUS.innerHTML = `<span class="pulse"></span>未登录`;
-  AUTH_STATUS.style.cursor = "pointer";
+  AUTH_STATUS.onclick = null;
 }
 function showApp() {
   AUTH.style.display = "none";
   APP.style.display = "flex";
   AUTH_STATUS.innerHTML = `<span class="pulse"></span>${localStorage.getItem(USER_KEY) || ""} ｜ 退出`;
-  AUTH_STATUS.style.cursor = "pointer";
   AUTH_STATUS.onclick = logout;
 }
 async function authSubmit(mode) {
@@ -132,13 +184,20 @@ async function authSubmit(mode) {
   const password = AUTH_PASS.value;
   AUTH_ERR.textContent = "";
   if (!username || !password) { AUTH_ERR.textContent = "用户名和密码不能为空"; return; }
-  const res = await fetch(`/api/auth/${mode}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
-  });
+  let res;
+  try {
+    res = await fetch(`/api/auth/${mode}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+  } catch (e) {
+    AUTH_ERR.textContent = "网络错误，请确认服务已启动";
+    return;
+  }
   if (!res.ok) {
-    AUTH_ERR.textContent = (await res.json()).detail || "失败，请重试";
+    const body = await res.json().catch(() => ({}));
+    AUTH_ERR.textContent = body.detail || "失败，请重试";
     return;
   }
   const data = await res.json();
@@ -161,42 +220,72 @@ function logout() {
 // ---- 聊天主逻辑 ----
 function initChat() {
   showApp();
-  // 渲染建议 chips（只渲染一次）
-  if (!document.getElementById("chips").childElementCount) {
-    SUGGESTIONS.forEach(s => {
-      const c = document.createElement("div");
-      c.className = "chip";
-      c.textContent = s;
-      c.onclick = () => { INPUT.value = s; send(); };
-      document.getElementById("chips").appendChild(c);
-    });
-  }
+  renderChips();
+  renderWelcome();
   INPUT.focus();
 }
 
+function renderChips() {
+  if (document.getElementById("chips").childElementCount) return;
+  SUGGESTIONS.forEach(s => {
+    const c = document.createElement("div");
+    c.className = "chip";
+    c.textContent = s;
+    c.onclick = () => { INPUT.value = s; send(); };
+    document.getElementById("chips").appendChild(c);
+  });
+}
+
+function renderWelcome() {
+  if (CHAT.childElementCount) return;
+  const w = document.createElement("div");
+  w.className = "welcome";
+  w.innerHTML = `<div class="hi">你好，我是晓问 👋</div>
+    <div class="desc">你的企业差旅助手。我可以帮你规划出差行程、记住你的住宿餐饮偏好、查询差旅政策与天气，还能回顾历史行程。</div>`;
+  CHAT.appendChild(w);
+}
+
 function addMsg(role, text, tag) {
+  const w = CHAT.querySelector(".welcome");
+  if (w) w.remove();
   const div = document.createElement("div");
   div.className = "msg " + (role === "user" ? "user" : "ai");
   const who = role === "user" ? "你" : "晓问";
-  div.innerHTML = `<div class="who">${who}${tag ? `<span class="tag">${tag}</span>` : ""}</div>`
+  div.innerHTML = `<div class="who">${who}${tag ? `<span class="tag">${esc(tag)}</span>` : ""}</div>`
     + `<div class="bubble">${esc(text)}</div>`;
   CHAT.appendChild(div);
   CHAT.scrollTop = CHAT.scrollHeight;
   return div;
 }
 
-// 打字机效果
+// 思考中指示器：后端响应返回前显示跳动圆点
+function addThinking() {
+  const div = document.createElement("div");
+  div.className = "msg ai thinking";
+  div.innerHTML = `<div class="who">晓问</div>`
+    + `<div class="bubble"><span class="dots"><i></i><i></i><i></i></span>正在思考…</div>`;
+  CHAT.appendChild(div);
+  CHAT.scrollTop = CHAT.scrollHeight;
+  return div;
+}
+function removeThinking() {
+  const t = CHAT.querySelector(".msg.thinking");
+  if (t) t.remove();
+}
+
+// 打字机效果（答案到达后的流式观感，长文本加速）
 function typeAi(text, tag) {
-  const div = addMsg("ai", "", tag);
-  const bubble = div.querySelector(".bubble");
-  bubble.classList.add("typing");
-  let i = 0;
   return new Promise(resolve => {
+    const div = addMsg("ai", "", tag);
+    const bubble = div.querySelector(".bubble");
+    bubble.classList.add("typing");
+    let i = 0;
+    const speed = text.length > 350 ? 5 : 10;
     const step = () => {
       if (i < text.length) {
         bubble.textContent = text.slice(0, ++i);
         CHAT.scrollTop = CHAT.scrollHeight;
-        setTimeout(step, 8);
+        setTimeout(step, speed);
       } else {
         bubble.classList.remove("typing");
         resolve();
@@ -206,12 +295,17 @@ function typeAi(text, tag) {
   });
 }
 
+let busy = false;
 async function send() {
+  if (busy) return;               // 防重复提交
   const text = INPUT.value.trim();
   if (!text) return;
+  busy = true;
   INPUT.value = "";
   SEND.disabled = true;
+  INPUT.disabled = true;
   addMsg("user", text);
+  const thinking = addThinking();
   try {
     const res = await fetch("/api/chat", {
       method: "POST",
@@ -221,13 +315,17 @@ async function send() {
       },
       body: JSON.stringify({ user_input: text }),
     });
-    if (res.status === 401) { logout(); addMsg("ai", "登录已失效，请重新登录。"); return; }
+    if (res.status === 401) { removeThinking(); logout(); return; }
     const data = await res.json();
+    removeThinking();
     await typeAi(data.answer, `意图：${data.intent}`);
   } catch (e) {
+    removeThinking();
     addMsg("ai", "⚠️ 网络错误，请确认后端已启动。");
   } finally {
+    busy = false;
     SEND.disabled = false;
+    INPUT.disabled = false;
   }
   INPUT.focus();
 }
