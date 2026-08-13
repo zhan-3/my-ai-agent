@@ -50,6 +50,28 @@ class TestRegisterLogin:
         assert r.status_code == 200 and r.json()["username"] == "zhang"
 
 
+class TestMemoryEndpoint:
+    """/api/memory：认证后返回当前用户偏好 + 历史行程（前端记忆侧栏数据源）"""
+
+    def test_memory_requires_auth(self, client):
+        assert client.get("/api/memory").status_code == 401
+
+    def test_memory_returns_preferences_and_itineraries(self, client):
+        from xiao_wen import memory as memory_store
+
+        r = client.post("/api/auth/register", json={"username": "zhang", "password": "pass123"})
+        token = r.json()["token"]
+        # 当前用户写一条偏好 + 一条行程
+        memory_store.add_or_update_preference("住宿", "喜欢住汉庭", session_id="zhang")
+        memory_store.add_itinerary({"to_city": "北京"}, "北京出差", session_id="zhang")
+        r = client.get("/api/memory", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["preferences"][0]["category"] == "住宿"
+        assert data["preferences"][0]["content"] == "喜欢住汉庭"
+        assert data["itineraries"][0]["to_city"] == "北京"
+
+
 class TestChatAuthEnforced:
     def test_chat_without_token_401(self, client):
         r = client.post("/api/chat", json={"user_input": "你好"})

@@ -6,9 +6,10 @@
 <title>晓问 · 差旅出行助手</title>
 <style>
   :root {
-    --ink: #1f1d1a; --paper: #faf7f0; --card: #ffffff;
+    --ink: #1f1d1a; --paper: #f6f2ea; --card: #ffffff;
     --accent: #b03a2e; --accent-soft: #f7e9e4; --muted: #94897a;
     --line: #e6dfd2; --bubble-user: #efe9dd; --green: #3f8f5f;
+    --tr: #2f6fb2; --ho: #3f8f5f; --ac: #b0761f; --me: #8a5fb0; --no: #94897a;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -19,7 +20,7 @@
 
   /* ---- 顶栏 ---- */
   header {
-    padding: 13px 24px; border-bottom: 1px solid var(--line);
+    padding: 12px 24px; border-bottom: 1px solid var(--line);
     background: rgba(250,247,240,.92); backdrop-filter: blur(6px);
     display: flex; align-items: center; gap: 12px; flex-shrink: 0;
   }
@@ -33,29 +34,86 @@
     animation: blink 1.8s infinite; }
   @keyframes blink { 50% { opacity: .35; } }
 
-  /* ---- 聊天主区 ---- */
-  #chatApp { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-  #chat { flex: 1; overflow-y: auto; padding: 20px 22px 8px; max-width: 860px;
+  /* ---- 主体：记忆侧栏 + 聊天 ---- */
+  #shell { flex: 1; display: flex; min-height: 0; }
+
+  /* 记忆侧栏 */
+  #memPanel { width: 258px; flex-shrink: 0; background: #f0ebe1;
+    border-right: 1px solid var(--line); padding: 14px 14px 20px;
+    overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+  .mem-head { font-size: 13.5px; font-weight: 600; color: var(--ink);
+    display: flex; align-items: center; gap: 7px; letter-spacing: .3px; }
+  .mem-head::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .mem-sec .mem-title { font-size: 11.5px; color: var(--muted); margin-bottom: 7px;
+    display: flex; align-items: center; gap: 6px; }
+  .mem-title .cnt { background: var(--accent-soft); color: var(--accent);
+    border-radius: 999px; font-size: 10px; padding: 0 6px; }
+  .mem-list { display: flex; flex-direction: column; gap: 6px; }
+  .mem-item { background: var(--card); border: 1px solid var(--line);
+    border-radius: 9px; padding: 7px 10px; font-size: 12.5px; line-height: 1.5;
+    display: flex; gap: 8px; align-items: baseline; }
+  .mem-item .mem-cat { flex-shrink: 0; color: var(--accent); font-size: 11px;
+    background: var(--accent-soft); border-radius: 5px; padding: 1px 6px; }
+  .mem-empty { color: var(--muted); font-size: 12px; padding: 4px 2px; }
+  .mem-tip { font-size: 11px; color: var(--muted); line-height: 1.6;
+    background: #fff8f2; border: 1px dashed #e0c9bd; border-radius: 8px;
+    padding: 8px 10px; }
+  .mem-tip b { color: var(--accent); }
+
+  /* 聊天主区 */
+  #chatApp { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #chat { flex: 1; overflow-y: auto; padding: 20px 22px 8px; max-width: 880px;
     width: 100%; margin: 0 auto; }
 
   /* 空状态欢迎 */
-  .welcome { text-align: center; margin: 9vh auto 0; max-width: 540px; padding: 0 10px; }
+  .welcome { text-align: center; margin: 8vh auto 0; max-width: 560px; padding: 0 10px; }
   .welcome .hi { font-size: 22px; font-weight: 600; margin-bottom: 10px; }
-  .welcome .desc { color: var(--muted); font-size: 14px; line-height: 1.8; }
+  .welcome .desc { color: var(--muted); font-size: 14px; line-height: 1.9; }
+  .welcome .who2 { margin-top: 18px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .welcome .who2 .chipx { font-size: 11.5px; color: var(--accent); background: #fff8f2;
+    border: 1px solid #e5c9c0; border-radius: 999px; padding: 4px 11px; }
 
   /* 消息 */
-  .msg { max-width: 84%; margin-bottom: 18px; line-height: 1.7; font-size: 14.5px;
+  .msg { max-width: 86%; margin-bottom: 18px; line-height: 1.7; font-size: 14px;
     animation: rise .28s ease; }
   @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
   .msg .who { font-size: 11.5px; color: var(--muted); margin-bottom: 5px;
     display: flex; align-items: center; gap: 8px; }
   .msg .tag { font-size: 10.5px; color: var(--accent); background: var(--accent-soft);
     border: 1px solid #e8c9bf; border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+  .abadge { font-size: 10.5px; color: #8a3a2e; background: #fbe9e2;
+    border: 1px solid #e6c4b8; border-radius: 999px; padding: 2px 9px;
+    white-space: nowrap; cursor: help; display: inline-flex; align-items: center; gap: 4px; }
   .msg .bubble { padding: 11px 15px; border-radius: 12px; white-space: pre-wrap;
     word-break: break-word; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
   .msg.user { margin-left: auto; }
   .msg.user .bubble { background: var(--bubble-user); border: 1px solid var(--line); }
   .msg.ai .bubble { background: var(--card); border: 1px solid var(--line); }
+
+  /* 行程卡片（结构化渲染） */
+  .bubble.trip { padding: 6px 12px 12px; }
+  .trip-head { font-weight: 600; font-size: 14.5px; border-left: 4px solid var(--accent);
+    padding: 10px 12px; margin: 6px 0 4px; background: var(--accent-soft);
+    border-radius: 0 8px 8px 0; }
+  .trip-reasons { margin: 8px 4px 2px; }
+  .trip-reasons b { color: var(--muted); font-size: 12px; }
+  .trip-reasons ul { margin: 4px 0 0 18px; color: var(--muted); font-size: 12.5px; }
+  .day-card { border: 1px solid var(--line); border-radius: 10px;
+    margin: 10px 0; overflow: hidden; background: #fffdf9; }
+  .day-date { background: #f6ede2; padding: 6px 12px; font-weight: 600;
+    font-size: 13px; color: #6b4a35; display: flex; align-items: center; gap: 6px; }
+  .day-row { display: flex; gap: 8px; padding: 7px 12px; font-size: 13px;
+    border-top: 1px solid #f3ecdf; align-items: baseline; }
+  .day-row .lab { flex-shrink: 0; font-size: 11px; border-radius: 5px; padding: 0 6px; }
+  .day-row.tr .lab { background: #e8f0fa; color: var(--tr); }
+  .day-row.ho .lab { background: #e6f2ea; color: var(--ho); }
+  .day-row.ac .lab { background: #f8eeda; color: var(--ac); }
+  .day-row.me .lab { background: #f0e7f7; color: var(--me); }
+  .day-row.no .lab { background: #f0ece6; color: var(--no); }
+  .reminder { margin: 8px 4px 0; font-size: 12.5px; border-radius: 8px;
+    padding: 8px 12px; line-height: 1.6; }
+  .reminder.wx { background: #e8f1fb; color: #24578c; border: 1px solid #d3e4f5; }
+  .reminder.dt { background: #fbf0e2; color: #8a5a1e; border: 1px solid #f0ddbd; }
 
   /* 思考中（等待后端响应） */
   .msg.thinking .bubble { display: flex; align-items: center; gap: 9px; color: var(--muted); }
@@ -70,7 +128,7 @@
   /* 建议 chips */
   .hint { color: var(--muted); font-size: 13px; text-align: center; margin: 16px 0 10px; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
-    margin-bottom: 16px; max-width: 860px; margin-left: auto; margin-right: auto;
+    margin-bottom: 16px; max-width: 880px; margin-left: auto; margin-right: auto;
     padding: 0 22px; }
   .chip { font-size: 12.5px; color: var(--accent); background: #fff8f2;
     border: 1px solid #e5c9c0; border-radius: 999px; padding: 6px 14px; cursor: pointer;
@@ -80,7 +138,7 @@
   /* ---- 输入区 ---- */
   footer { border-top: 1px solid var(--line); background: rgba(250,247,240,.95);
     padding: 12px 22px 16px; flex-shrink: 0; }
-  .composer { max-width: 860px; margin: 0 auto; display: flex; gap: 10px; }
+  .composer { max-width: 880px; margin: 0 auto; display: flex; gap: 10px; }
   #input { flex: 1; border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px;
     font-size: 14.5px; background: #fff; outline: none;
     transition: border-color .15s, box-shadow .15s; }
@@ -105,6 +163,10 @@
   #authLogin { flex: 1; background: var(--accent); color: #fff; }
   #authRegister { flex: 1; border: 1px solid var(--accent); background: #fff; color: var(--accent); }
   #authError { color: var(--accent); font-size: 13px; margin-top: 12px; }
+
+  @media (max-width: 900px) {
+    #memPanel { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -128,20 +190,38 @@
   <p id="authError"></p>
 </div>
 
-<!-- 聊天主界面（已认证时显示） -->
-<div id="chatApp" style="display:none;">
-  <div id="chat"></div>
-
-  <div class="hint">试试问这些：</div>
-  <div class="chips" id="chips"></div>
-
-  <footer>
-    <div class="composer">
-      <input id="input" placeholder="输入差旅问题，回车发送…" autocomplete="off">
-      <button id="send">发送</button>
+<!-- 主界面：记忆侧栏 + 聊天 -->
+<main id="shell" style="display:none;">
+  <aside id="memPanel">
+    <div class="mem-head">🧠 Agent 记忆库</div>
+    <div class="mem-sec">
+      <div class="mem-title">已记住的偏好 <span class="cnt" id="prefCnt">0</span></div>
+      <div id="memPrefs" class="mem-list"><div class="mem-empty">暂无，聊天后自动记住</div></div>
     </div>
-  </footer>
-</div>
+    <div class="mem-sec">
+      <div class="mem-title">历史行程 <span class="cnt" id="tripCnt">0</span></div>
+      <div id="memTrips" class="mem-list"><div class="mem-empty">暂无行程记录</div></div>
+    </div>
+    <div class="mem-tip">
+      💡 左侧是<b>当前账号</b>的长期记忆（Postgres / 内存后端），由子 Agent 自动读写——
+      你提到的住宿偏好、常驻城市、历史行程都会实时落在这里，下次规划自动生效。
+    </div>
+  </aside>
+
+  <div id="chatApp">
+    <div id="chat"></div>
+
+    <div class="hint">试试问这些：</div>
+    <div class="chips" id="chips"></div>
+
+    <footer>
+      <div class="composer">
+        <input id="input" placeholder="输入差旅问题，回车发送…" autocomplete="off">
+        <button id="send">发送</button>
+      </div>
+    </footer>
+  </div>
+</main>
 
 <script>
 const TOKEN_KEY = "xw_token";
@@ -149,13 +229,24 @@ const USER_KEY = "xw_user";
 const SUGGESTIONS = [
   "帮我规划10月8日去北京开会4天的行程",
   "出差住宿标准是什么",
-  "北京今天天气怎么样",
+  "北京明天天气怎么样",
   "我不吃辣，住宿喜欢安静",
   "我上次的行程是什么",
 ];
 
+// 子 Agent 注册表（与后端 INTENT 一一对应）：多 Agent 分工可视化
+const AGENTS = {
+  "行程规划": { icon: "🗺️", name: "行程规划 Agent", desc: "要素提取 → 常驻城市记忆补全 → 生成逐日行程 → 写回长期记忆，并附目的地天气" },
+  "偏好记录": { icon: "💡", name: "偏好记忆 Agent", desc: "从一句话提取全部偏好（住宿/餐饮/交通/预算/常驻城市），写入长期记忆" },
+  "历史查询": { icon: "🕘", name: "历史查询 Agent", desc: "读取长期记忆中的历史行程，回顾上次出差" },
+  "知识问答": { icon: "📚", name: "知识库 Agent", desc: "RAG 语义检索差旅政策文档，回答标准/制度类问题" },
+  "联网查询": { icon: "🌐", name: "联网查询 Agent", desc: "ReAct 工具调用：天气（未来7天）/汇率/空气质量，带短期记忆指代消解" },
+  "其他": { icon: "🤝", name: "兜底 Agent", desc: "企业差旅范围外的问题，给出边界说明" },
+  "error": { icon: "⚠️", name: "系统异常", desc: "" },
+};
+
 const AUTH = document.getElementById("authPanel");
-const APP = document.getElementById("chatApp");
+const SHELL = document.getElementById("shell");
 const AUTH_USER = document.getElementById("authUser");
 const AUTH_PASS = document.getElementById("authPass");
 const AUTH_ERR = document.getElementById("authError");
@@ -169,13 +260,13 @@ function getToken() { return localStorage.getItem(TOKEN_KEY); }
 // ---- 认证视图切换 ----
 function showAuth() {
   AUTH.style.display = "block";
-  APP.style.display = "none";
+  SHELL.style.display = "none";
   AUTH_STATUS.innerHTML = `<span class="pulse"></span>未登录`;
   AUTH_STATUS.onclick = null;
 }
 function showApp() {
   AUTH.style.display = "none";
-  APP.style.display = "flex";
+  SHELL.style.display = "flex";
   AUTH_STATUS.innerHTML = `<span class="pulse"></span>${localStorage.getItem(USER_KEY) || ""} ｜ 退出`;
   AUTH_STATUS.onclick = logout;
 }
@@ -217,11 +308,30 @@ function logout() {
   showAuth();
 }
 
+// ---- 记忆侧栏（/api/memory：当前账号长期记忆可视化） ----
+function renderMem(el, cntEl, list, fn) {
+  cntEl.textContent = (list && list.length) || 0;
+  if (!list || !list.length) { el.innerHTML = `<div class="mem-empty">暂无，聊天后自动记住</div>`; return; }
+  el.innerHTML = list.map(fn).join("");
+}
+async function refreshMemory() {
+  try {
+    const res = await fetch("/api/memory", { headers: { Authorization: "Bearer " + getToken() } });
+    if (!res.ok) return;
+    const data = await res.json();
+    renderMem(document.getElementById("memPrefs"), document.getElementById("prefCnt"), data.preferences,
+      p => `<div class="mem-item"><span class="mem-cat">${esc(p.category)}</span><span>${esc(p.content)}</span></div>`);
+    renderMem(document.getElementById("memTrips"), document.getElementById("tripCnt"), data.itineraries,
+      it => `<div class="mem-item"><span class="mem-cat">${esc((it.start_date || "?").slice(5))}</span><span>${esc(it.from_city || "?")}→${esc(it.to_city || "?")} · ${it.duration_days || "?"}天</span></div>`);
+  } catch (e) { /* 记忆栏失败不打扰主流程 */ }
+}
+
 // ---- 聊天主逻辑 ----
 function initChat() {
   showApp();
   renderChips();
   renderWelcome();
+  refreshMemory();
   INPUT.focus();
 }
 
@@ -241,24 +351,73 @@ function renderWelcome() {
   const w = document.createElement("div");
   w.className = "welcome";
   w.innerHTML = `<div class="hi">你好，我是晓问 👋</div>
-    <div class="desc">你的企业差旅助手。我可以帮你规划出差行程、记住你的住宿餐饮偏好、查询差旅政策与天气，还能回顾历史行程。</div>`;
+    <div class="desc">你的企业差旅助手。背后是 <b>多 Agent 协作</b>：行程规划、偏好记忆、历史查询、知识库（RAG）、联网查询（工具调用）各司其职，共享你的长期记忆。</div>
+    <div class="who2">
+      <span class="chipx">🗺️ 行程规划</span><span class="chipx">💡 偏好记忆</span>
+      <span class="chipx">📚 知识库</span><span class="chipx">🌐 联网查询</span><span class="chipx">🕘 历史查询</span>
+    </div>`;
   CHAT.appendChild(w);
 }
 
-function addMsg(role, text, tag) {
+function addMsg(role, text, meta) {
   const w = CHAT.querySelector(".welcome");
   if (w) w.remove();
   const div = document.createElement("div");
   div.className = "msg " + (role === "user" ? "user" : "ai");
-  const who = role === "user" ? "你" : "晓问";
-  div.innerHTML = `<div class="who">${who}${tag ? `<span class="tag">${esc(tag)}</span>` : ""}</div>`
+  let who = role === "user" ? "你" : "晓问";
+  let tagHtml = "";
+  if (role === "ai" && meta && meta.intent) {
+    const a = AGENTS[meta.intent] || AGENTS["其他"];
+    who = `晓问 <span class="abadge" title="${esc(a.desc)}">${a.icon} ${esc(a.name)}</span>`;
+  } else if (meta && meta.tag) {
+    tagHtml = `<span class="tag">${esc(meta.tag)}</span>`;
+  }
+  div.innerHTML = `<div class="who">${who}${tagHtml}</div>`
     + `<div class="bubble">${esc(text)}</div>`;
   CHAT.appendChild(div);
   CHAT.scrollTop = CHAT.scrollHeight;
   return div;
 }
 
-// 思考中指示器：后端响应返回前显示跳动圆点
+// 行程答案结构化渲染：📋 摘要 + 💡 理由 + 【日期】逐日卡片 + 🌤️/📅 提醒
+function renderTripCard(bubble, text) {
+  let summary = "", reasons = [], days = [], reminders = [], cur = null, inReasons = false;
+  for (const raw of text.split("\n")) {
+    const t = raw.trim();
+    if (!t) continue;
+    if (t.startsWith("📋")) { summary = t.replace(/^📋\s*/, ""); continue; }
+    if (t.startsWith("💡")) { inReasons = true; reasons.push(t.replace(/^💡\s*/, "")); continue; }
+    if (t.startsWith("【") && t.endsWith("】")) {
+      inReasons = false;
+      cur = { date: t.slice(1, -1), rows: [] };
+      days.push(cur);
+      continue;
+    }
+    if (t.startsWith("🌤️")) { reminders.push({ cls: "wx", text: t }); continue; }
+    if (t.startsWith("📅")) { reminders.push({ cls: "dt", text: t }); continue; }
+    if (inReasons) { reasons.push(t.replace(/^·\s*/, "")); continue; }
+    if (cur) cur.rows.push(t);
+  }
+  let html = "";
+  if (summary) html += `<div class="trip-head">📋 ${esc(summary)}</div>`;
+  if (reasons.length) {
+    html += `<div class="trip-reasons">💡 <b>安排理由</b><ul>` +
+      reasons.map(r => `<li>${esc(r)}</li>`).join("") + `</ul></div>`;
+  }
+  const CLS = { "交通": "tr", "住宿": "ho", "活动": "ac", "用餐": "me", "备注": "no" };
+  html += days.map(d => {
+    const rows = d.rows.map(r => {
+      const m = r.match(/^(交通|住宿|活动|用餐|备注)[：:]\s*(.*)$/);
+      if (!m) return `<div class="day-row">${esc(r)}</div>`;
+      return `<div class="day-row ${CLS[m[1]] || ""}"><span class="lab">${m[1]}</span><span>${esc(m[2])}</span></div>`;
+    }).join("");
+    return `<div class="day-card"><div class="day-date">📅 ${esc(d.date)}</div>${rows}</div>`;
+  }).join("");
+  html += reminders.map(r => `<div class="reminder ${r.cls}">${esc(r.text)}</div>`).join("");
+  bubble.innerHTML = html;
+  bubble.classList.add("trip");
+}
+
 function addThinking() {
   const div = document.createElement("div");
   div.className = "msg ai thinking";
@@ -273,11 +432,17 @@ function removeThinking() {
   if (t) t.remove();
 }
 
-// 打字机效果（答案到达后的流式观感，长文本加速）
-function typeAi(text, tag) {
+// 打字机效果（普通文本逐字；结构化行程一次渲染）
+function typeAi(text, meta) {
   return new Promise(resolve => {
-    const div = addMsg("ai", "", tag);
+    const div = addMsg("ai", "", meta);
     const bubble = div.querySelector(".bubble");
+    if (meta && meta.trip) {
+      renderTripCard(bubble, text);
+      CHAT.scrollTop = CHAT.scrollHeight;
+      resolve();
+      return;
+    }
     bubble.classList.add("typing");
     let i = 0;
     const speed = text.length > 350 ? 5 : 10;
@@ -318,7 +483,9 @@ async function send() {
     if (res.status === 401) { removeThinking(); logout(); return; }
     const data = await res.json();
     removeThinking();
-    await typeAi(data.answer, `意图：${data.intent}`);
+    const isTrip = data.intent === "行程规划" && String(data.answer).includes("【");
+    await typeAi(data.answer, { intent: data.intent, trip: isTrip });
+    refreshMemory();           // 回复后刷新记忆侧栏（偏好/行程可能已更新）
   } catch (e) {
     removeThinking();
     addMsg("ai", "⚠️ 网络错误，请确认后端已启动。");

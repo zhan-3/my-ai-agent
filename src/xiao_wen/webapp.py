@@ -110,6 +110,18 @@ def me(authorization: str | None = Header(default=None)) -> dict:
     return {"username": _current_user(authorization)}
 
 
+@app.get("/api/memory")
+def memory(authorization: str | None = Header(default=None)) -> dict:
+    """当前用户记忆快照：偏好 + 历史行程（前端记忆侧栏可视化，体现 Agent 长期记忆）"""
+    user = _current_user(authorization)
+    from xiao_wen.memory import get_itineraries, get_preferences
+
+    return {
+        "preferences": get_preferences(session_id=user),
+        "itineraries": get_itineraries(session_id=user),
+    }
+
+
 # ---- 前端页面（随文件存放，同目录 static/index.html） ----
 HTML_PATH = os.path.join(os.path.dirname(__file__), "static", "index.html")
 
