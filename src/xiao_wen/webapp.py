@@ -13,15 +13,17 @@
   Authorization Bearer 解出用户名作为 session_id，客户端不再自填（用户隔离）
 """
 
+import json
 import os
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from xiao_wen import auth
 from xiao_wen.session import chat as run_chat  # 会话循环收口（默认 = 图工厂调度图，多意图并行）
+from xiao_wen.session import stream_chat  # 流式会话循环（SSE 阶段事件）
 
 app = FastAPI(title="晓问 · 差旅出行助手", description="多 Agent 差旅助手 Web 界面")
 
@@ -84,6 +86,38 @@ def chat(req: ChatRequest, authorization: str | None = Header(default=None)) -> 
 
         logger.error("chat 失败（user=%s）：%s", user, e)
         return ChatResponse(answer="⚠️ 服务暂时不可用，请稍后再试。", intent="error", reason=str(e)[:120])
+
+
+def _sse(event: dict) -> str:
+    """SSE 帧：单行 JSON data（前端按 \n\n 分帧）"""
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+@app.post("/api/chat/stream")
+def chat_stream(req: ChatRequest, authorization: str | None = Header(default=None)) -> StreamingResponse:
+    """SSE 流式聊天：阶段事件（意图识别/子 Agent 进度）+ 最终 done（answer/intent/reason/plan）。
+    旧前端 / 旧契约走 /api/chat 不受影响；阶段事件让长 LLM 等待有实时进度反馈。
+    """
+    user = _current_user(authorization)
+    text = req.user_input.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="输入不能为空")
+
+    async def gen():
+        try:
+            async for ev in stream_chat(text, user):
+                yield _sse(ev)
+        except Exception as e:  # 防御：任何未消化异常也转成 error 事件，客户端永不悬挂
+            from xiao_wen.stability import logger
+
+            logger.error("chat/stream 失败（user=%s）：%s", user, e)
+            yield _sse({"type": "error", "message": "⚠️ 服务暂时不可用，请稍后再试。"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---- 认证端点（JWT，ADR-0007） ----

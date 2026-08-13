@@ -1,12 +1,25 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { useChat } from '@/hooks/useChat'
-import { SUGGESTIONS } from '@/lib/agents'
+import { useChat, type StageItem } from '@/hooks/useChat'
+import { AGENTS, SUGGESTIONS, agentOf } from '@/lib/agents'
 import MemorySidebar from '@/components/MemorySidebar'
 import MessageBubble from '@/components/MessageBubble'
 
-// 主界面：记忆侧栏 + 聊天区（欢迎语 / 消息流 / 快捷提问 / 输入框）
+function stageLabel(s: StageItem): string {
+  switch (s.intent) {
+    case '__start__':
+      return '正在理解你的请求…'
+    case '__intent__':
+      return `已识别意图：${AGENTS[s.resolved ?? ''] ? agentOf(s.resolved).name : '…'}`
+    case '__merge__':
+      return s.status === 'done' ? '并行结果汇总完成' : '汇总并行结果…'
+    default:
+      return `${agentOf(s.intent).icon} ${agentOf(s.intent).name}${s.status === 'done' ? '完成' : '处理中…'}`
+  }
+}
+
+// 主界面：记忆侧栏 + 聊天区（欢迎语 / 消息流 / SSE 阶段进度 / 快捷提问 / 输入框）
 export default function ChatShell({
   username,
   onLogout,
@@ -14,7 +27,7 @@ export default function ChatShell({
   username: string | null
   onLogout: () => void
 }) {
-  const { messages, busy, send } = useChat({ onUnauthorized: onLogout })
+  const { messages, busy, send, stages } = useChat({ onUnauthorized: onLogout })
   const [input, setInput] = useState('')
   const [memTick, setMemTick] = useState(0) // 回复成功后 +1，触发记忆侧栏刷新
 
@@ -57,6 +70,23 @@ export default function ChatShell({
           {messages.map((m, i) => (
             <MessageBubble key={i} msg={m} />
           ))}
+          {busy && stages.length > 0 && (
+            <div className="space-y-1.5" data-testid="stages">
+              {stages.map((s, i) => (
+                <div
+                  key={s.intent + i}
+                  className="flex items-center gap-2 text-xs text-muted-foreground"
+                >
+                  {s.status === 'working' ? (
+                    <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-primary" />
+                  ) : (
+                    <span className="text-emerald-600">✓</span>
+                  )}
+                  <span>{stageLabel(s)}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="border-t p-4">

@@ -81,6 +81,36 @@ class TestChatAuthEnforced:
         r = client.post("/api/chat", json={"user_input": "你好"}, headers={"Authorization": "Bearer junk"})
         assert r.status_code == 401
 
+    def test_chat_stream_requires_auth(self, client):
+        r = client.post("/api/chat/stream", json={"user_input": "你好"})
+        assert r.status_code == 401
+
+    def test_chat_stream_returns_sse_events(self, client, monkeypatch):
+        """SSE：POST /api/chat/stream → text/event-stream，data 行含阶段事件 + done"""
+
+        async def fake_stream(text, session_id):
+            yield {"type": "stage", "status": "start"}
+            yield {"type": "stage", "status": "working", "intent": "行程规划"}
+            yield {"type": "stage", "status": "done", "intent": "行程规划"}
+            yield {"type": "done", "answer": "行程如下", "intent": "行程规划", "reason": "r", "plan": None}
+
+        monkeypatch.setattr(webapp, "stream_chat", fake_stream)
+        token = client.post(
+            "/api/auth/register", json={"username": "zhang", "password": "pass123"}
+        ).json()["token"]
+        r = client.post(
+            "/api/chat/stream",
+            json={"user_input": "10月8日去北京开会4天"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/event-stream")
+        body = r.text
+        assert 'data: {"type": "stage"' in body
+        assert '"intent": "行程规划"' in body
+        assert '"type": "done"' in body and '"answer": "行程如下"' in body
+        assert '\n\n' in body  # SSE 帧分隔
+
     def test_chat_uses_user_as_session(self, client, monkeypatch):
         """强制用户隔离：run_chat 收到的 session_id == 用户名，忽略客户端自填"""
         calls = []

@@ -8,6 +8,7 @@
 - 会话隔离：记忆按 session_id 隔离（ADR-0006），webapp 层升级为用户隔离（ADR-0007）
 """
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from xiao_wen import memory
@@ -47,3 +48,91 @@ def chat(text: str, session_id: str = "default", *, graph=None, store=None) -> C
     store.add_message("user", text, session_id=session_id)
     store.add_message("assistant", r["answer"], session_id=session_id)
     return ChatResult(answer=r["answer"], intent=r["intent"], reason=r["reason"], plan=r.get("plan"))
+
+
+async def stream_chat(
+    text: str, session_id: str = "default", *, graph=None, store=None
+) -> AsyncIterator[dict]:
+    """流式会话循环（SSE 阶段事件）：与 chat() 同一条图、同一记忆闭环，但逐个产出事件：
+
+    - {"type": "stage", "status": "start"}                           请求已受理
+    - {"type": "stage", "status": "intent", "intent": "行程规划"}    意图已解析（classify 完成）
+    - {"type": "stage", "status": "working", "intent": "X"}        子 Agent 开始
+    - {"type": "stage", "status": "done", "intent": "X"}          子 Agent 完成
+    - {"type": "stage", "status": "done", "intent": "__merge__"}   并行汇总完成
+    - {"type": "done", "answer": ..., "intent": ..., "reason": ..., "plan": ...}
+    - {"type": "error", "message": ...}                               异常降级（不中断流）
+
+    实现：graph.astream_events(stream_mode="values") 监听节点自身事件
+    （name == langgraph_node 过滤嵌套链），chunk 按节点累积还原最终 state。
+    记忆写回在流结束、done 之前（与 chat() 语义一致）。
+    """
+    if graph is None:
+        from xiao_wen.graph_builder import build_supervisor_graph
+
+        graph = build_supervisor_graph(parallel=True)
+    if store is None:
+        store = memory
+
+    recent = store.format_recent_messages(6, session_id=session_id)
+    state_in = {
+        "messages": [("human", text)],
+        "user_input": text,
+        "recent": recent,
+        "session_id": session_id,
+    }
+    yield {"type": "stage", "status": "start"}
+    final: dict | None = None
+    try:
+        async for ev in graph.astream_events(state_in, version="v2", stream_mode="values"):
+            node = ev.get("metadata", {}).get("langgraph_node")
+            if not node or ev.get("name") != node:  # 只认节点自身事件（嵌套链 name 不同）
+                continue
+            etype = ev["event"]
+            if etype == "on_chain_start":
+                stage = _stage_event(node, "working")
+                if stage:
+                    yield stage
+            elif etype == "on_chain_end":
+                stage = _stage_event(node, "done")
+                if stage:
+                    yield stage
+            elif etype == "on_chain_stream":
+                chunk = ev.get("data", {}).get("chunk")
+                if chunk is None:
+                    continue
+                final = {**(final or {}), **chunk}  # values 模式 chunk 只含本节点写入，逐节点累积
+                if node == "classify_intent" and chunk.get("intent"):
+                    yield {"type": "stage", "status": "intent", "intent": chunk["intent"]}
+    except Exception as e:  # LLM 熔断/网络异常：降级事件而非整个流崩溃
+        from xiao_wen.stability import logger
+
+        logger.error("stream_chat 失败（session=%s）：%s", session_id, e)
+        yield {"type": "error", "message": "⚠️ 服务暂时不可用，请稍后再试。"}
+        return
+    if final is None:  # 防御：图没产出任何 state
+        yield {"type": "error", "message": "⚠️ 服务暂时不可用，请稍后再试。"}
+        return
+    store.add_message("user", text, session_id=session_id)
+    store.add_message("assistant", final.get("answer", ""), session_id=session_id)
+    yield {
+        "type": "done",
+        "answer": final.get("answer", ""),
+        "intent": final.get("intent", ""),
+        "reason": final.get("reason", ""),
+        "plan": final.get("plan"),
+    }
+
+
+def _stage_event(node: str, status: str) -> dict | None:
+    """节点名 → 阶段事件：p_* 并行分支剥前缀；merge 用 __merge__ 占位；
+    classify_intent 是内部节点（有专门的 intent 事件），不暴露"""
+    if node == "classify_intent":
+        return None
+    if node == "merge":
+        intent = "__merge__"
+    elif node.startswith("p_"):
+        intent = node[2:]
+    else:
+        intent = node
+    return {"type": "stage", "status": status, "intent": intent}

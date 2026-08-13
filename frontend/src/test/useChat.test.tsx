@@ -3,8 +3,12 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { useChat } from '@/hooks/useChat'
 import * as chatApi from '@/api/chat'
 import { ApiError } from '@/api/client'
+import type { StreamEvent } from '@/api/chat'
 
-vi.mock('@/api/chat', () => ({ sendMessage: vi.fn() }))
+vi.mock('@/api/chat', () => ({
+  sendMessage: vi.fn(),
+  streamChat: vi.fn(),
+}))
 
 const okPlan = {
   summary: '北京出差 4 天',
@@ -17,30 +21,44 @@ const okPlan = {
 
 const okResponse: chatApi.ChatResponse = { answer: '答', intent: '行程规划', reason: 'r', plan: okPlan }
 
-describe('useChat 发送流', () => {
+/** 流式成功：模拟 SSE 阶段事件回调 + done 返回 */
+function mockStreamOk() {
+  vi.mocked(chatApi.streamChat).mockImplementation(
+    async (_t: string, _token: string, onEvent: (e: StreamEvent) => void) => {
+      onEvent({ type: 'stage', status: 'intent', intent: '行程规划' })
+      onEvent({ type: 'stage', status: 'working', intent: '行程规划' })
+      onEvent({ type: 'stage', status: 'done', intent: '行程规划' })
+      return okResponse
+    },
+  )
+}
+
+describe('useChat SSE 发送流', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
   })
 
-  it('发送后用户消息与 AI 回复上屏', async () => {
-    vi.mocked(chatApi.sendMessage).mockResolvedValue(okResponse)
+  it('流式发送：阶段事件回调 + done 消息上屏（含 plan）', async () => {
+    mockStreamOk()
     const { result } = renderHook(() => useChat({ onUnauthorized: vi.fn() }))
 
     await act(async () => {
       await result.current.send('你好')
     })
 
+    expect(chatApi.streamChat).toHaveBeenCalledTimes(1)
     expect(result.current.messages).toEqual([
       { role: 'user', text: '你好' },
       { role: 'ai', text: '答', intent: '行程规划', plan: okPlan },
     ])
     expect(result.current.busy).toBe(false)
+    expect(result.current.stages).toEqual([]) // done 后进度清空
   })
 
   it('busy 期间防重复提交（同轮两次 send 只发一次）', async () => {
     let resolve!: (v: chatApi.ChatResponse) => void
-    vi.mocked(chatApi.sendMessage).mockImplementation(
+    vi.mocked(chatApi.streamChat).mockImplementation(
       () => new Promise((r) => (resolve = r)),
     )
     const { result } = renderHook(() => useChat({ onUnauthorized: vi.fn() }))
@@ -57,13 +75,13 @@ describe('useChat 发送流', () => {
       await p2
     })
 
-    expect(chatApi.sendMessage).toHaveBeenCalledTimes(1)
+    expect(chatApi.streamChat).toHaveBeenCalledTimes(1)
     expect(result.current.messages.filter((m) => m.role === 'user')).toHaveLength(1)
   })
 
   it('401 触发登出且不追加错误消息', async () => {
     const onUnauthorized = vi.fn()
-    vi.mocked(chatApi.sendMessage).mockRejectedValue(new ApiError(401, '未登录'))
+    vi.mocked(chatApi.streamChat).mockRejectedValue(new ApiError(401, '未登录'))
     const { result } = renderHook(() => useChat({ onUnauthorized }))
 
     await act(async () => {
@@ -72,10 +90,24 @@ describe('useChat 发送流', () => {
 
     expect(onUnauthorized).toHaveBeenCalledTimes(1)
     expect(result.current.messages.some((m) => m.text.includes('⚠️'))).toBe(false)
+    expect(chatApi.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('旧后端 404：回退 POST /api/chat', async () => {
+    vi.mocked(chatApi.streamChat).mockRejectedValue(new ApiError(404, 'Not Found'))
+    vi.mocked(chatApi.sendMessage).mockResolvedValue(okResponse)
+    const { result } = renderHook(() => useChat({ onUnauthorized: vi.fn() }))
+
+    await act(async () => {
+      await result.current.send('你好')
+    })
+
+    expect(chatApi.sendMessage).toHaveBeenCalledTimes(1)
+    expect(result.current.messages.at(-1)).toMatchObject({ role: 'ai', text: '答' })
   })
 
   it('网络错误追加降级文案', async () => {
-    vi.mocked(chatApi.sendMessage).mockRejectedValue(new Error('网络错误，请确认服务已启动'))
+    vi.mocked(chatApi.streamChat).mockRejectedValue(new Error('网络错误，请确认服务已启动'))
     const { result } = renderHook(() => useChat({ onUnauthorized: vi.fn() }))
 
     await act(async () => {

@@ -58,6 +58,132 @@ def test_chat_propagates_structured_plan():
     assert r.plan == plan
 
 
+def test_stream_chat_emits_stages_then_done():
+    """流式会话：阶段事件（start→intent→working→done）+ 最终 done（含 plan）；记忆写回两轮"""
+    import asyncio
+
+    from xiao_wen.session import stream_chat
+
+    plan = {"summary": "北京出差", "days": [], "reasons": []}
+    events = [
+        ("on_chain_start", "classify_intent", None),
+        ("on_chain_stream", "classify_intent", {"intent": "行程规划", "reason": "r"}),
+        ("on_chain_end", "classify_intent", None),
+        ("on_chain_start", "行程规划", None),
+        ("on_chain_stream", "行程规划", {"answer": "行程如下", "plan": plan}),
+        ("on_chain_end", "行程规划", None),
+    ]
+
+    class FakeStreamGraph:
+        async def astream_events(self, state, **kwargs):
+            assert kwargs.get("version") == "v2"
+            assert kwargs.get("stream_mode") == "values"
+            for etype, node, chunk in events:
+                yield {
+                    "event": etype,
+                    "name": node,
+                    "metadata": {"langgraph_node": node},
+                    "data": {"chunk": chunk},
+                }
+
+    out = []
+
+    async def run():
+        async for ev in stream_chat("规划行程", graph=FakeStreamGraph()):
+            out.append(ev)
+
+    asyncio.run(run())
+
+    assert out[0] == {"type": "stage", "status": "start"}
+    stages = [(e.get("status"), e.get("intent")) for e in out if e["type"] == "stage"]
+    assert ("intent", "行程规划") in stages  # 意图已解析
+    assert ("working", "行程规划") in stages
+    assert ("done", "行程规划") in stages
+    assert ("working", "classify_intent") not in stages, "内部节点不暴露为阶段"
+    done = out[-1]
+    assert done["type"] == "done"
+    assert done["answer"] == "行程如下" and done["plan"] == plan and done["intent"] == "行程规划"
+    # 记忆写回两轮（与 chat() 一致）
+    msgs = memory_store.get_recent_messages(6)
+    assert [m["content"] for m in msgs[-2:]] == ["规划行程", "行程如下"]
+
+
+def test_stream_chat_filters_nested_chain_events():
+    """流式会话：嵌套链事件（name != 节点名）被过滤，只认节点自身事件"""
+    import asyncio
+
+    from xiao_wen.session import stream_chat
+
+    events = [
+        {"event": "on_chain_start", "name": "行程规划"},
+        {"event": "on_chain_start", "name": "RunnableLambda"},  # 嵌套链（应被过滤）
+        {"event": "on_chain_end", "name": "RunnableLambda"},
+        {
+            "event": "on_chain_stream",
+            "name": "行程规划",
+            "chunk": {"answer": "答", "intent": "行程规划", "reason": "r"},
+        },
+        {"event": "on_chain_end", "name": "行程规划"},
+    ]
+
+    class FakeGraph:
+        async def astream_events(self, state, **kwargs):
+            for ev in events:
+                yield {
+                    "event": ev["event"],
+                    "name": ev["name"],
+                    "metadata": {"langgraph_node": "行程规划"},
+                    "data": {"chunk": ev.get("chunk")},
+                }
+
+    out = []
+
+    async def run():
+        async for ev in stream_chat("hi", graph=FakeGraph()):
+            out.append(ev)
+
+    asyncio.run(run())
+    # 嵌套链事件不产生重复 working/done
+    working = [e for e in out if e.get("status") == "working"]
+    done_stages = [e for e in out if e.get("status") == "done" and e.get("type") == "stage"]
+    assert len(working) == 1 and len(done_stages) == 1
+    assert out[-1]["type"] == "done" and out[-1]["answer"] == "答"
+
+
+def test_stage_event_mapping():
+    """节点名 → 阶段事件：p_ 并行分支剥前缀、merge 占位、classify 隐藏（内部节点）"""
+    from xiao_wen.session import _stage_event
+
+    assert _stage_event("p_行程规划", "working") == {"type": "stage", "status": "working", "intent": "行程规划"}
+    assert _stage_event("merge", "done") == {"type": "stage", "status": "done", "intent": "__merge__"}
+    assert _stage_event("classify_intent", "working") is None
+    assert _stage_event("偏好记录", "working") == {"type": "stage", "status": "working", "intent": "偏好记录"}
+
+
+def test_stream_chat_error_yields_error_event():
+    """流式会话：图异常 → error 事件而非中断（LLM 熔断/网络降级）"""
+    import asyncio
+
+    from xiao_wen.session import stream_chat
+
+    class BoomGraph:
+        async def astream_events(self, state, **kwargs):
+            raise RuntimeError("LLM 挂了")
+
+    out = []
+
+    async def run():
+        async for ev in stream_chat("hi", graph=BoomGraph()):
+            out.append(ev)
+
+    asyncio.run(run())
+    assert out[0]["type"] == "stage"
+    assert out[-1]["type"] == "error"
+    assert "稍后再试" in out[-1]["message"]
+    # 异常时不写回记忆
+    assert memory_store.get_recent_messages(6) == []
+
+
 def test_chat_propagates_exceptions():
     class BoomGraph:
         def invoke(self, state):
