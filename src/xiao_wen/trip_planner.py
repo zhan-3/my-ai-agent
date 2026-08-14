@@ -136,6 +136,48 @@ def _plan_model():
 # 归一化后所有下游（缺项检查/常驻补全/记忆/历史显示）看到同一哨兵
 _UNKNOWN_CITIES = ("待定", "未知", "出差", "无")
 
+# 纯城市名补全兜底：排除含方向/回复/时间词的表述（那是完整句，交给 LLM），
+# 排除含数字（「4天」「10月8日」不是城市）——只认「临沂」「北京」这类纯城市名
+_CITY_REPLY_WORDS = (
+    "去",
+    "从",
+    "到",
+    "出发",
+    "前往",
+    "回",
+    "飞",
+    "坐",
+    "乘",
+    "转",
+    "对",
+    "好",
+    "行",
+    "可以",
+    "是的",
+    "不用",
+    "算了",
+    "取消",
+    "没有",
+    "有",
+    "明天",
+    "后天",
+    "今天",
+    "下周",
+    "星期",
+    "嗯",
+    "哦",
+)
+
+
+def _looks_like_city_name(text: str) -> str | None:
+    """启发式：纯城市名（2-4 字，可带「市」后缀）；非城市表述返回 None"""
+    t = text.strip().rstrip("。！？!?，,、").strip()
+    if not t or any(w in t for w in _CITY_REPLY_WORDS) or any(c.isdigit() for c in t):
+        return None
+    if t.endswith("市"):
+        t = t[:-1]
+    return t if 2 <= len(t) <= 4 else None
+
 
 def _missing(req: TripRequest) -> list[str]:
     """检查必填要素缺失，返回缺失清单（基础项 E：缺失信息提示）"""
@@ -165,6 +207,16 @@ def plan(user_input: str, *, session_id: str = "default", recent: str = "") -> P
         req.from_city = "待定"
     if req.to_city in _UNKNOWN_CITIES:
         req.to_city = "待定"
+    # 纯城市名补全兜底（确定性规则，LLM 对「追问后回纯城市名」提取不稳，实测同输入多次 from=待定）：
+    # 一个城市已确定、另一个缺失时，本轮输入若是纯城市名 → 直接补缺失槽，不再追问
+    if req.to_city not in _UNKNOWN_CITIES and req.from_city in _UNKNOWN_CITIES:
+        city = _looks_like_city_name(user_input)
+        if city:
+            req.from_city = city
+    elif req.from_city not in _UNKNOWN_CITIES and req.to_city in _UNKNOWN_CITIES:
+        city = _looks_like_city_name(user_input)
+        if city:
+            req.to_city = city
     # 天数哨兵归一化：LLM 可能输出「待定/无」字符串（曾致 pydantic 校验崩溃），统一成 0
     if isinstance(req.duration_days, str):
         req.duration_days = 0

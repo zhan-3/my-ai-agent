@@ -337,6 +337,11 @@ def test_history_agent_filters_by_time(monkeypatch):
     assert plan["history"]["direction"] == "计划"
     assert [it["status"] for it in plan["history"]["itineraries"]] == ["已规划"]
 
+    # BUG：用户问「我规划的行程是什么」曾被当查历史（_PLAN_WORDS 缺「规划」）→ 空态
+    plan2 = history_agent.run({"session_id": "x", "user_input": "我规划的行程是什么"})
+    assert "杭州规划" in plan2["answer"], "「规划」应命中计划向（实测修复前答「暂无历史行程记录」）"
+    assert plan2["history"]["direction"] == "计划"
+
     empty = history_agent.run({"session_id": "x", "user_input": "杭州的记录"})
     assert empty["history"] is None, "无命中/无数据 → history 为 None，前端不渲染卡片"
 

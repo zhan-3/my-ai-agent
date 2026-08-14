@@ -113,6 +113,37 @@ def test_plan_normalizes_string_duration(monkeypatch):
     assert "出差天数" in r.missing, f"缺天数应被识别为缺项，实际：{r.missing}"
 
 
+def test_looks_like_city_name_pure_function():
+    """纯城市名启发式：只认 2-4 字城市名（可带「市」）；数字/时间/回复词/方向短语一律拒绝"""
+    assert _it._looks_like_city_name("临沂") == "临沂"
+    assert _it._looks_like_city_name("北京市") == "北京"
+    assert _it._looks_like_city_name("上海") == "上海"
+    for bad in ["4天", "明天", "好的", "临沂出发", "从上海", "10月8日", "算了", "嗯"]:
+        assert _it._looks_like_city_name(bad) is None, f"{bad!r} 不应被判为城市名"
+
+
+def test_plan_city_name_fallback_when_extract_stutters(monkeypatch):
+    """确定性兜底：提取 LLM 对「追问后回纯城市名」不稳（实测同输入多次 from=待定）
+    → 目的城市已知 + 本轮是纯城市名 → 规则直接补出发城市，不再追问"""
+    plan_out = ItineraryPlan(summary="临沂→北京", days=[], reasons=[])
+    _stub_models(monkeypatch, _req(from_city="待定"), plan_out=plan_out)
+    r = _it.plan("临沂", recent="用户: 帮我规划去北京的行程\n助手: 请补充出发城市")
+    assert isinstance(r, _it.PlanResult), f"纯城市名应被规则补全为出发城市，实际：{r}"
+    assert r.request and r.request.from_city == "临沂"
+
+    # 反向：出发城市已知 + 纯城市名 → 补目的城市
+    _stub_models(monkeypatch, _req(to_city="待定"), plan_out=ItineraryPlan(summary="上海→杭州", days=[], reasons=[]))
+    r2 = _it.plan("杭州", recent="用户: 我从上海出发\n助手: 请补充目的城市")
+    assert isinstance(r2, _it.PlanResult)
+    assert r2.request and r2.request.to_city == "杭州"
+
+    # 非纯城市名（回复词）→ 不兜底，走缺项追问
+    _stub_models(monkeypatch, _req(from_city="待定"))
+    r3 = _it.plan("好的", recent="用户: 去北京\n助手: 请补充出发城市")
+    assert isinstance(r3, _it.NeedsInfo)
+    assert "出发城市" in r3.missing
+
+
 def test_plan_home_city_completes_before_missing_check(monkeypatch):
     """常驻城市补全先于缺项检查：缺出发城市但有常驻城市 → 不算缺项，进入生成"""
     from xiao_wen import memory as ms
