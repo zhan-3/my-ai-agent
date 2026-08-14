@@ -1,201 +1,146 @@
-# 晓问 Agent 评测体系设计
+# 晓问 Agent 评测体系（layer 2/3）+ 意图分类 embedding 降级层
 
-Status: needs-triage
+Status: ready-for-agent
 Type: spec
 Feature: agent-eval
 
-> 目标：把「这轮改完好不好」从拍脑袋变成可量化、可回归、可定位的流程。
-> 现状基础：单元 101 + 集成 15（`docs/test-map.md`）、意图黄金集 `scripts/golden_intents.py`、AI 用户模拟器 `scripts/ai_user_sim.py`。本 spec 在其上补**行为级/端到端评测**，不替代现有门禁。
+> 一句话：把「这轮改完好不好」从拍脑袋变成可量化、可回归、可定位的流程；同时把
+> 意图分类从「只靠 LLM」升级为「LLM 主 + embedding 降级候选」，开关可切、黄金集验收。
+> 现状：eval-01（规则层）已毕业（黄金集 84 条 100%）；`golden_intents.py`、`ai_user_sim.py`
+> 已存在；本 spec 补 **judge 层（layer 3）+ 用户模拟器产样本（layer 2 的样本通道）+ embedding 意图层**。
 
 ---
 
-## 1. 评测对象（五层，从下到上）
+## Problem Statement
 
-| 层 | 入口 | 已有覆盖 | 本体系补什么 |
-|---|---|---|---|
-| 意图分类 | `intent.classify()` | 黄金集脚本 | 并入统一 harness，出混淆矩阵 |
-| 子 Agent 产出 | `agents/*` | 结构断言（test_itinerary 等） | 语义质量（judge） |
-| 工具调用 | `web.py` @tool | 集成用例 | 工具选择/参数/降级指标 |
-| 会话闭环 | `session.chat()` | test_session/test_endtoend | trace 全量采集 + E2E 状态断言 |
-| 外部扩展 | `plugins/`（含未来 MCP） | test_plugin | 协议层评测（见 §3.5） |
+1. **评测靠拍脑袋**：改完一轮（改 prompt / 加规则 / 换模型）「好不好」没有量化口径。
+   单元测试只保证不崩，不保证答得对——意图错、要素丢、编造政策这些「答错了但没崩」
+   的问题现有门禁全测不出来。用户实测 bug（「临沂」6 次提取不稳、「规划」词缺失）都是
+   这种「没崩但错了」的典型，等用户来报才知道。
+2. **意图分类只靠 LLM 不稳**：实测同输入连续 6 次提取 from=待定；分类也出现过同输入
+   两次不同结果。LLM 有成本、有方差、离线/无 key 时不可用。
+3. **embedding 消耗被关注**：知识问答每次检索吃 query embedding；用户已提出想省。
+   若意图层引入 embedding 匹配，必须可关、可量化收益，不能无脑加码。
 
-评测三层跑法，成本递增：
-1. **规则层**：无 LLM，秒级（契约校验/字数/意图相等/工具名相等）。
-2. **结构层**：pydantic 结构匹配（subtask 列表、plan.days、要素集合）。
-3. **judge 层**：LLM-as-judge，烧 token，`--with-judge` 开关，只进 CI master push。
+## Solution
 
----
+- 评测体系三层跑法落地（规则层已毕业 → 补结构层统一 harness + judge 层），
+  每次改动有量化分数、失败可回放到具体一步（trace）。
+- 意图分类：`intent.classify()` 内部加 embedding 匹配路径（开关 `INTENT_CLASSIFY`），
+  默认 LLM 主链路不变；embedding 作为降级候选，**黄金集 84 条双模式跑分**，掉分不许上线。
+- 样本通道：`ai_user_sim.py`（已存在）产出带标签对话 → 沉淀进意图集/行程集/会话集，
+  喂给 judge 评测与 embedding 层参考样本。
 
-## 2. trace：中间输出采集（评测的事实基础）
+## User Stories
 
-没有 trace 就没有错误分析——每个失败用例必须能回放「它到底哪一步错了」。
+1. 作为开发者，我想对任何一次「这轮改完」跑一条命令拿分数，以便不靠感觉判断好坏。
+2. 作为开发者，我想让每个失败用例带 trace 回放（意图→路由→agent→工具→记忆写回），
+   以便 5 分钟内定位「它到底哪一步错了」，而不是整轮重看。
+3. 作为开发者，我想让评测分三层跑（规则/结构/judge），以便日常提交只跑秒级规则层，
+   烧 token 的 judge 只在 master push 跑。
+4. 作为开发者，我想让意图分类可切 LLM/embedding 双模式，以便成本敏感期或离线环境
+   降级不瘫痪。
+5. 作为开发者，我想让 embedding 模式跑黄金集 84 条拿对比分，以便用数据决定它能否上线。
+6. 作为开发者，我想让用户模拟器自动产带标签对话样本，以便评测集不靠手写耗尽。
+7. 作为开发者，我想让每个样本带 source（human/sim/prod），以便追溯评测集来源。
+8. 作为开发者，我想看意图混淆矩阵（逐意图 实际×期望），以便知道哪个意图边界在漏。
+9. 作为开发者，我想让错误失败输入自动聚类（embedding 复用），以便发现「哪一类话术
+   系统性失败」。
+10. 作为开发者，我想让 judge 按 CONTEXT 领域规则打 5 分 rubric（完成/忠实/合规/简洁/得体），
+    以便语义质量可量化。
+11. 作为开发者，我想让 judge 与被评模型独立配置、temperature=0、多数票，
+    以便避免自评偏差与方差。
+12. 作为开发者，我想让输出有字数双向护栏（防注水/防敷衍）+ 成本护栏（token/工具调用/耗时），
+    以便分数不是靠堆 token 堆出来的。
+13. 作为开发者，我想让工具调用评测（该不该调/调对/参数/降级/浪费）走规则层，
+    以便实时信息类能力可回归。
+14. 作为开发者，我想让会话集跑完断言记忆状态变化（偏好/历史是否真的写入），
+    以便不只信回复文本。
+15. 作为开发者，我想让生产反馈闭环（点踩/失败 → 沉淀成新黄金用例 → 回归全量重跑），
+    以便评测集越用越准、坏例必须变好、好例不得变坏。
+16. 作为开发者，我想让 eval 失败低于阈值时 exit 1 挡 CI，以便门禁自动拦回归。
 
-采集点（复用 `session.py stream_chat` 的 `astream_events` 机制，但评测走 `chat()` 同步路径 + 显式 recorder）：
+## Implementation Decisions
 
-```text
-input / recent
-  → classify: {intent, reason, subtasks[]}
-  → dispatch: 路由到的 agent 名（p_* 分支展开）
-  → 每 agent: 入参（注入的记忆/要素）、出参（plan dict / answer / tool 序列）
-  → tool calls: [tool_name, args, result, error?]
-  → final: {answer, plan(契约校验后), intent, reason}
-  → memory 写回: [user_msg, assistant_msg, 偏好/历史变更]
-```
+### D1. 评测缝（最高 seam，先确认过的三个）
+- **分类缝**：`intent.classify(recent, user_input) -> IntentResult` 签名不变；
+  embedding 路径做 `classify()` 内部候选（见 D2）。不新开接口。
+- **评测缝**：`scripts/eval/` 扩展（run.py 已有，新增 judge.py / trace.py / report.py）；
+  纯函数校验器（规则/结构层）进 `src/xiao_wen/eval/` 供 pytest 引用——唯一新增 seam。
+- **样本缝**：`scripts/ai_user_sim.py` 输出带 `source=sim` 标签入 `tests/data/eval/*.jsonl`，
+  不新开缝。
 
-- 落盘：`eval_runs/<case_id>/trace.jsonl`，与 `metrics.json`、`errors.jsonl` 同目录。
-- trace 即评测的「中间输出」，也是后面错误分析的输入；结构上做成 pydantic 模型（`TraceRecord`），保证录制稳定。
+### D2. embedding 意图层（降级候选，不替换主链路）
+- 形态：`classify()` 内部 `INTENT_CLASSIFY=llm|embedding` 开关（env 默认 llm）。
+  embedding 模式 = 用户输入（必要时拼 recent 尾部）+ 每个意图的参考样本 → 向量 →
+  余弦相似度取最高意图；低于阈值 → Unknown 出路（走「其他」+ 如实说明）。
+- 参考样本来源：黄金集 84 条（每条意图 ~12 条）起步，模拟器样本增量补充。
+- 验收：黄金集 84 条双模式跑分对比。embedding 模式意图准确率显著低于 LLM 模式
+  （< 0.95 或低于 LLM 模式 3pt+）→ 不允许切换上线，只能留在候选。
+- 实现约束：复用 `rag.EMB_MODEL` 接缝与 DashScope embedding（不新增第三方）；
+  索引构建/复用策略照 RAG 现状（磁盘复用零消耗）。
 
-## 3. judge：三层评判标准
+### D3. trace（评测的事实基础）
+- `TraceRecord`（pydantic）：input/recent → classify{intent,reason,subtasks} →
+  dispatch(agent 名, p_* 展开) → 每 agent 入参/出参 → tool calls → final →
+  memory 写回。落盘 `eval_runs/<case_id>/trace.jsonl` + `metrics.json` + `errors.jsonl`。
+- 评测走 `session.chat()` 同步路径 + 显式 recorder（不依赖 astream_events）。
 
-**规则层（确定性，无 LLM）**
-- 契约：`contract.plan_or_none` 通过率（结构不符→降级也算分，但要单列「降级率」）。
-- 要素：行程 agent 输出是否覆盖输入中已给出的差旅要素；缺失时是否先索取而非硬生成（CONTEXT 语义）。
-- 字数：见 §3.1 限制项。
-- 意图/工具名/参数：精确相等。
+### D4. judge（layer 3，LLM-as-judge）
+- rubric 抄 CONTEXT.md 领域规则五条：任务完成 / 忠实度(groundedness) / 合规性 /
+  简洁性 / 得体性。输出 `{score:1-5, reasons, verdict}`，temperature=0，json_mode。
+- judge 模型独立 env（`EVAL_JUDGE_*`），与被评模型分开；同用例 N 次取多数票；
+  `--with-judge` 开关，只进 CI master push。
+- judge 自身质量：抽 10% 人工复核，记录人机一致率（漂移监控）。
 
-**结构层**
-- subtasks 精确匹配（黄金集已有此逻辑，抽成公共校验器）。
-- plan.days 数量 == 请求天数、日期可解析、每日字段齐全。
+### D5. 测试集（统一 JSONL schema，能规则/结构层就不上 judge）
+- 七集：intent（复用 intent_golden.jsonl 84 条 + 对抗扩展）、itinerary、tools、rag、
+  preference、sessions（多轮 + 状态断言）、adversarial（非差旅/超长/模糊日期/
+  prompt injection/订票订酒店边界）。
+- 每用例必带 `expected_*` + `source(human|sim|prod)`；意图集已含消歧用例（5 条）。
 
-**judge 层（LLM-as-judge，rubric 驱动）**
-- rubric 直接抄 CONTEXT.md 领域规则，逐条打分：
-  1. **任务完成**：是否真的办成了用户要的事（规划出可用行程/答出政策/记下偏好）。
-  2. **忠实度（groundedness）**：政策问答是否只讲知识库内容，不编造标准。
-  3. **合规性**：仅服务企业差旅；非差旅一律拒绝（归「其他」）；要素不全先索取。
-  4. **简洁性**：不注水（配合字数指标）。
-  5. **得体性**：拒绝/追问语气是否自然。
-- 输出 `{score: 1-5, reasons: [], verdict: pass/fail}`，temperature=0，json_mode。
-- judge 模型独立配置（`EVAL_JUDGE_*` env），与被评模型分开，避免自评偏差；同一用例 N 次跑取多数票。
-- judge 自身质量校验：抽 10% 用例人工复核 judge 评分，记录人机一致率（judge 漂移监控）。
+### D6. 指标与门禁（阈值化）
+- 指标总表沿用原 spec：意图准确率（≥0.95）、任务完成率（≥0.9）、工具精确率（≥0.95）、
+  拒绝正确率、偏好写正确率、RAG 忠实度、字数合规率、效率（token/调用/耗时）、自一致率。
+- 分层：规则层全量每次提交跑；judge 层 master push；低于阈值 exit 1。
 
-### 3.1 输出字数限制（双向）
+### D7. 错误分析
+- `errors.jsonl` + `report.md`：按层归类（意图/路由/要素/生成/工具/记忆/格式）、
+  混淆矩阵、失败输入 embedding 聚类、每类给根因判定（prompt 缺陷/边界规则缺失/
+  数据不足/模型非确定性 → 修 prompt / 加规则 / 补知识库 / 记 ADR）。
 
-- **上限**：防注水/防 token 浪费。规则层统计 answer 字数 + plan 体积；超过上限（如 answer > 800 字）直接记 over-length，judge 简洁性给低分。
-- **下限**：防敷衍。拒绝类（「其他」意图）回答 < 10 字、缺项提示只列一半要素 → under-length。
-- **成本护栏**：评测报告单列每用例 token 数/工具调用次数/耗时，防止「分数靠堆 token」。
-- 评测 harness 自身也给 judge 调用的 `max_tokens` 设上限（judge 输入即 trace，trace 可能很大，需截断策略：保留 classify + 目标 agent + tool 段）。
+## Testing Decisions
 
-## 4. tools 调用评测
+- **好测试的标准**：只测外部行为（意图结果、结构契约、记忆状态、judge 分数），
+  不测内部实现细节；能规则/结构层判定的用例不上 judge（省 token、确定性）。
+- **被测模块**：`intent.classify()`（双模式）、`src/xiao_wen/eval/` 校验器（纯函数）、
+  `scripts/eval/*.py`（harness 自测）、`session.chat()`（trace 采集 + 状态断言）。
+- **先例**：`test_disambiguation.py`（规则纯函数测试模式）、`test_webapp.py` 契约校验、
+  `test_memory_backend.py` 记忆状态断言、`golden_intents.py` 的 by_intent 统计逻辑
+  （升级为混淆矩阵时复用）、`test_plugin.py`（外部件可插拔可评测哲学）。
+- **集成标记**：judge / 模拟器产样本 / 双模式跑分标 integration（烧 token 不进
+  常规 unit 门禁），规则/结构层纯函数进常规 pytest。
+- **黄金集基线**：84 条 100% 是回归底线，任何改动（含 embedding 层）不许掉。
 
-针对 `web.py`（天气/汇率/空气质量）与未来任意工具：
+## Out of Scope
 
-| 指标 | 定义 | 判据来源 |
-|---|---|---|
-| 该不该调 | 查询含实时信息 → 应调；纯政策/记忆类 → 不应调 | 工具黄金集 label |
-| 调对工具 | 天气问句 → `get_weather`，汇率 → `get_exchange_rate` | 工具名相等 |
-| 参数正确 | 城市/日期解析正确（未来 7 天预报日期解析已有测试） | 参数校验器 |
-| 降级正确 | API 失败 → 兜底文案而非裸崩/编数据 | `stability` 规则断言 |
-| 调用浪费 | 同轮重复调同参数工具 | 规则统计 |
+- MCP 真实接入（仅保留协议评测层设计，§5 原 spec 中 1/2 层可后做）。
+- 反射 pass（critique 修订）产品化——取决于增益/回退率实测，本期不排。
+- 生产反馈前端埋点（点赞/点踩 UI）——本期先手动收集坏例。
+- 采样一致性 N=3-5 多模型投票（disambiguation 二期，与意图层无关的已否决项）。
+- 要素层消歧、航班/车次实时数据能力。
+- embedding 意图层**替换** LLM 主链路（只做候选/降级，验收不过不上线）。
 
-- 数据：`tests/data/eval/tools.jsonl`，每条 `{input, expected_tool?, expected_args?, should_call}`。
-- 指标：工具精确率（调对的/调的总数）、召回率（调对的/该调的）、参数正确率、降级正确率。
+## Further Notes
 
-## 5. MCP 评估（前瞻性协议层）
-
-现状：晓问工具是 langchain `@tool` 直连，未接 MCP。评测体系把 MCP 当作**外部工具接入协议**来评估，为将来接入预留，分四层：
-
-1. **元数据层**：MCP server 的 tool 清单/描述/输入 schema 与注册表 manifest 语义一致（discover 正确性）。
-2. **契约层**：JSON-RPC 调用往返——参数校验、错误码、超时、流式输出，mock server 上跑负例（断连/超时/非法参数）。
-3. **等价性**：同一组工具黄金用例分别驱动「@tool 实现」与「MCP 包装实现」，对比工具名/参数/结果一致性——保证协议封装不改变行为。
-4. **效果层**：接 MCP 工具后任务完成率（judge）是否不降、成本（延迟/token）是否可控。
-
-落地形态：`eval/mcp/` 一套 pytest（契约层可离线 mock，等价性/效果层标 integration），与 `test_plugin` 同一哲学：外部件可插拔、可评测、可回归。
-
-## 6. reflection：自反思与增益度量
-
-两件事分开：
-
-**A. 产品内反思（可选能力）**：行程 agent 生成后加一次 critique pass——按 checklist 自查（要素覆盖/日期一致/偏好遵守/边界合规），不满意则修订。评测要回答「加了值不值」：
-- **反射增益** = 修订后 judge 分 − 修订前 judge 分（同用例）。
-- **回退率**：修订把对的改错的占比（>10% 说明反思 prompt 有毒，别上）。
-
-**B. 评测自身的自一致性**：同用例跑 N 次（N=3~5），记录答案/意图方差 → 稳定性指标。既测模型非确定性，也测反思是否增加不稳定。
-
-## 7. 外部反馈闭环（评测集的生命周期）
-
-评测集不能只靠人工写——生产与评测互相喂养：
-
-```text
-生产（前端 点赞/点踩 + 失败日志）
-  → 采集器：低分/点踩 → trace 快照 + 用户原话
-  → triage：按 triage-labels 分流（needs-triage → 人工/agent 确认）
-  → 沉淀：确认的坏例转成新黄金用例（golden set 增量），或转 ADR（明确能力边界）
-  → 回归：eval 全量重跑，坏例必须变好，好例不得变坏
-```
-
-- 显式反馈：前端交互留 `feedback` 埋点（点赞/点踩/评语），落库供采集。
-- 隐式反馈：生产 trace 与黄金集的 diff（如意图命中率低于阈值的新输入聚类）。
-- 这条闭环是「系统性的错误分析」的持续来源，不是一次性动作。
-
-## 8. 测试集设计（针对设计测试集）
-
-按能力域分集，统一 JSONL schema：`{id, input, recent?, expected_*(结构化), rubric?, note, source(human|sim|prod)}`
-
-| 集 | 文件 | 断言方式 | 现成素材 |
-|---|---|---|---|
-| 意图集 | `tests/data/eval/intent.jsonl` | 规则层（intent+subtasks 精确） | 复用 `intent_golden.jsonl` + 扩展对抗 |
-| 行程集 | `itinerary.jsonl` | 结构层（要素/天数/日期）+ judge 合理性 | test_itinerary 用例、E2E 素材 |
-| 工具集 | `tools.jsonl` | 规则层（该不该调/调对/参数） | test_web 用例 |
-| RAG 集 | `rag.jsonl` | judge 忠实度 + 命中文档断言 | test_rag 素材 |
-| 偏好集 | `preference.jsonl` | 规则层（category/content + 追加 vs 覆盖） | test_memory 用例 |
-| 会话集（E2E） | `sessions.jsonl` | 多轮脚本 + 状态断言 + judge | ai_user_sim 素材（人设/目标/表达分支） |
-| 对抗集 | `adversarial.jsonl` | 规则层 + judge | 非差旅、超长输入、模糊日期、prompt injection、边界动作（订票/订酒店） |
-
-- 每个用例必须带 `expected_*`，能走规则/结构层的就不依赖 judge——judge 只负责「规则层测不了的语义质量」。
-- 用例来源三通道：人工编写（领域规则驱动）、sim 采集（素材真实度）、生产反馈（见 §7）。来源字段保证可追溯。
-
-## 9. E2E 评估指标（指标总表）
-
-| 指标 | 计算 | 层 |
-|---|---|---|
-| 意图准确率 | intent 相等 + subtasks 精确匹配（整体 + 按意图分） | 规则 |
-| 任务完成率 | 契约/结构校验通过 且 judge ≥ 阈值 | 规则+judge |
-| 行程结构完整率 | plan 非 None 且 days 数/日期/字段合规 | 规则 |
-| 降级率 | plan 结构不符→None 的占比（要低，但可容忍） | 规则 |
-| 工具精确率 / 召回率 | 见 §4 | 规则 |
-| 拒绝正确率 | 非差旅 → 归「其他」且回应得体 | 规则+judge |
-| 偏好写正确率 | 追加/覆盖语义正确 | 规则 |
-| RAG 忠实度 | judge groundedness 均分 | judge |
-| 字数合规率 | over/under-length 用例占比 | 规则 |
-| 效率 | 平均 token / 工具调用次数 / 耗时 | 规则 |
-| 自一致率 | N 次运行意图/答案一致比例 | 规则 |
-| 反射增益 / 回退率 | 见 §6 | judge |
-| judge 人机一致率 | 抽样人工复核 | 运维 |
-
-E2E 会话集额外断言**状态变化**：跑完一轮后记忆里是否多了一条偏好/历史（读 `store` 验证），而不只看回复文本。
-
-## 10. 系统性错误分析
-
-每次 eval 跑完自动产出 `errors.jsonl` + `report.md`：
-
-1. **按层归类**：意图错 / 路由错 / 要素提取错 / 生成错 / 工具错 / 记忆写错 / 格式错——每类附 trace 快照。
-2. **混淆矩阵**：意图集逐意图 实际×期望（复用 golden 脚本的 by_intent 统计升级版）。
-3. **错误聚类**：失败输入做 embedding（复用 DashScope 向量）聚类，找出「哪一类用户话术系统性失败」——喂给 prompt 修改或 golden 扩充。
-4. **根因判定**（每类给一个候选 + 证据）：
-   - 提示词缺陷（trace 里 reason 文本错/要素丢）→ 修 prompt
-   - 边界规则缺失（漏了某业务动作）→ 加规则/加 golden
-   - 数据不足（RAG 没命中）→ 补知识库
-   - 模型能力/非确定性（同输入多跑结果漂移）→ 记 ADR 或降级处理
-5. **回归门禁**：阈值化——意图 ≥ 0.95（沿用 golden）、完成率 ≥ 0.9、工具精确率 ≥ 0.95 等；低于阈值 exit 1。分层：规则层全量跑（快、每次提交），judge 层 master push（烧 token）。
-
-## 11. 落地结构（harness）
-
-```text
-scripts/eval/                      # 与 golden_intents.py 同层的可执行评测
-  run.py            # --sets intent,tools,... --with-judge --threshold ...
-  judge.py          # rubric 加载 + LLM-as-judge + 多数票
-  trace.py          # TraceRecord 采集（包装 session.chat）
-  report.py         # metrics / errors.jsonl / report.md / 混淆矩阵 / 聚类
-src/xiao_wen/eval/  # 可被 pytest 引用的校验器（规则层/结构层纯函数）
-tests/data/eval/    # 7 个 JSONL 集
-```
-
-依赖：不新增第三方——judge 走 `llm.get_llm()` 同款接缝（独立 env 配置），embedding 复用 DashScope。
-
-## 12. 待决策点（open questions）
-
-1. judge 用同模型（DeepSeek）还是换模型？成本 vs 独立性。
-2. 字数上限具体值（800 字 answer / plan 体积）——先拿现有集成用例实测分布再定。
-3. MCP 是否排期接入，还是只保留协议评测层（§5 四层中 1/2 层可先做，3/4 依赖真实接入）。
-4. 反射 pass 是否要做成产品能力——取决于 §6A 的增益/回退率实测。
-5. 生产反馈埋点（前端点踩）是否本期做，还是先用手动收集。
+- **实施顺序（依赖链）**：
+  1. `src/xiao_wen/eval/` 纯函数校验器 + trace 采集（规则/结构层统一 harness，
+     意图集 = 现有 84 条直接受益）。
+  2. judge.py + `--with-judge`（layer 3 打通，rubric 从 CONTEXT 抄）。
+  3. ai_user_sim 产样本入集（喂 judge 集 + 给 embedding 层攒参考样本）。
+  4. embedding 意图层（D2）——依赖第 3 步样本到位，双模式跑分验收。
+- **待定参数**：judge 模型选择（DeepSeek 同款 vs 独立）、字数上限具体值
+  （先拿现有集成用例实测分布）、`--with-judge` 的 CI 触发条件（master push 是否够）。
+- **关联**：ADR-0001（LLM 接缝——judge 走同款接缝、独立 env）、ADR-0004（RAG——
+  embedding 复用 EMB_MODEL 与索引复用策略）、`docs/agents/issue-tracker.md`（发布载体）、
+  CONTEXT.md（rubric 领域规则唯一来源）。
