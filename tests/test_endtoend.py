@@ -1,6 +1,9 @@
-"""端到端集成测试（真实 LLM + 真实记忆文件，隔离到 tmp）：
+"""端到端集成测试（真实 LLM + 真实 Postgres 记忆，测试库隔离）：
 两层记忆闭环 —— 偏好新增 → 常驻城市补全 → 行程规划 → 历史查询；
 产品默认图（调度图）—— 单意图回归 + 多意图并行派发
+
+状态验证（τ-bench 思路）：除 answer 文本（轨迹）外，断言行程/偏好
+真实写入记忆库（outcome）——防止 agent 嘴上说做了、库里没落地。
 
 跑法：uv run pytest -m integration
 """
@@ -19,19 +22,37 @@ def _invoke(user_input: str) -> str:
     return out.get("answer", "")
 
 
+def _memory_state(session_id: str = "default") -> dict:
+    """状态验证：查记忆库（而非 answer 文本），确认写入真实落地"""
+    from xiao_wen import memory
+
+    return {
+        "itineraries": memory.get_itineraries(session_id=session_id),
+        "preferences": memory.get_preferences(session_id=session_id),
+    }
+
+
 @pytest.mark.integration
 def test_two_layer_memory_loop():
     # ① 偏好记录（长期记忆）
     ans = _invoke("我不吃辣，住宿喜欢安静")
     assert "已新增偏好" in ans
+    # 状态验证：偏好真实入库
+    assert len(_memory_state()["preferences"]) >= 1, "偏好应写入记忆库"
 
     # ② 常驻城市（覆盖式长期记忆）
     ans = _invoke("我现在常住上海")
     assert "已更新偏好" in ans
+    # 状态验证：常驻城市上海已入库（而非只回文案）
+    prefs = _memory_state()["preferences"]
+    assert any(p["content"] == "上海" for p in prefs), f"常驻城市应写入，实际：{prefs}"
 
     # ③ 行程规划：不说出发城市 → 常驻城市补全（长期记忆生效）
     ans = _invoke("5月8日去北京开会4天")
     assert "上海" in ans, "应自动补全出发城市（长期记忆常驻城市）"
+    # 状态验证：行程真实入库且出发城市=上海（补全落地，而非只出现在回答里）
+    its = _memory_state()["itineraries"]
+    assert any(it["to_city"] == "北京" and it["from_city"] == "上海" for it in its), f"行程应入库，实际：{its}"
 
     # ④ 历史查询（长期记忆历史行程可读）
     ans = _invoke("我上次的行程是什么")
@@ -115,6 +136,11 @@ def test_missing_elements_multi_turn_planning():
     assert "杭州" in r2.answer, f"生成行程应含杭州，实际：{r2.answer}"
     assert "5月8日" in r2.answer, f"生成行程应含日期，实际：{r2.answer}"
     assert "请补充" not in r2.answer, "要素已齐，不应再追问"
+    # 状态验证：行程真实写入记忆库（outcome，而非仅回答文案）
+    its = _memory_state()["itineraries"]
+    assert any(
+        it["to_city"] == "杭州" and it["start_date"].startswith("2026-05-08") for it in its
+    ), f"杭州行程应入库，实际：{its}"
 
     # 轮3：历史按城市过滤 → 命中刚生成的杭州行程
     r3 = chat("我最近去杭州的行程")
@@ -148,3 +174,10 @@ def test_pending_followup_recovers_plan():
     r3 = chat("4天")
     assert "上海" in r3.answer and "北京" in r3.answer, f"应生成上海→北京行程，实际：{r3.answer}"
     assert "请补充" not in r3.answer, f"要素已齐不应再追问，实际：{r3.answer}"
+    # 状态验证（两件事都真实落地，而非只回文案）：
+    # 行程写入记忆库（上海→北京）+ 常驻城市偏好写入
+    st = _memory_state()
+    assert any(
+        it["from_city"] == "上海" and it["to_city"] == "北京" for it in st["itineraries"]
+    ), f"续接行程应入库，实际：{st['itineraries']}"
+    assert any(p["content"] == "上海" for p in st["preferences"]), f"常驻城市应入库，实际：{st['preferences']}"
