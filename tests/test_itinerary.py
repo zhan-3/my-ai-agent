@@ -227,3 +227,39 @@ def test_plan_wu_to_city_needs_info(monkeypatch):
     r = _it.plan("帮我规划出差")
     assert isinstance(r, _it.NeedsInfo)
     assert r.missing == ["目的城市"]
+
+
+# ---------------- 多轮要素延续：recent 传入提取（E2E-07 暴露的真 bug） ----------------
+
+
+def test_plan_passes_recent_to_extraction(monkeypatch):
+    """补齐轮只补缺项、不重复说过的地方 → recent 必须进提取 payload（此前只给本轮输入）"""
+    seen = {}
+
+    class _Capture(_FakeChain):
+        def invoke(self, payload):
+            seen.update(payload)
+            return _req()
+
+    monkeypatch.setattr(_it, "_extract_model", lambda: _Capture(_req()))
+    plan_out = ItineraryPlan(summary="杭州出差", days=[], reasons=[])
+    monkeypatch.setattr(_it, "_plan_model", lambda: _FakeChain(plan_out))
+    _it.plan("10月8日从上海出发，待2天", recent="user: 帮我规划去杭州出差的行程")
+    assert "杭州" in seen["recent"], "提取应能看到上文里的目的城市"
+    assert seen["recent"] != "无"
+
+
+def test_plan_recent_defaults_to_wu(monkeypatch):
+    """无 recent（新会话首轮）→ 提取收到「无」，不塞入任何伪造上下文"""
+    seen = {}
+
+    class _Capture(_FakeChain):
+        def invoke(self, payload):
+            seen.update(payload)
+            return _req()
+
+    monkeypatch.setattr(_it, "_extract_model", lambda: _Capture(_req()))
+    plan_out = ItineraryPlan(summary="出差", days=[], reasons=[])
+    monkeypatch.setattr(_it, "_plan_model", lambda: _FakeChain(plan_out))
+    _it.plan("帮我规划去杭州出差")
+    assert seen["recent"] == "无"

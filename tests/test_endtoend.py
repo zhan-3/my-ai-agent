@@ -81,3 +81,48 @@ def test_disambiguation_multi_turn():
     # 用户选①（查时刻）→ 确定性诚实答复（不静默进行程规划追问，也不依赖 LLM 意图）
     r4 = chat("①", session_id="disambig-info")
     assert "暂不支持" in r4.answer and "航班" in r4.answer, "① 应诚实告知不支持，实际：" + r4.answer
+
+
+# ==================== E2E 场景矩阵（ticket 05：E2E-05 ~ E2E-08） ====================
+
+
+@pytest.mark.integration
+def test_policy_qa_end_to_end():
+    """E2E-05 差旅政策知识问答（RAG）：问住宿标准 → 知识问答给出政策数值"""
+    ans = _invoke("出差住宿标准是什么")
+    assert "标准" in ans or "元" in ans, f"期望政策标准答案，实际：{ans}"
+
+
+@pytest.mark.integration
+def test_web_query_end_to_end():
+    """E2E-06 联网天气查询：指定城市实时信息 → 联网查询（ReAct 工具）"""
+    ans = _invoke("北京今天天气怎么样")
+    assert "北京" in ans, f"答案应含城市名，实际：{ans}"
+    assert any(k in ans for k in ("℃", "度", "晴", "雨", "多云", "天气")), f"答案应含天气信息，实际：{ans}"
+
+
+@pytest.mark.integration
+def test_missing_elements_multi_turn_planning():
+    """E2E-07 缺项追问→补齐→生成→历史按城市过滤（四轮闭环）"""
+    from xiao_wen.session import chat
+
+    # 轮1：只给目的城市 → 缺项追问（出发城市/日期/天数）
+    r1 = chat("帮我规划去杭州出差的行程")
+    assert "请补充" in r1.answer, f"期望缺项追问，实际：{r1.answer}"
+
+    # 轮2：补齐要素 → 生成行程（含杭州与日期）
+    r2 = chat("10月8日从上海出发，待2天")
+    assert "杭州" in r2.answer, f"生成行程应含杭州，实际：{r2.answer}"
+    assert "10月8日" in r2.answer, f"生成行程应含日期，实际：{r2.answer}"
+    assert "请补充" not in r2.answer, "要素已齐，不应再追问"
+
+    # 轮3：历史按城市过滤 → 命中刚生成的杭州行程
+    r3 = chat("我最近去杭州的行程")
+    assert "杭州" in r3.answer and "10月8日" in r3.answer, f"历史应命中杭州行程，实际：{r3.answer}"
+
+
+@pytest.mark.integration
+def test_advice_disambiguation_end_to_end():
+    """E2E-08 消歧 B（咨询建议类）：出差住哪里比较好 → 门控反问（①政策/②按偏好）"""
+    ans = _invoke("出差住哪里比较好")
+    assert "①" in ans and "政策" in ans, f"期望消歧反问（①政策 ②偏好），实际：{ans}"

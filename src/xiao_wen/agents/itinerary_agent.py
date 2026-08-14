@@ -20,7 +20,7 @@ from xiao_wen.web import get_weather  # noqa: E402
 
 def run(state) -> dict:
     """两阶段管线（要素提取→行程生成）收口于 trip_planner.plan（ADR-0003）；生成成功后附加目的地天气提醒"""
-    r = _trip_plan(state["user_input"], session_id=state.get("session_id", "default"))
+    r = _trip_plan(state["user_input"], session_id=state.get("session_id", "default"), recent=state.get("recent", ""))
     if isinstance(r, NeedsInfo):
         return {"answer": needs_info_text(r), "plan": None}
     answer = format_plan(r.plan)

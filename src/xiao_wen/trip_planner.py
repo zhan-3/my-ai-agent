@@ -82,7 +82,7 @@ from_city/to_city：只在原文明确提到城市时才填（如「从广州」
 示例：{{"from_city": "北京", "to_city": "杭州", "start_date": "2026-08-20", "duration_days": 3, "hotel_pref": "无", "budget_pref": "中等", "date_is_vague": false}}，
 模糊示例：{{"from_city": "北京", "to_city": "杭州", "start_date": "2026-08-17", "duration_days": 3, "hotel_pref": "无", "budget_pref": "中等", "date_is_vague": true}}（用户只说了「下周」）""",
         ),
-        ("human", "今天是 {today}。\n用户输入：{input}"),
+        ("human", "今天是 {today}。\n用户输入：{input}\n对话上文（仅用于补全省略信息，如本轮没重复说过的城市）：{recent}"),
     ]
 )
 
@@ -146,12 +146,13 @@ def _missing(req: TripRequest) -> list[str]:
     return miss
 
 
-def plan(user_input: str, *, session_id: str = "default") -> PlanResult | NeedsInfo:
+def plan(user_input: str, *, session_id: str = "default", recent: str = "") -> PlanResult | NeedsInfo:
     """编排：提取 → 常驻城市补全 → 缺项检查（短路）→ 生成 → 写回长期记忆
 
+    recent：对话上文（多轮要素延续，如用户补齐缺项时不再重复说过的地方）；
     顺序是产品行为（ADR-0003），勿改。
     """
-    req = _extract_model().invoke({"input": user_input, "today": _today_cn()})
+    req = _extract_model().invoke({"input": user_input, "today": _today_cn(), "recent": recent or "无"})
     assert isinstance(req, TripRequest)
     # 哨兵归一化：先把「无/未知/出差」统一成「待定」，再走补全/缺项检查
     # （否则「无」会绕过两者，带着无意义城市进生成 → 规划 LLM 默认当北京，记忆却记「无」，历史显示不一致）
