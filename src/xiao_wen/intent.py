@@ -183,6 +183,31 @@ def _intent_model():
     return _build_prompt(_intents()) | llm.get_llm().with_structured_output(Intent, method="json_mode")
 
 
+def _pref_only_correction(recent: str, user_input: str, result: IntentResult) -> IntentResult:
+    """纯偏好锁定（规则兑底）：无追问上下文 + 纯偏好陈述（无行程要素、非咨询）→ 偏好记录。
+
+    为什么需要：LLM 会把「上次一样，还是住汉庭吧」（无上文指代悬空）脑补成行程续接
+    （reason：指代上一轮行程规划）——没有上一轮，指代应落在偏好陈述上。
+    与 _recover_pending 互补：那边管「有追问上下文」的续接，这边管「无追问上下文」的纯偏好。
+    只劫持 LLM 判成行程规划/其他的情形——查询类意图（知识问答/历史查询/联网查询）
+    由原分类尊重，不被偏好锁定劫持。
+    """
+    q = user_input.strip()
+    if not q or any(m in recent for m in _PENDING_MARKS):
+        return result
+    if any(m in q for m in _TRIP_ELEMENT_MARKS + _CONSULT_MARKS):
+        return result
+    if not _is_pref_statement(q):
+        return result
+    if result.intent not in ("行程规划", "其他"):
+        return result
+    return IntentResult(
+        intent="偏好记录",
+        reason=f"规则兑底：无行程要素的纯偏好陈述「{q}」归偏好记录（防无上文指代脑补续接）",
+        subtasks=[],
+    )
+
+
 def classify(recent: str, user_input: str) -> IntentResult:
     """意图分类：recent=最近对话（短期记忆，指代消解），user_input=当前输入
 
@@ -198,6 +223,9 @@ def classify(recent: str, user_input: str) -> IntentResult:
     # 待补全续接（规则兑底）：LLM 分类不稳时（同场景可能归偏好/其他），
     # 只要 recent 里助手在追问行程要素、本轮是简短补充 → 确定性修正为行程规划。
     result = _recover_pending(recent, user_input, result)
+    # 纯偏好锁定：无追问上下文时，纯偏好陈述（无行程要素/非咨询）→ 偏好记录
+    # （防 LLM 把「上次一样，还是住汉庭吧」脑补成行程续接）
+    result = _pref_only_correction(recent, user_input, result)
     # 拆分兜底：主导意图清晰但 LLM 把「顺便/还有X」整句吞掉（subtasks 空）→
     # 在强拆分标记处确定性切句，尾部子句再分类补进 subtasks（防次要请求被静默丢弃）
     if not result.subtasks:
@@ -224,6 +252,26 @@ _ABANDON_WORDS = ("算了", "不用", "取消", "不要了", "没事了", "回�
 _QUERY_WORDS = ("上次", "去过", "历史", "统计", "画像", "天气", "汇率", "报销", "标准", "政策", "规定", "怎么")
 # 偏好陈述词：续接同时也在记偏好 → 并行处理两件事（行程补全 + 偏好记录）
 _PREF_STATEMENT_WORDS = ("常住", "喜欢", "不吃", "忌口", "习惯", "口味", "偏好")
+# 纯偏好独立标记词（无需主体即偏好：喜欢/还是/想住…）
+_PREF_VERB_MARKS = ("喜欢", "还是", "想住", "要住", "常住", "习惯", "偏好", "口味", "忌口", "不吃")
+# 偏好主体词：与「住」组合成「我住X/俺住X」
+_PREF_SUBJECT_MARKS = ("我", "俺", "咱", "本人", "老子")
+# 行程要素标记：含其一即非纯偏好（不触发纯偏好锁定）
+_TRIP_ELEMENT_MARKS = ("规划", "出差", "行程", "机票", "车次", "会议", "拜访", "培训", "月", "日", "号", "周")
+# 咨询类标记：含其一即非陈述（不触发纯偏好锁定）
+_CONSULT_MARKS = ("哪里", "哪儿", "哪", "怎么", "吗", "啥", "什么", "?", "？")
+
+_PREF_HOTEL_PATTERN = re.compile(r"住[^，。！？\s]{0,6}(酒店|民宿|宾馆|旅店)")
+
+
+def _is_pref_statement(q: str) -> bool:
+    """纯偏好陈述判定：偏好动词（喜欢/还是/想住…）/ 主体+住 / 住+酒店名。
+    （裸「住」太宽——「住宿预算」「住宿标准」是行程相关词不是偏好，故不单列）"""
+    if any(w in q for w in _PREF_VERB_MARKS):
+        return True
+    if any(w in q for w in _PREF_SUBJECT_MARKS) and "住" in q:
+        return True
+    return bool(_PREF_HOTEL_PATTERN.search(q))
 
 
 def _recover_pending(recent: str, user_input: str, result: IntentResult) -> IntentResult:

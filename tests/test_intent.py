@@ -102,6 +102,39 @@ def test_recover_pending_noop_without_pending_mark():
     assert r.intent == "偏好记录"
 
 
+def test_pref_only_correction_reroutes_fake_plan_to_pref():
+    """无追问上下文 + 纯偏好陈述（无行程要素）→ 偏好记录：
+    LLM 把「上次一样，还是住汉庭吧」脑补成行程续接（无上文指代悬空）→ 规则锁回偏好"""
+    base = _intent.IntentResult(intent="行程规划", reason="指代上一轮行程", subtasks=[])
+    r = _intent._pref_only_correction("用户：你好", "和上次一样，还是住汉庭吧", base)
+    assert r.intent == "偏好记录"
+    assert r.subtasks == []
+
+
+def test_pref_only_correction_keeps_plan_with_trip_elements():
+    """含行程要素（规划/出差/日期）→ 不触发：
+    「帮我规划去广州出差，住全季」是行程规划不是纯偏好"""
+    base = _intent.IntentResult(intent="行程规划", reason="", subtasks=[])
+    for q in ("帮我规划去广州出差，住全季", "10月20号去北京出差4天，住汉庭"):
+        r = _intent._pref_only_correction("", q, base)
+        assert r.intent == "行程规划", q
+
+
+def test_pref_only_correction_keeps_consultation():
+    """咨询类（含哪里/怎么）→ 不触发：
+    「我住哪里比较好」是咨询建议（其他），不是偏好陈述"""
+    base = _intent.IntentResult(intent="其他", reason="咨询建议", subtasks=[])
+    r = _intent._pref_only_correction("", "我住哪里比较好", base)
+    assert r.intent == "其他"
+
+
+def test_pref_only_correction_noop_when_already_pref():
+    """LLM 已归偏好记录 → 不覆盖（幂等）"""
+    base = _intent.IntentResult(intent="偏好记录", reason="", subtasks=[])
+    r = _intent._pref_only_correction("", "还是住汉庭吧", base)
+    assert r.intent == "偏好记录"
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("text,expected", MULTI_CASES)
 def test_intent_splits_subtasks(text, expected):

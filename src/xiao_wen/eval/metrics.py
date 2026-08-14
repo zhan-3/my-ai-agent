@@ -99,15 +99,24 @@ def per_intent_metrics(results: list[dict], intents: list[str]) -> dict[str, dic
     return out
 
 
+def _case_ok(r: dict) -> bool:
+    """用例通过判定：主意图对 + subtasks 断言（样本带 subtasks 字段才断言）。
+    与 runners.run_intent_set 的 failures 口径保持一致（黄金集多意图样本锁 [主导, 次要] 形状）。"""
+    if r["expected"] != r["got"]:
+        return False
+    exp = r.get("subtasks_expected")
+    return exp is None or r.get("subtasks_got") == exp
+
+
 def accuracy(results: list[dict]) -> float:
     if not results:
         return 0.0
-    return sum(1 for r in results if r["expected"] == r["got"]) / len(results)
+    return sum(1 for r in results if _case_ok(r)) / len(results)
 
 
 def errors(results: list[dict]) -> list[dict]:
     """失败用例原样抽出（供 errors.jsonl 落盘与错误分析）。"""
-    return [r for r in results if r["expected"] != r["got"]]
+    return [r for r in results if not _case_ok(r)]
 
 
 def summarize(results: list[dict], intents: list[str], threshold: float) -> dict[str, Any]:

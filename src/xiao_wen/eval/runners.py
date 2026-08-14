@@ -30,7 +30,7 @@ def run_intent_set(
             "expected": c["expected"],
             "got": r.intent,
             "reason": r.reason,
-            "subtasks_expected": c.get("subtasks", []),
+            "subtasks_expected": c.get("subtasks"),  # None=样本未标注（不断言子任务）
             "subtasks_got": got_sub,
             "source": c.get("source", "human"),
             "note": c.get("note", ""),

@@ -39,9 +39,9 @@
 {"input": "和上次一样，我的行程是什么？", "expected": "历史查询", "subtasks": [], "note": "合成:指代"}
 {"input": "帮我订10月20日去广州的机票", "expected": "行程规划", "subtasks": [], "note": "合成:擦边能力外"}
 {"input": "出差打车能报不？", "expected": "知识问答", "subtasks": [], "note": "合成:口语化"}
-{"input": "俺10月20号要去广州出差4天，打车钱能报销不？", "expected": "知识问答", "subtasks": ["知识问答", "行程规划"], "note": "合成:方言/地域腔"}
+{"input": "俺10月20号要去广州出差4天，打车钱能报销不？", "expected": "行程规划", "subtasks": ["行程规划", "知识问答"], "note": "合成:方言/地域腔"}
 {"input": "出差打车能报销吗？Can I get reimbursement for taxi during business trip?", "expected": "知识问答", "subtasks": [], "note": "合成:中英混"}
-{"input": "怎么又要出差！！10月20号广州4天赶紧的！出差打车能报销吗？", "expected": "知识问答", "subtasks": ["知识问答", "行程规划"], "note": "合成:情绪化"}
+{"input": "怎么又要出差！！10月20号广州4天赶紧的！出差打车能报销吗？", "expected": "行程规划", "subtasks": ["行程规划", "知识问答"], "note": "合成:情绪化"}
 {"input": "出差打车报销？", "expected": "知识问答", "subtasks": [], "note": "合成:极简"}
 {"input": "那个……不好意思打扰一下，我想麻烦你问个事儿，就是关于出差的时候，如果打车的话，公司那边能不能给报销啊？", "expected": "知识问答", "subtasks": [], "note": "合成:冗余"}
 {"input": "和上次一样，出差打车能报销吗", "expected": "知识问答", "subtasks": [], "note": "合成:指代"}
