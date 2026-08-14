@@ -78,9 +78,7 @@ def main() -> int:
                 continue
             if not text:
                 continue
-            samples.append(
-                {"input": text, "expected": seed["expected"], "note": f"合成:{variant.split('：')[0]}"}
-            )
+            samples.append({"input": text, "expected": seed["expected"], "note": f"合成:{variant.split('：')[0]}"})
             print(f"[{si}.{vi + 1}] {seed['expected']} | {text[:46]}")
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
