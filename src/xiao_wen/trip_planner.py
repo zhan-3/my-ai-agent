@@ -127,13 +127,17 @@ def _plan_model():
 # ---- 编排 ----
 
 
+# 未知城市/日期哨兵族：提取 LLM 可能输出多个变体（prompt 要求「待定」但有方差），
+# 归一化后所有下游（缺项检查/常驻补全/记忆/历史显示）看到同一哨兵
+_UNKNOWN_CITIES = ("待定", "未知", "出差", "无")
+
+
 def _missing(req: TripRequest) -> list[str]:
     """检查必填要素缺失，返回缺失清单（基础项 E：缺失信息提示）"""
-    _UNKNOWN = ("待定", "未知", "出差")
     miss = []
-    if not req.to_city or req.to_city in _UNKNOWN:
+    if not req.to_city or req.to_city in _UNKNOWN_CITIES:
         miss.append("目的城市")
-    if not req.from_city or req.from_city in _UNKNOWN:
+    if not req.from_city or req.from_city in _UNKNOWN_CITIES:
         miss.append("出发城市")
     if req.start_date in ("待定", ""):
         miss.append("出发日期")
@@ -149,9 +153,15 @@ def plan(user_input: str, *, session_id: str = "default") -> PlanResult | NeedsI
     """
     req = _extract_model().invoke({"input": user_input, "today": _today_cn()})
     assert isinstance(req, TripRequest)
+    # 哨兵归一化：先把「无/未知/出差」统一成「待定」，再走补全/缺项检查
+    # （否则「无」会绕过两者，带着无意义城市进生成 → 规划 LLM 默认当北京，记忆却记「无」，历史显示不一致）
+    if req.from_city in _UNKNOWN_CITIES:
+        req.from_city = "待定"
+    if req.to_city in _UNKNOWN_CITIES:
+        req.to_city = "待定"
     # 常驻城市补全：先于缺项检查（"用户没说出发城市但记忆里有"不算缺项）
     hc = get_home_city(session_id=session_id)
-    if (not req.from_city or req.from_city in ("待定", "未知", "出差")) and hc:
+    if (not req.from_city or req.from_city in _UNKNOWN_CITIES) and hc:
         req.from_city = hc
     miss = _missing(req)
     if miss:

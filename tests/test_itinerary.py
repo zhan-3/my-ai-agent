@@ -180,3 +180,50 @@ def test_missing_treats_garbage_city_as_missing(monkeypatch):
     assert "目的城市" in _it._missing(_req(to_city="出差"))
     assert "出发城市" in _it._missing(_req(from_city="出差"))
     assert _it._missing(_req(to_city="杭州", from_city="上海")) == []
+
+
+# ---------------- from_city 哨兵归一化（无→北京 一致性，ticket 04） ----------------
+
+
+def test_missing_detects_wu_variant():
+    """「无」与「待定/未知/出差」同族：缺项检查必须报缺（此前会漏）"""
+    assert "目的城市" in _it._missing(_req(to_city="无"))
+    assert "出发城市" in _it._missing(_req(from_city="无"))
+
+
+def test_plan_normalizes_wu_with_home_city(monkeypatch):
+    """提取输出 from_city=无 + 有常驻城市 → 归一化→补全→正常生成（不再漏常驻补全）"""
+    from xiao_wen import memory as ms
+
+    ms.add_or_update_preference("常驻城市", "上海", True)
+    plan_out = ItineraryPlan(summary="上海→北京", days=[], reasons=[])
+    _stub_models(monkeypatch, _req(from_city="无"), plan_out=plan_out)
+    r = _it.plan("去北京开会")
+    assert isinstance(r, _it.PlanResult)
+    assert r.request is not None
+    assert r.request.from_city == "上海", f"常驻城市应补全，实际 {r.request.from_city}"
+    assert r.plan.summary == "上海→北京"
+
+
+def test_plan_wu_without_home_city_needs_info(monkeypatch):
+    """提取输出 from_city=无 且无常驻城市 → 缺项短路（此前会静默进生成→无→北京幻觉）"""
+    called = {"plan": False}
+
+    def boom():
+        called["plan"] = True
+        raise AssertionError("缺项短路：不应调用生成")
+
+    _stub_models(monkeypatch, _req(from_city="无"))
+    monkeypatch.setattr(_it, "_plan_model", boom)
+    r = _it.plan("去北京开会")
+    assert isinstance(r, _it.NeedsInfo)
+    assert r.missing == ["出发城市"]
+    assert called["plan"] is False
+
+
+def test_plan_wu_to_city_needs_info(monkeypatch):
+    """to_city=无 同样归一化 → 缺项短路（对称处理）"""
+    _stub_models(monkeypatch, _req(to_city="无"))
+    r = _it.plan("帮我规划出差")
+    assert isinstance(r, _it.NeedsInfo)
+    assert r.missing == ["目的城市"]
