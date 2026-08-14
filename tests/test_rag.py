@@ -154,6 +154,9 @@ def test_build_index_reuses_on_count_match(monkeypatch):
 def test_build_index_rebuilds_on_model_change(monkeypatch):
     """换 embedding 模型（维度相同但向量空间不同）→ 即使块数一致也必须重建"""
     fake = FakeCol(count=2, metadata={"model": "text-embedding-v3"})  # 旧索引：v3
+    # 显式指定当前模型 ≠ 旧索引模型：不依赖外部配置（CI 无 .env 时 EMB_MODEL
+    # 默认也是 v3，等于旧索引 → 曾错误命中复用分支，本地因 .env 设了 v4 才过）
+    monkeypatch.setattr(rag, "EMB_MODEL", "test-emb-v4")
     monkeypatch.setattr(rag, "get_collection", lambda: fake)
     monkeypatch.setattr(rag, "embed_texts", _fake_embeddings)
     rag.build_index([("a", "x" * 50)] * 2)
