@@ -7,6 +7,7 @@
 - 链懒构建（走 LLM 单一接缝，熔断守卫自动继承）
 """
 
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -131,6 +132,33 @@ class SubTask(BaseModel):
     text: str
 
 
+# ---- 多意图拆分兜底（ticket 07） ----
+# 强拆分标记：只有前接子句分隔符（，。；！？）才算拆分点
+# （「我还有事」的「还有」前无分隔符 → 不拆，防误拆）
+_SPLIT_MARKERS = re.compile(r"顺便|顺带|顺道|另外|还有")
+_CLause_SEPARATOR = re.compile(r"[，,。;；!！?？]\s*$")
+
+
+def _split_subtasks(user_input: str) -> list[str]:
+    """确定性切句：返回每个拆分点之后的子句（去尾标点），无拆分点返回空。
+
+    仅切强标记（顺便/顺带/顺道/另外/还有）且标记前接子句分隔符的位置；
+    多标记时按标记间分段，避免后段吞掉更靠后的标记。
+    """
+    marks = [
+        (m.start(), m.end())
+        for m in _SPLIT_MARKERS.finditer(user_input)
+        if _CLause_SEPARATOR.search(user_input[: m.start()])
+    ]
+    chunks = []
+    for i, (_, e) in enumerate(marks):
+        end = marks[i + 1][0] if i + 1 < len(marks) else len(user_input)
+        seg = user_input[e:end].strip(" ，,。;；!！?？")
+        if seg:
+            chunks.append(seg)
+    return chunks
+
+
 class Intent(BaseModel):
     intent: str
     reason: str
@@ -160,4 +188,18 @@ def classify(recent: str, user_input: str) -> IntentResult:
     known = {m["INTENT"] for m in _intents()}
     subtasks = [s if s.intent in known else SubTask(intent="其他", text=s.text) for s in r.subtasks]
     intent = r.intent if r.intent in known else "其他"
-    return IntentResult(intent=intent, reason=r.reason, subtasks=subtasks)
+    result = IntentResult(intent=intent, reason=r.reason, subtasks=subtasks)
+    # 拆分兜底：主导意图清晰但 LLM 把「顺便/还有X」整句吞掉（subtasks 空）→
+    # 在强拆分标记处确定性切句，尾部子句再分类补进 subtasks（防次要请求被静默丢弃）
+    if not result.subtasks:
+        for chunk in _split_subtasks(user_input):
+            sub = classify(recent, chunk)
+            if sub.intent in (result.intent, "其他"):
+                continue  # 子句与主导同意图（已被覆盖）或属闲聊 → 不进并行
+            result.subtasks.append(SubTask(intent=sub.intent, text=chunk))
+    # 归一化：多意图契约 = subtasks 含全部请求（主导在前，text=完整输入）——
+    # LLM 常只把次要请求放进 subtasks、漏掉主导（黄金集锁定 [主导, 次要] 形状；
+    # dispatch 的同类兜底仍在，此处让 classify 自身契约自洽）
+    if result.subtasks and not any(s.intent == result.intent for s in result.subtasks):
+        result.subtasks.insert(0, SubTask(intent=result.intent, text=user_input))
+    return result
