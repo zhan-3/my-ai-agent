@@ -128,16 +128,13 @@ def health_check() -> list[dict]:
     )
     report.append({"项": "向量索引", "状态": index_status, "详情": index_detail})
 
-    # ③ 记忆后端就绪（无 POSTGRES_URL = InMemory 演示兜底恒可用；Postgres 探活）
+    # ③ 记忆后端就绪（唯一后端 Postgres：探活；未配 URL / 连接失败 → ⚠️）
     from xiao_wen import memory as memory_mod
 
     try:
         backend = memory_mod._get_backend()
-        if hasattr(backend, "health_check"):
-            backend.health_check()
-            mem_status, mem_detail = "✅", "Postgres 连接正常（会话隔离持久化）"
-        else:
-            mem_status, mem_detail = "✅", "内存后端（演示，重启即失；设 POSTGRES_URL 持久化）"
+        backend.health_check()
+        mem_status, mem_detail = "✅", "Postgres 连接正常（会话隔离持久化）"
     except Exception:
         mem_status, mem_detail = "⚠️", "Postgres 连接失败（检查 POSTGRES_URL 与容器）"
     report.append({"项": "记忆存储", "状态": mem_status, "详情": mem_detail})

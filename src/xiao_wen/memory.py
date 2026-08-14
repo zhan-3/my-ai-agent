@@ -1,16 +1,15 @@
-"""记忆模块：短期 + 长期两层记忆（存储后端协议：InMemory 演示兜底 / Postgres 产品后端）
+"""记忆模块：短期 + 长期两层记忆（唯一产品后端：Postgres）
 
 - 会话隔离：所有记忆按 session_id 隔离（默认 "default"，向后兼容既有调用点）
-- 后端协议 MemoryBackend：三个域（消息/偏好/行程）的按 session 读写；
-  InMemoryBackend（进程内存，无 POSTGRES_URL 时的演示/测试兜底）与
-  PostgresBackend（memory_pg.py，psycopg，POSTGRES_URL 时启用）实现同一接口
+- 后端协议 MemoryBackend（三个域：消息/偏好/行程的按 session 读写），
+  唯一实现 PostgresBackend（memory_pg.py，psycopg，POSTGRES_URL 必配）
 - 组合函数留在函数层：format_recent_messages / get_home_city / get_common_destinations
   （backend 只管基础读写，组合逻辑不重复）
-- 测试注入：set_backend(fresh InMemoryBackend) 替代旧的 MEMORY_PATH monkeypatch
+- 测试注入：set_backend(PostgresBackend(test_url)) 替代旧的 InMemoryBackend 兜底
+  （conftest 负责起库/清表；本模块不再有任何进程内存后端）
 """
 
 import os
-import time
 from collections import Counter
 from typing import Protocol
 
@@ -32,68 +31,32 @@ class MemoryBackend(Protocol):
 
     def get_itineraries(self, session_id: str) -> list[dict]: ...
 
-
-class InMemoryBackend:
-    """进程内存后端：无 POSTGRES_URL 时的演示/测试兜底（重启即失，README 注明）"""
-
-    def __init__(self) -> None:
-        self._data: dict[str, dict] = {}
-
-    def _sess(self, session_id: str) -> dict:
-        return self._data.setdefault(session_id, {"messages": [], "preferences": [], "itineraries": []})
-
-    def add_message(self, session_id: str, role: str, content: str) -> dict:
-        rec = {"role": role, "content": content, "ts": time.strftime("%Y-%m-%d %H:%M:%S")}
-        self._sess(session_id)["messages"].append(rec)
-        return rec
-
-    def get_recent_messages(self, session_id: str, n: int) -> list[dict]:
-        return self._sess(session_id)["messages"][-n:]
-
-    def add_or_update_preference(self, session_id: str, category: str, content: str, is_update: bool = False) -> dict:
-        prefs = self._sess(session_id)["preferences"]
-        if is_update:
-            prefs[:] = [p for p in prefs if p["category"] != category]
-        rec = {"category": category, "content": content, "ts": time.strftime("%Y-%m-%d %H:%M")}
-        prefs.append(rec)
-        return rec
-
-    def get_preferences(self, session_id: str, category: str | None = None) -> list[dict]:
-        prefs = self._sess(session_id)["preferences"]
-        if category:
-            return [p for p in prefs if p["category"] == category]
-        return list(prefs)
-
-    def add_itinerary(self, session_id: str, facts: dict, summary: str) -> dict:
-        rec = {**facts, "summary": summary, "ts": time.strftime("%Y-%m-%d %H:%M")}
-        self._sess(session_id)["itineraries"].append(rec)
-        return rec
-
-    def get_itineraries(self, session_id: str) -> list[dict]:
-        return list(self._sess(session_id)["itineraries"])
+    def health_check(self) -> None: ...  # PostgresBackend：探活（连接失败抛异常）
 
 
-# ---- 模块级当前后端（测试注入 set_backend；生产惰性按 env 分派） ----
+# ---- 模块级当前后端（测试注入 set_backend；生产懒构造 Postgres） ----
 _backend: MemoryBackend | None = None
 
 
 def set_backend(backend: MemoryBackend) -> None:
-    """注入存储后端（测试注入全新 InMemoryBackend 隔离；生产由 _get_backend 按 env 分派）"""
+    """注入后端（测试注入 PostgresBackend(test_url) 隔离；生产由 _get_backend 懒构造）"""
     global _backend  # noqa: PLW0603 —— 后端注入是模块级状态的刻意设计
     _backend = backend
 
 
 def _get_backend() -> MemoryBackend:
-    """惰性分派：POSTGRES_URL 时 PostgresBackend（产品持久化），否则 InMemoryBackend（演示兜底）"""
+    """懒构造产品后端：Postgres（唯一后端）。未配 POSTGRES_URL 直接报错——不再有内存兜底。"""
     global _backend  # noqa: PLW0603
     if _backend is None:
         url = os.environ.get("POSTGRES_URL")
-        if url:
-            from xiao_wen.memory_pg import PostgresBackend  # 懒导入：pg 依赖可选
+        if not url:
+            raise RuntimeError(
+                "记忆后端需要 POSTGRES_URL（唯一后端 Postgres）："
+                "docker compose up -d postgres && export POSTGRES_URL=..."
+            )
+        from xiao_wen.memory_pg import PostgresBackend  # 懒导入：pg 依赖可选
 
-            _backend = PostgresBackend(url)
-        else:
-            _backend = InMemoryBackend()
+        _backend = PostgresBackend(url)
     return _backend
 
 
@@ -153,14 +116,3 @@ def add_itinerary(facts: dict, summary: str, *, session_id: str = "default") -> 
 
 def get_itineraries(*, session_id: str = "default") -> list[dict]:
     return _get_backend().get_itineraries(session_id)
-
-
-if __name__ == "__main__":
-    # 自检：短期能存能读；偏好追加/覆盖；常驻城市
-    add_message("user", "自检：你好")
-    add_message("assistant", "自检：你好，有什么可以帮你？")
-    print("recent:", format_recent_messages(4))
-    add_or_update_preference("常驻城市", "自检：上海")
-    add_or_update_preference("常驻城市", "自检：北京", is_update=True)  # 覆盖
-    print("home:", get_home_city())
-    print("prefs:", get_preferences())

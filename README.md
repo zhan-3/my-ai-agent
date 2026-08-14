@@ -20,7 +20,7 @@
 | 大模型 | DeepSeek（OpenAI 兼容接口） | 意图识别、要素提取、行程生成、问答、工具调用 |
 | Embedding | 阿里 DashScope text-embedding-v3（1024 维） | 知识库向量化 |
 | 向量库 | Chroma 1.5.9（磁盘持久化） | 政策文档语义检索 |
-| 记忆存储 | Postgres 后端（`POSTGRES_URL`，psycopg）+ InMemory 演示兜底 | 短期对话 + 长期偏好/历史，**按用户隔离** |
+| 记忆存储 | Postgres 后端（`POSTGRES_URL`，psycopg，唯一后端） | 短期对话 + 长期偏好/历史，**按用户隔离** |
 | 认证 | JWT（pyjwt，HS256）+ bcrypt 密码哈希 | 注册/登录端点，会话维度 = 用户身份 |
 | 联网数据 | open-meteo（天气/空气质量）、exchangerate-api（汇率） | 免费公开 API，无需 key |
 | 包管理 | uv | 依赖锁定（pyproject.toml + uv.lock） |
@@ -104,9 +104,10 @@ uv run pytest -m integration   # 自动化测试：集成层（真实 LLM，约 
 uv run xiao-wen                # 可视化 Web 界面（等价 python -m xiao_wen.webapp）→ http://127.0.0.1:8000
 ```
 
-> 持久化记忆（可选）：`docker compose up -d postgres` 起本地 Postgres，然后
+> 记忆 = Postgres（唯一后端，必配）：`docker compose up -d postgres` 起本地 Postgres，然后
 export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
-即可让记忆落盘（用户隔离）；不设则用内存后端（演示，重启即失）。
+（记忆按用户隔离；未配 URL 记忆调用直接报错，无内存兜底）。
+> 单元测试同样需要 Postgres：export POSTGRES_TEST_URL=postgresql://postgres:123456@localhost:5432/xiao_wen_test（CI 已注入）。
 > 已实测：本地容器 `my-postgres`（postgres:18）跑通注册/登录/偏好写入/用户隔离/重启后登录持久化，`test_memory_pg.py` 6 个真库测试全绿。
 > 认证：打开 Web 界面先注册/登录（JWT）；生产环境务必 `export JWT_SECRET=<长随机串>` 覆盖开发默认密钥。
 
@@ -139,7 +140,7 @@ export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 │       ├── llm.py               ★ 模型单一接缝（懒构造 + 熔断守卫代理）
 │       ├── trip_planner.py      ★ 行程规划管线（提取→补全→缺项→生成→写回）
 │       ├── plugin_registry.py   # 子 Agent 注册中心（discover / AST 元数据 / load_agent）
-│       ├── memory.py            # 两层记忆：后端协议（InMemory 兑底 / Postgres 用户隔离）
+│       ├── memory.py            # 两层记忆：后端协议（唯一实现 Postgres）
 │       ├── memory_pg.py         # Postgres 后端（psycopg 四表含 users，按会话过滤）
 │       ├── auth.py              # 认证（JWT + bcrypt，用户存储 env 分派）
 │       ├── rag.py               # 知识问答（向量检索 + Chroma）
@@ -165,9 +166,9 @@ export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 │   └── stats.py                 # 差旅统计（第七意图，真实路由）
 │
 ├── tests/                       # 自动化测试（pytest）
-│   ├── conftest.py              # 每测试注入全新 InMemoryBackend（零外部依赖）
+│   ├── conftest.py              # 每测试注入 PostgresBackend 并清三张表（单后端）
 │   ├── test_memory.py           # 记忆：追加/覆盖/常驻城市/历史
-│   ├── test_memory_backend.py   # 后端协议：InMemory 直测 + 会话隔离矩阵 + env 分派
+│   ├── test_memory_backend.py   # 后端协议：Postgres 直测 + 会话隔离矩阵 + 缺 URL 报错
 │   ├── test_memory_pg.py        # （Postgres，条件跑）真库读写 + session 隔离
 │   ├── test_auth.py             # 认证：bcrypt 哈希 / JWT 签验 / 注册登录 / env 分派
 │   ├── test_webapp.py           # webapp 端点：注册/登录/me + 聊天强制用户隔离
@@ -233,8 +234,8 @@ text-embedding-v3 + Chroma 余弦检索 top-5，命中块拼进提示词生成�
 - **长期**：偏好（追加/覆盖区分）、常驻城市（自动补出发城市）、历史行程。
 - **用户隔离**：webapp 层强制——登录后会话维度 = 用户名（JWT 解出，客户端不自填）；
   链路贯穿 webapp → chat → 图 State → 子 Agent → 存储后端（ADR-0007）。
-- **存储后端**：设 `POSTGRES_URL` 走 Postgres（psycopg 四表含 users，持久化 + 隔离）；
-  不设则 InMemory 演示兜底（重启即失）。本地起库：`docker compose up -d`。
+- **存储后端**：唯一后端 Postgres（psycopg 四表含 users，持久化 + 隔离，`POSTGRES_URL` 必配）；
+  未配 URL 记忆调用直接报错（无内存兜底）。本地起库：`docker compose up -d postgres`。
 
 ### 6.5 联网查询
 

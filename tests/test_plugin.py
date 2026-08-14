@@ -64,14 +64,11 @@ def test_load_external_agent_run_contract():
     assert isinstance(out, dict) and "answer" in out
 
 
-def test_stats_agent_trip_portrait(monkeypatch):
+def test_stats_agent_trip_portrait():
     """差旅统计升级（读已有 duration_days/start_date 字段，零迁移）：
     出差画像 = 次数 + 总/平均天数 + 年度趋势 + 常去城市 Top"""
     from xiao_wen import memory
-    from xiao_wen.memory import InMemoryBackend
 
-    monkeypatch.setattr(memory, "_backend", None)
-    memory.set_backend(InMemoryBackend())
     memory.add_itinerary(
         {"to_city": "北京", "from_city": "上海", "start_date": "2026-03-10", "duration_days": 4},
         "去北京开会",

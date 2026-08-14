@@ -1,4 +1,8 @@
-"""pytest 公共配置：把 src/（src 布局包）加进 sys.path，并保证测试不碰真实数据文件"""
+"""pytest 公共配置：把 src/（src 布局包）加进 sys.path，并保证测试不碰真实数据文件
+
+记忆隔离：单后端架构（Postgres）——每个测试前清空三张表并注入全新 PostgresBackend，
+绝不共享/读写开发库（优先 POSTGRES_TEST_URL 独立测试库，其次显式 POSTGRES_URL）。
+"""
 
 import os
 import sys
@@ -10,9 +14,20 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 @pytest.fixture(autouse=True)
 def _isolate_memory():
-    """所有测试的记忆都落到全新 InMemoryBackend（测试隔离：绝不共享/读写真实存储）"""
+    """所有测试的记忆落到真实 Postgres（单后端）：每测试前 clear_all 三张表"""
     import xiao_wen.memory as memory_store
+    from xiao_wen.memory_pg import PostgresBackend
 
-    memory_store.set_backend(memory_store.InMemoryBackend())
+    url = os.environ.get("POSTGRES_TEST_URL") or os.environ.get("POSTGRES_URL")
+    if not url:
+        pytest.fail(
+            "单元测试需要 Postgres（唯一记忆后端）：\n"
+            "  1) docker-compose up -d postgres\n"
+            "  2) export POSTGRES_TEST_URL=postgresql://postgres:123456@localhost:5432/xiao_wen_test\n"
+            "     （CI 已注入 POSTGRES_TEST_URL；测试优先用独立测试库，避免清掉开发库数据）"
+        )
+    backend = PostgresBackend(url)
+    backend.clear_all()
+    memory_store.set_backend(backend)
     yield
-    memory_store._backend = None  # 恢复惰性分派（避免残留 backend 污染后续测试）
+    memory_store._backend = None  # 恢复懒构造（避免残留 backend 污染后续测试）

@@ -88,15 +88,42 @@ def test_safe_call_returns_fallback():
     assert safe_call(ok, "fallback") == "正常"
 
 
-def test_health_check_memory_inmemory_backend_ready(monkeypatch):
-    """无 POSTGRES_URL 时健康检查报告记忆存储 = ✅（InMemory 演示兜底，探活不崩溃）"""
+def test_health_check_memory_backend_ready(monkeypatch):
+    """Postgres 可连时健康检查报告记忆存储 = ✅（唯一后端 Postgres）"""
+    import os
+
+    from xiao_wen import memory as memory_mod
     from xiao_wen import stability as st
 
+    monkeypatch.setenv("POSTGRES_URL", os.environ.get("POSTGRES_TEST_URL", "postgresql://postgres:123456@localhost:5432/xiao_wen_test"))
+    memory_mod._backend = None
+    try:
+        report = st.health_check()
+        mem_item = next(i for i in report if i["项"] == "记忆存储")
+        assert mem_item["状态"] == "✅"
+        assert "Postgres" in mem_item["详情"]
+    finally:
+        memory_mod._backend = None
+
+
+def test_health_check_memory_backend_missing_url_warns(monkeypatch):
+    """未配 POSTGRES_URL → 记忆存储 = ⚠️（无内存兜底，探活不崩溃）
+    注：health_check 内部 load_dotenv 会从 .env 补回环境变量，这里 patch 掉以测真实缺配场景"""
+    import dotenv
+
+    from xiao_wen import memory as memory_mod
+    from xiao_wen import stability as st
+
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda: None)
     monkeypatch.delenv("POSTGRES_URL", raising=False)
-    report = st.health_check()
-    mem_item = next(i for i in report if i["项"] == "记忆存储")
-    assert mem_item["状态"] == "✅"
-    assert "内存后端" in mem_item["详情"]
+    memory_mod._backend = None
+    try:
+        report = st.health_check()
+        mem_item = next(i for i in report if i["项"] == "记忆存储")
+        assert mem_item["状态"] == "⚠️"
+        assert "POSTGRES_URL" in mem_item["详情"]
+    finally:
+        memory_mod._backend = None
 
 
 def test_health_check_env_report_keys_follow_seam(monkeypatch):

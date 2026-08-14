@@ -1,7 +1,7 @@
 """Postgres 记忆后端（产品持久化 + 会话隔离）：psycopg 直连，三张表按 session 过滤
 
 - 惰性短连接（每操作 connect；演示级规模足够，避免连接池复杂度——需要并发再上池）
-- 幂等建表 CREATE TABLE IF NOT EXISTS；ts 保持字符串格式（数据形状与 InMemory 一致）
+- 幂等建表 CREATE TABLE IF NOT EXISTS；ts 保持字符串格式（数据形状与协议约定一致）
 - 会话隔离：所有读写 WHERE session_id = %s
 """
 

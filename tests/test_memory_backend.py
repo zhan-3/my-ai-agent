@@ -1,24 +1,32 @@
-"""记忆后端协议 + 会话隔离（S1/S2）：InMemoryBackend 直测 + memory 函数委托 + session 隔离矩阵
+"""记忆后端协议 + 会话隔离（S1/S2）：PostgresBackend 直测 + memory 函数委托 + session 隔离矩阵
 
-- S1：MemoryBackend 协议（8 方法）+ InMemoryBackend + set_backend 注入
+- S1：MemoryBackend 协议（8 方法）+ PostgresBackend（唯一后端）
 - S2：核心验收——同一后端下 session A 写消息/偏好/行程，session B 三域全空；
   组合函数（常驻城市/常用目的地）也按 session 隔离
+- 隔离由 conftest autouse fixture 保证（每测试前 clear_all 三张表）
 """
 
+import os
+
+import pytest
+
 import xiao_wen.memory as memory
+from xiao_wen.memory_pg import PostgresBackend
 
 
-def _fresh() -> memory.InMemoryBackend:
-    """注入全新 InMemoryBackend 并返回（每次测试独立隔离）"""
-    b = memory.InMemoryBackend()
+def _fresh() -> PostgresBackend:
+    """注入全新 PostgresBackend（同一测试库）并返回（每测试独立隔离由 conftest 清表保证）"""
+    url = os.environ.get("POSTGRES_TEST_URL") or os.environ["POSTGRES_URL"]
+    b = PostgresBackend(url)
+    b.clear_all()
     memory.set_backend(b)
     return b
 
 
-# ---------- S1：InMemoryBackend 协议直测 ----------
+# ---------- S1：PostgresBackend 协议直测 ----------
 
 
-def test_inmemory_backend_messages_append_in_order():
+def test_backend_messages_append_in_order():
     b = _fresh()
     b.add_message("A", "user", "你好")
     b.add_message("A", "assistant", "你好，有什么可以帮你？")
@@ -27,7 +35,7 @@ def test_inmemory_backend_messages_append_in_order():
     assert recent[1]["content"].startswith("你好")
 
 
-def test_inmemory_backend_preference_update_overrides_category():
+def test_backend_preference_update_overrides_category():
     b = _fresh()
     b.add_or_update_preference("A", "常驻城市", "上海")
     b.add_or_update_preference("A", "常驻城市", "北京", is_update=True)
@@ -35,7 +43,7 @@ def test_inmemory_backend_preference_update_overrides_category():
     assert [p["content"] for p in b.get_preferences("A")] == ["北京"]
 
 
-def test_inmemory_backend_itinerary_roundtrip():
+def test_backend_itinerary_roundtrip():
     b = _fresh()
     rec = b.add_itinerary("A", {"to_city": "北京"}, "北京出差")
     assert rec["to_city"] == "北京" and rec["summary"] == "北京出差"
@@ -81,28 +89,15 @@ def test_default_session_compat():
     assert memory.get_recent_messages(6, session_id="其他") == []
 
 
-# ---------- S4：env 分派（PostgresBackend 用假类隔离，不碰真库） ----------
+# ---------- S3：后端就绪约束（单后端：必须配 POSTGRES_URL） ----------
 
 
-def test_backend_dispatch_without_env_uses_inmemory(monkeypatch):
+def test_get_backend_requires_postgres_url(monkeypatch):
+    """未配 POSTGRES_URL → 明确报错（不再静默内存兜底）"""
     monkeypatch.delenv("POSTGRES_URL", raising=False)
-    memory._backend = None  # 重置惰性分派
-    assert isinstance(memory._get_backend(), memory.InMemoryBackend)
     memory._backend = None
-
-
-def test_backend_dispatch_with_env_uses_postgres(monkeypatch):
-    import xiao_wen.memory_pg as pg
-
-    calls: list[str] = []
-
-    class FakePG:
-        def __init__(self, url: str):
-            calls.append(url)
-
-    monkeypatch.setattr(pg, "PostgresBackend", FakePG)
-    monkeypatch.setenv("POSTGRES_URL", "postgresql://postgres:123456@localhost:5432/xiao_wen")
-    memory._backend = None
-    memory._get_backend()
-    assert calls == ["postgresql://postgres:123456@localhost:5432/xiao_wen"]
-    memory._backend = None
+    try:
+        with pytest.raises(RuntimeError, match="POSTGRES_URL"):
+            memory._get_backend()
+    finally:
+        memory._backend = None
