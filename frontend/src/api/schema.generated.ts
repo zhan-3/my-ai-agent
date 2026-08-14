@@ -246,6 +246,8 @@ export interface components {
             years: {
                 [key: string]: unknown;
             }[];
+            /** Upcoming Trips */
+            upcoming_trips: number;
         };
         /** Preference */
         Preference: {

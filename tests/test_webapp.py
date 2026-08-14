@@ -136,6 +136,31 @@ class TestStatsEndpoint:
         assert data["avg_days"] == 2.0
         assert data["top_cities"][0] == {"city": "北京", "count": 2}
         assert data["years"] == [{"year": "2025", "count": 1}, {"year": "2026", "count": 2}]
+        assert data["upcoming_trips"] == 0
+
+    def test_stats_filters_upcoming(self, client):
+        """时空语义：未来规划（start_date > 今天）不算「去过」——画像只统计已发生，
+        upcoming_trips 单独诚实标注"""
+        from xiao_wen import memory as memory_store
+
+        token = client.post("/api/auth/register", json={"username": "zhang", "password": "pass123"}).json()["token"]
+        memory_store.add_itinerary(
+            {"to_city": "北京", "start_date": "2026-01-10", "duration_days": 2},
+            "北京出差",
+            session_id="zhang",
+        )
+        memory_store.add_itinerary(
+            {"to_city": "杭州", "start_date": "2099-12-01", "duration_days": 4},
+            "杭州规划",
+            session_id="zhang",
+        )
+        r = client.get("/api/stats", headers={"Authorization": f"Bearer {token}"})
+        data = r.json()
+        assert data["has_data"] is True
+        assert data["trips"] == 1  # 未来规划不计入
+        assert data["total_days"] == 2
+        assert data["top_cities"] == [{"city": "北京", "count": 1}]
+        assert data["upcoming_trips"] == 1  # 单独标注
 
 
 class TestChatAuthEnforced:

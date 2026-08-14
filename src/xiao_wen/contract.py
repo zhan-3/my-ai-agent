@@ -54,6 +54,7 @@ class TravelStats(BaseModel):
     skipped_days: int
     top_cities: list[dict]
     years: list[dict]
+    upcoming_trips: int  # 未来规划条数（未发生，未计入画像；诚实标注）
 
 
 def plan_or_none(raw: dict | None) -> TripPlan | None:

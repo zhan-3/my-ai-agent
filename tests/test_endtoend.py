@@ -30,7 +30,7 @@ def test_two_layer_memory_loop():
     assert "已更新偏好" in ans
 
     # ③ 行程规划：不说出发城市 → 常驻城市补全（长期记忆生效）
-    ans = _invoke("10月8日去北京开会4天")
+    ans = _invoke("5月8日去北京开会4天")
     assert "上海" in ans, "应自动补全出发城市（长期记忆常驻城市）"
 
     # ④ 历史查询（长期记忆历史行程可读）
@@ -111,14 +111,14 @@ def test_missing_elements_multi_turn_planning():
     assert "请补充" in r1.answer, f"期望缺项追问，实际：{r1.answer}"
 
     # 轮2：补齐要素 → 生成行程（含杭州与日期）
-    r2 = chat("10月8日从上海出发，待2天")
+    r2 = chat("5月8日从上海出发，待2天")
     assert "杭州" in r2.answer, f"生成行程应含杭州，实际：{r2.answer}"
-    assert "10月8日" in r2.answer, f"生成行程应含日期，实际：{r2.answer}"
+    assert "5月8日" in r2.answer, f"生成行程应含日期，实际：{r2.answer}"
     assert "请补充" not in r2.answer, "要素已齐，不应再追问"
 
     # 轮3：历史按城市过滤 → 命中刚生成的杭州行程
     r3 = chat("我最近去杭州的行程")
-    assert "杭州" in r3.answer and "10月8日" in r3.answer, f"历史应命中杭州行程，实际：{r3.answer}"
+    assert "杭州" in r3.answer and "5月8日" in r3.answer, f"历史应命中杭州行程，实际：{r3.answer}"
 
 
 @pytest.mark.integration

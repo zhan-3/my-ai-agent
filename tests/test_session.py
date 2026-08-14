@@ -290,7 +290,7 @@ def test_agents_use_state_session_id(monkeypatch):
             {
                 "to_city": "北京",
                 "from_city": "上海",
-                "start_date": "2026-10-08",
+                "start_date": "2026-05-08",
                 "duration_days": 4,
                 "summary": "北京出差",
             }
@@ -300,6 +300,35 @@ def test_agents_use_state_session_id(monkeypatch):
     out = history_agent.run({"session_id": "会话B"})
     assert seen["session_id"] == "会话B"
     assert "北京" in out["answer"]
+
+
+def test_history_agent_filters_by_time(monkeypatch):
+    """时空语义（确定性规则）：问历史 → 未来规划不出现；问计划 → 只给未来规划"""
+    from xiao_wen.agents import history_agent
+
+    its = [
+        {
+            "to_city": "北京",
+            "from_city": "上海",
+            "start_date": "2026-05-08",
+            "duration_days": 4,
+            "summary": "北京出差（已发生）",
+        },
+        {
+            "to_city": "杭州",
+            "from_city": "北京",
+            "start_date": "2099-12-01",
+            "duration_days": 3,
+            "summary": "杭州规划（未发生）",
+        },
+    ]
+    monkeypatch.setattr(history_agent, "get_itineraries", lambda **kw: its)
+
+    hist = history_agent.run({"session_id": "x", "user_input": "我上次出差去哪了"})
+    assert "北京" in hist["answer"] and "杭州规划" not in hist["answer"]
+
+    plan = history_agent.run({"session_id": "x", "user_input": "我接下来有什么安排"})
+    assert "杭州规划" in plan["answer"] and "北京出差" not in plan["answer"]
 
 
 def test_preference_agent_records_multiple_preferences(monkeypatch):

@@ -41,6 +41,11 @@ export default function StatsCard({ stats }: { stats: TravelStats }) {
           {stats.skipped_days} 条旧记录缺天数，未计入天数统计
         </div>
       )}
+      {stats.upcoming_trips > 0 && (
+        <div className="rounded-md bg-primary/5 p-2 text-muted-foreground">
+          📅 另已规划 {stats.upcoming_trips} 次行程（未来），未计入画像
+        </div>
+      )}
     </div>
   )
 }

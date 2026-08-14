@@ -75,7 +75,7 @@ def test_stats_agent_trip_portrait():
         session_id="zhang",
     )
     memory.add_itinerary(
-        {"to_city": "杭州", "from_city": "上海", "start_date": "2026-08-20", "duration_days": 2},
+        {"to_city": "杭州", "from_city": "上海", "start_date": "2026-06-20", "duration_days": 2},
         "去杭州出差",
         session_id="zhang",
     )
@@ -93,10 +93,33 @@ def test_stats_agent_trip_portrait():
     mod = reg.load_agent("差旅统计")
     out = mod.run({"user_input": "统计出差", "session_id": "zhang"})
     ans = out["answer"]
-    assert "4 次" in ans  # 行程次数
+    assert "4 次" in ans  # 行程次数（无天数旧记录也算一次）
     assert "9 天" in ans  # 总天数 = 4+2+3（旧记录无天数不计入）
     assert "2026" in ans and "2025" in ans  # 年度趋势
     assert "北京" in ans  # 常去城市 Top
+
+
+def test_stats_agent_excludes_upcoming():
+    """时空语义：未来规划不算「去过」——画像只统计已发生，upcoming 单独标注"""
+    from xiao_wen import memory
+
+    memory.add_itinerary(
+        {"to_city": "北京", "start_date": "2026-01-10", "duration_days": 2},
+        "北京出差（已发生）",
+        session_id="zhang",
+    )
+    memory.add_itinerary(
+        {"to_city": "杭州", "start_date": "2099-12-01", "duration_days": 3},
+        "杭州规划（未发生）",
+        session_id="zhang",
+    )
+
+    mod = reg.load_agent("差旅统计")
+    out = mod.run({"user_input": "统计出差", "session_id": "zhang"})
+    ans = out["answer"]
+    assert "共 1 次行程" in ans  # 未来规划不计入画像
+    assert "杭州" not in ans  # 未来规划城市不出现
+    assert out["stats"]["upcoming_trips"] == 1  # 单独诚实标注
 
 
 def test_hot_extension_add_is_discovered(tmp_path, monkeypatch):

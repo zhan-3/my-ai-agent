@@ -24,6 +24,8 @@ from xiao_wen.memory import get_itineraries, get_preferences  # noqa: E402
 # 问题关键词 → 查询方向（无 user_input 时视为综合查询，向后兼容）
 _TRIP_WORDS = ("行程", "出差", "去哪", "路线", "计划", "安排", "游记", "记录", "订单", "消费", "日期", "入住")
 _PREF_WORDS = ("偏好", "习惯", "常住", "记忆", "喜欢", "不吃", "口味", "住宿", "忌口")
+# 计划向词：问「接下来/安排/什么时候出发」→ 未来规划；其余行程词 → 历史（已发生）
+_PLAN_WORDS = ("计划", "安排", "接下来", "下次", "什么时候", "出发", "即将", "将要", "准备", "待办")
 
 # 城市词表（与 trip_planner 城市分级一致）：问题提到城市 → 按城市过滤行程
 _CITIES = (
@@ -69,6 +71,13 @@ def run(state) -> dict:
     prefs = get_preferences(session_id=sid)
     its = get_itineraries(session_id=sid)
 
+    # 时空语义（确定性规则，非 LLM）：问「计划/安排/什么时候出发」→ 未来规划；
+    # 其余行程查询 → 已发生（历史）。分类逻辑与差旅画像共享单一实现。
+    from xiao_wen.stats import classify
+
+    cls = classify(its)
+    plan_hit = any(w in q for w in _PLAN_WORDS)
+
     cities = _mentioned_cities(q)
     trip_hit = any(w in q for w in _TRIP_WORDS)
     pref_hit = any(w in q for w in _PREF_WORDS)
@@ -78,9 +87,13 @@ def run(state) -> dict:
 
     parts: list[str] = []
     if want_trip:
-        matched = [it for it in its if _itinerary_matches(it, cities)]
+        if plan_hit:
+            pool, title = cls["upcoming"], "📅 已规划的行程："
+        else:
+            pool, title = cls["past"] + cls["ongoing"], "🗂️ 历史行程："
+        matched = [it for it in pool if _itinerary_matches(it, cities)]
         if matched:
-            lines = ["🗂️ 历史行程："]
+            lines = [title]
             for it in reversed(matched[-5:]):  # 最多显示最近 5 条
                 lines.append(
                     f"· {it.get('start_date', '?')} {it.get('from_city', '?')}→{it.get('to_city', '?')}，"
@@ -90,7 +103,7 @@ def run(state) -> dict:
         elif cities:
             parts.append(f"📭 未找到{cities[0]}的记录，建议换个条件（日期/城市/住宿类型）再试。")
         else:
-            parts.append("📭 暂无历史行程记录。")
+            parts.append("📭 暂无历史行程记录。" if not plan_hit else "📭 暂无已规划的行程，先告诉我你的出差安排吧。")
     if want_pref:
         if prefs:
             parts.append("💡 记忆偏好：" + "；".join(f"{p['category']} {p['content']}" for p in prefs))
