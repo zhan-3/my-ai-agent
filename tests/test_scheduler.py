@@ -20,12 +20,21 @@ def test_dispatch_sends_fanout_for_subtasks():
     state = {
         "subtasks": [SubTask(intent="知识问答", text="a"), SubTask(intent="联网查询", text="b")],
         "intent": "知识问答",
+        "recent": "上文…",
+        "session_id": "会话X",
+        "messages": ["m1"],
     }
     out = gb.dispatch(state)
     assert isinstance(out, list) and len(out) == 2
     assert all(isinstance(s, Send) for s in out)
     assert [s.node for s in out] == ["p_知识问答", "p_联网查询"]
-    assert [s.arg for s in out] == [{"current_task": st} for st in state["subtasks"]]
+    # 并行分支必须继承上文（recent/session_id/messages）：
+    # 否则补全轮的子 Agent 看不到上轮要素（续接失效的根因，实测踩过）
+    for s in out:
+        assert s.arg["recent"] == "上文…"
+        assert s.arg["session_id"] == "会话X"
+        assert s.arg["messages"] == ["m1"]
+        assert s.arg["current_task"].text in ("a", "b")
 
 
 def test_dispatch_string_route_when_single():

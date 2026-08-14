@@ -33,7 +33,9 @@ class TripRequest(BaseModel):
     from_city: str
     to_city: str
     start_date: str
-    duration_days: int
+    # int | str：提取 LLM 缺天数时可能输出「待定/无」（实测 pydantic 曾因此校验崩溃），
+    # plan() 哨兵归一化成 0 后再走缺项检查
+    duration_days: int | str = 0
     hotel_pref: str = Field(description="没有则填'无'")
     budget_pref: str = Field(description="没有则填'中等'")
     date_is_vague: bool = Field(
@@ -74,7 +76,7 @@ extract_prompt = ChatPromptTemplate.from_messages(
         (
             "system",
             """你是企业差旅助手的要素提取器，输出严格 JSON。
-键名必须严格为英文：from_city、to_city、start_date（YYYY-MM-DD）、duration_days（数字）、
+键名必须严格为英文：from_city、to_city、start_date（YYYY-MM-DD）、duration_days（数字；完全没提天数时填 0，不要填"待定"）、
 hotel_pref（没有填"无"）、budget_pref（经济/中等/舒适，没有填"中等"）、
 date_is_vague（布尔：日期表达模糊如「下周」「过几天」时为 true；给了具体日期或星期几如「8月17日」「下周一」「明天」时为 false）。
 from_city/to_city：只在原文明确提到城市时才填（如「从广州」「去北京」）；没提到就填"待定"，绝不编造或从其他词猜测城市。
@@ -144,7 +146,7 @@ def _missing(req: TripRequest) -> list[str]:
         miss.append("出发城市")
     if req.start_date in ("待定", ""):
         miss.append("出发日期")
-    if not req.duration_days or req.duration_days <= 0:
+    if not isinstance(req.duration_days, int) or req.duration_days <= 0:
         miss.append("出差天数")
     return miss
 
@@ -163,6 +165,9 @@ def plan(user_input: str, *, session_id: str = "default", recent: str = "") -> P
         req.from_city = "待定"
     if req.to_city in _UNKNOWN_CITIES:
         req.to_city = "待定"
+    # 天数哨兵归一化：LLM 可能输出「待定/无」字符串（曾致 pydantic 校验崩溃），统一成 0
+    if isinstance(req.duration_days, str):
+        req.duration_days = 0
     # 常驻城市补全：先于缺项检查（"用户没说出发城市但记忆里有"不算缺项）
     hc = get_home_city(session_id=session_id)
     if (not req.from_city or req.from_city in _UNKNOWN_CITIES) and hc:
@@ -180,7 +185,12 @@ def plan(user_input: str, *, session_id: str = "default", recent: str = "") -> P
         }
     )
     assert isinstance(plan, ItineraryPlan)
-    add_itinerary(req.model_dump(), plan.summary, session_id=session_id)
+    # 写库前剔除无效天数（0/缺）：facts 缺 duration_days = 旧记录缺天数语义，
+    # 差旅统计按「字段缺失」计 skipped_days，不被 0 污染平均天数
+    facts = req.model_dump()
+    if not req.duration_days:
+        facts.pop("duration_days", None)
+    add_itinerary(facts, plan.summary, session_id=session_id)
     return PlanResult(plan=plan, request=req)
 
 
@@ -229,6 +239,7 @@ def train_info(from_city: str, to_city: str) -> tuple[str, str, str, str, int] |
 def estimate_budget(req: TripRequest) -> dict:
     """确定性预算估算：交通（车次表真实票价，查不到按中等里程档）+ 住宿（城市分级×晚数）+
     餐饮（标准×天数）。全部参考价，不依赖 LLM 编数字（避免幻觉）"""
+    assert isinstance(req.duration_days, int), "缺项检查后 duration 必为 int"
     nights = max(req.duration_days - 1, 1)  # 最后一天返程，住 (天数-1) 晚，至少 1 晚
     info = train_info(req.from_city, req.to_city)
     if info:

@@ -41,6 +41,47 @@ def test_intent_classification(text, expected):
     assert r.subtasks == [], "单意图请求不应拆分出子任务"
 
 
+# ---- 待补全续接（规则兑底，纯逻辑不依赖 LLM） ----
+
+
+def test_recover_pending_reroutes_preference_to_plan():
+    """recent 里助手在追问行程要素 + 用户偏好陈述 → 修正为行程规划 + 偏好进 subtasks
+    （「我现在常住上海」在追问上下文：续接行程的同时记偏好，而不是只记偏好）"""
+    recent = "⚠️ 还缺一些信息才能帮你安排行程，请补充：\n· 出发城市"
+    base = _intent.IntentResult(intent="偏好记录", reason="陈述偏好", subtasks=[])
+    r = _intent._recover_pending(recent, "我现在常住上海", base)
+    assert r.intent == "行程规划"
+    assert [s.intent for s in r.subtasks] == ["偏好记录"]
+
+
+def test_recover_pending_pure_short_answer():
+    """纯补全（如单个城市词）→ 行程规划，无偏好 subtask"""
+    recent = "请补充：\n· 出发城市"
+    r = _intent._recover_pending(recent, "上海", _intent.IntentResult(intent="其他", reason="", subtasks=[]))
+    assert r.intent == "行程规划"
+    assert r.subtasks == []
+
+
+def test_recover_pending_respects_abandon_and_query():
+    """放弃词（算了）与强查询词（上次/统计）不被续接规则劫持"""
+    recent = "请补充：\n· 出发城市"
+    abandoned = _intent._recover_pending(
+        recent, "算了，不去了", _intent.IntentResult(intent="其他", reason="", subtasks=[])
+    )
+    assert abandoned.intent == "其他"
+    query = _intent._recover_pending(
+        recent, "我上次的行程是什么", _intent.IntentResult(intent="历史查询", reason="", subtasks=[])
+    )
+    assert query.intent == "历史查询"
+
+
+def test_recover_pending_noop_without_pending_mark():
+    """recent 没有追问标记（正常偏好陈述）→ 不劫持"""
+    base = _intent.IntentResult(intent="偏好记录", reason="", subtasks=[])
+    r = _intent._recover_pending("用户：你好\n助手：你好", "我现在常住上海", base)
+    assert r.intent == "偏好记录"
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("text,expected", MULTI_CASES)
 def test_intent_splits_subtasks(text, expected):

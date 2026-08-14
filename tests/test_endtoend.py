@@ -126,3 +126,25 @@ def test_advice_disambiguation_end_to_end():
     """E2E-08 消歧 B（咨询建议类）：出差住哪里比较好 → 门控反问（①政策/②按偏好）"""
     ans = _invoke("出差住哪里比较好")
     assert "①" in ans and "政策" in ans, f"期望消歧反问（①政策 ②偏好），实际：{ans}"
+
+
+@pytest.mark.integration
+def test_pending_followup_recovers_plan():
+    """用户报告的 bug：安排行程被追问出发地后，用户回「我现在常住上海」
+    ——必须续接行程（上海当出发地）+ 记偏好，而不是只记偏好丢任务。
+    规则兜底保证分类确定性（实测 LLM 对同一句归类不稳）"""
+    from xiao_wen.session import chat
+
+    # 轮1：缺出发地 → 追问
+    r1 = chat("帮我规划10月8日去北京的行程")
+    assert "请补充" in r1.answer and "出发城市" in r1.answer
+
+    # 轮2：偏好陈述 + 回答追问 → 行程续接（不再只记偏好）
+    r2 = chat("我现在常住上海")
+    assert "行程" in r2.answer or "请补充" in r2.answer, f"应续接行程，实际：{r2.answer}"
+    assert "偏好" in r2.answer, f"应同时记录偏好，实际：{r2.answer}"
+
+    # 轮3：补天数 → 生成含上海出发的行程
+    r3 = chat("4天")
+    assert "上海" in r3.answer and "北京" in r3.answer, f"应生成上海→北京行程，实际：{r3.answer}"
+    assert "请补充" not in r3.answer, f"要素已齐不应再追问，实际：{r3.answer}"

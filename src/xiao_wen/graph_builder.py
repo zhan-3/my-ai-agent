@@ -113,11 +113,23 @@ def dispatch(state):
     """
     subs = state.get("subtasks")
     if subs:
+        # 并行分支必须继承上文（recent/session_id）：否则子 Agent 只看 current_task.text，
+        # 提取模型拿不到上轮要素（如补全轮丢了目的城市/日期）——续接失效的根因
+        ctx = {
+            "recent": state.get("recent", ""),
+            "session_id": state.get("session_id", "default"),
+            "messages": state.get("messages", []),
+        }
         sends: list[Send] = []
         primary = state["intent"]
         if not any(s.intent == primary for s in subs):
-            sends.append(Send(f"p_{primary}", {"current_task": SubTask(intent=primary, text=state["user_input"])}))
-        sends.extend(Send(f"p_{s.intent}", {"current_task": s}) for s in subs)
+            sends.append(
+                Send(
+                    f"p_{primary}",
+                    {"current_task": SubTask(intent=primary, text=state["user_input"]), **ctx},
+                )
+            )
+        sends.extend(Send(f"p_{s.intent}", {"current_task": s, **ctx}) for s in subs)
         return sends
     return state["intent"]
 

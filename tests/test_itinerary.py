@@ -104,6 +104,15 @@ def test_plan_needs_info_when_missing(monkeypatch):
     assert called["plan"] is False
 
 
+def test_plan_normalizes_string_duration(monkeypatch):
+    """提取 LLM 把缺天数输出成「待定」字符串（曾致 pydantic 校验崩溃、整轮挂掉）
+    → plan() 哨兵归一化成 0 → 走缺项检查追问，而不是崩溃"""
+    _stub_models(monkeypatch, _req(duration_days="待定"))
+    r = _it.plan("去北京开会")
+    assert isinstance(r, _it.NeedsInfo)
+    assert "出差天数" in r.missing, f"缺天数应被识别为缺项，实际：{r.missing}"
+
+
 def test_plan_home_city_completes_before_missing_check(monkeypatch):
     """常驻城市补全先于缺项检查：缺出发城市但有常驻城市 → 不算缺项，进入生成"""
     from xiao_wen import memory as ms

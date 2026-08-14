@@ -28,6 +28,8 @@ _EXAMPLES: dict[str, list[str]] = {
         "帮我订一张去北京的机票",  # 行程相关动作（即使无法直接执行）→ 行程规划
         "查一下回程日期有没有航班",  # 航班查询（行程相关动作，即使无航班工具）→ 行程规划+追问
         "帮我查查10月8日有没有去深圳的航班",
+        "上海",  # （上下文：助手刚追问「请补充出发城市」）→ 补全行程要素
+        "4天",  # （上下文：助手刚追问「出差几天」）→ 补全行程要素
     ],
     "偏好记录": [
         "我喜欢住汉庭酒店",
@@ -58,6 +60,10 @@ _EXAMPLES: dict[str, list[str]] = {
 _BOUNDARY_RULES = (
     "边界情况（模棱两可时按此优先级）：\n"
     "· 行程相关动作（订票/订酒店/安排/规划出行/查航班/查车次），即使助手无法直接执行 → 行程规划（会追问细节）；\n"
+    "· 待补全续接：**若最近对话中助手在追问行程要素**（回复含「请补充/还缺」），\n"
+    "  用户本轮直接补充要素（城市/日期/天数/地点，哪怕只有一个词）→ 行程规划（续接未完成的行程）；\n"
+    "  若该句同时是偏好陈述（含常住/喜欢/不吃/习惯等）→ 主导意图仍为行程规划，subtasks 追加偏好记录；\n"
+    "  上一轮没有追问行程要素时，「我常住上海」这类纯陈述 → 偏好记录。\n"
     "· 查询类（问政策/问记忆/问实时信息）按内容归类，不因含行动词就归行程规划；\n"
     "· 一句话含多个独立请求 → 拆 subtasks（主导意图取第一个）；\n"
     "· 拿不准且与差旅无关 → 其他（兜底）。\n"
@@ -189,6 +195,9 @@ def classify(recent: str, user_input: str) -> IntentResult:
     subtasks = [s if s.intent in known else SubTask(intent="其他", text=s.text) for s in r.subtasks]
     intent = r.intent if r.intent in known else "其他"
     result = IntentResult(intent=intent, reason=r.reason, subtasks=subtasks)
+    # 待补全续接（规则兑底）：LLM 分类不稳时（同场景可能归偏好/其他），
+    # 只要 recent 里助手在追问行程要素、本轮是简短补充 → 确定性修正为行程规划。
+    result = _recover_pending(recent, user_input, result)
     # 拆分兜底：主导意图清晰但 LLM 把「顺便/还有X」整句吞掉（subtasks 空）→
     # 在强拆分标记处确定性切句，尾部子句再分类补进 subtasks（防次要请求被静默丢弃）
     if not result.subtasks:
@@ -203,3 +212,41 @@ def classify(recent: str, user_input: str) -> IntentResult:
     if result.subtasks and not any(s.intent == result.intent for s in result.subtasks):
         result.subtasks.insert(0, SubTask(intent=result.intent, text=user_input))
     return result
+
+
+# ---- 待补全续接（规则兑底：确定性，不依赖 LLM 稳定性） ----
+
+# recent 里助手的追问标记（行程要素追问的确认回复文案）
+_PENDING_MARKS = ("请补充", "还缺", "请提供")
+# 放弃/转向词：用户不想继续时尊重，不强行续接
+_ABANDON_WORDS = ("算了", "不用", "取消", "不要了", "没事了", "回头再说")
+# 强查询意图词：问历史/统计/知识/实时信息时尊重原意图，不做续接修正
+_QUERY_WORDS = ("上次", "去过", "历史", "统计", "画像", "天气", "汇率", "报销", "标准", "政策", "规定", "怎么")
+# 偏好陈述词：续接同时也在记偏好 → 并行处理两件事（行程补全 + 偏好记录）
+_PREF_STATEMENT_WORDS = ("常住", "喜欢", "不吃", "忌口", "习惯", "口味", "偏好")
+
+
+def _recover_pending(recent: str, user_input: str, result: IntentResult) -> IntentResult:
+    """待补全续接规则：助手上一轮在追问行程要素（recent 含「请补充/还缺」），
+    本轮输入是简短补充（无放弃词、无强查询词）→ 修正主导意图为行程规划；
+    若原意图是偏好记录且句子含偏好词 → subtasks 追加偏好记录（并行记偏好 + 续接）。
+
+    为什么需要：LLM 分类对「我现在常住上海」在追问上下文的归属不稳定（
+    实测同 prompt 两次结果不同：一次行程规划+并行、一次纯偏好记录），
+    规则兜底保证续接确定性。"""
+    if not recent or not any(m in recent for m in _PENDING_MARKS):
+        return result
+    q = user_input.strip()
+    if not q or any(w in q for w in _ABANDON_WORDS + _QUERY_WORDS):
+        return result
+    if result.intent not in ("偏好记录", "其他"):
+        return result
+    subs = list(result.subtasks)
+    if result.intent == "偏好记录" and any(w in q for w in _PREF_STATEMENT_WORDS):
+        subs.append(SubTask(intent="偏好记录", text=q))
+    note = "（同时记偏好）" if subs else ""
+    return IntentResult(
+        intent="行程规划",
+        reason=f"规则兑底：上一轮在追问行程要素，本轮「{q}」视为补全{note}",
+        subtasks=subs,
+    )
