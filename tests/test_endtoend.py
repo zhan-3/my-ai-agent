@@ -57,3 +57,27 @@ def test_parallel_multi_intent_end_to_end():
     ans = _invoke("帮我查下出差住宿标准是什么，顺便看看北京今天天气怎么样")
     assert "2 个请求" in ans, f"期望并行汇总文案，实际：{ans}"
     assert "住宿标准" in ans and "北京" in ans, f"两个子任务的回答都应汇总：{ans}"
+
+
+@pytest.mark.integration
+def test_disambiguation_multi_turn():
+    """轻量消歧多轮闭环（真实 LLM + 产品图 + 记忆写回）：
+    turn1 航班信息查询 → 反问带选项；turn2 选② → 消解为行程规划；turn3 选① → 无工具诚实归其他"""
+    from xiao_wen.session import chat
+
+    # turn 1：信息类航班查询 → 消歧门反问（不硬猜成规划任务）
+    r1 = chat("帮我查一下回程日期有没有航班")
+    assert "①" in r1.answer and "②" in r1.answer, f"期望带选项反问，实际：{r1.answer}"
+
+    # turn 2：用户选②（规划含航班的行程）→ 上下文消解 → 行程规划（要素缺失追问）
+    r2 = chat("②")
+    assert r2.intent == "行程规划", f"② 应消解为行程规划，实际 {r2.intent}（{r2.reason}）"
+    assert "①" not in r2.answer, "已消解，不应再反问"
+
+    # turn 3（新会话）：用户选①（查时刻）→ 确定性诚实答复
+
+    r3 = chat("帮我查一下明天上午有没有航班", session_id="disambig-info")
+    assert "①" in r3.answer, "信息类航班查询应再次反问，实际：" + r3.answer
+    # 用户选①（查时刻）→ 确定性诚实答复（不静默进行程规划追问，也不依赖 LLM 意图）
+    r4 = chat("①", session_id="disambig-info")
+    assert "暂不支持" in r4.answer and "航班" in r4.answer, "① 应诚实告知不支持，实际：" + r4.answer

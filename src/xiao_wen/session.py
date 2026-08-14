@@ -141,7 +141,7 @@ async def stream_chat(text: str, session_id: str = "default", *, graph=None, sto
 def _stage_event(node: str, status: str) -> dict | None:
     """节点名 → 阶段事件：p_* 并行分支剥前缀；merge 用 __merge__ 占位；
     classify_intent 是内部节点（有专门的 intent 事件），不暴露"""
-    if node == "classify_intent":
+    if node == "classify_intent" or node == "clarify_gate":
         return None
     if node == "merge":
         intent = "__merge__"

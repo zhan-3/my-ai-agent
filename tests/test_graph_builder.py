@@ -157,3 +157,41 @@ def test_build_refreshes_vocabulary_with_new_plugin(monkeypatch, tmp_path):
     )
     gb.build_supervisor_graph(parallel=False)
     assert "临时意图" in {m["INTENT"] for m in intent_mod._current_intents or []}
+
+
+# ---- 轻量消歧：clarify_gate 节点 + 路由 ----
+def test_graphs_have_clarify_gate():
+    """两图都应含 clarify_gate（classify 与路由之间）"""
+    for parallel in (False, True):
+        nodes = set(gb.build_supervisor_graph(parallel=parallel).get_graph().nodes)
+        assert "clarify_gate" in nodes, f"parallel={parallel} 图缺少 clarify_gate 节点"
+
+
+def test_clarify_gate_returns_question_on_ambiguous():
+    """消歧门：命中歧义 → clarify=True + answer=反问问题"""
+    out = gb.clarify_gate({"user_input": "帮我查一下回程日期有没有航班", "intent": "行程规划"})
+    assert out["clarify"] is True
+    assert "①" in out["answer"] and "②" in out["answer"]
+
+
+def test_clarify_gate_passthrough_when_clear():
+    """消歧门：未命中 → clarify=False，不触碰 answer（原路由继续）"""
+    out = gb.clarify_gate({"user_input": "帮我订一张去北京的机票", "intent": "行程规划"})
+    assert out == {"clarify": False}
+
+
+def test_route_after_gate_short_circuits():
+    """并行图路由：命中 → __clarify_end__（短路 END）；未命中 → 原 dispatch 结果不变"""
+    assert gb.route_after_gate({"clarify": True}) == "__clarify_end__"
+    assert gb.route_after_gate({"clarify": False, "intent": "知识问答", "subtasks": []}) == "知识问答"
+    # 多意图：Send fan-out 不变
+    subs = [gb.SubTask(intent="联网查询", text="北京天气")]
+    state = {"clarify": False, "intent": "行程规划", "user_input": "帮我规划行程，顺便查北京天气", "subtasks": subs}
+    sends = gb.route_after_gate(state)
+    assert isinstance(sends, list) and all(hasattr(s, "node") for s in sends)
+
+
+def test_route_after_gate_serial_short_circuits():
+    """单意图图路由：命中 → 短路；未命中 → 原字符串路由不变"""
+    assert gb.route_after_gate_serial({"clarify": True}) == "__clarify_end__"
+    assert gb.route_after_gate_serial({"clarify": False, "intent": "行程规划"}) == "行程规划"

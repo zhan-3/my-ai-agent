@@ -23,7 +23,7 @@ from langgraph.graph import END, START, StateGraph, add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send
 
-from xiao_wen import intent
+from xiao_wen import disambiguation, intent
 from xiao_wen.intent import SubTask
 from xiao_wen.plugin_registry import discover, load_agent
 
@@ -47,6 +47,7 @@ class State(TypedDict):
     collected: NotRequired[Annotated[list[dict], operator.add]]  # 并行结果收集（归约器拼接）
     session_id: NotRequired[str]  # 会话维度（记忆隔离；未传时 agent 兑底 "default"）
     plan: NotRequired[Annotated[dict | None, _first_plan]]  # 结构化行程（行程 Agent 产出；非行程为 None）
+    clarify: NotRequired[bool]  # 消歧门：命中歧义时 True，answer=反问问题，路由短路到 END
 
 
 # ---- 分类节点（唯一实现：恒返回 subtasks，由 parallel 参数决定是否使用） ----
@@ -54,6 +55,15 @@ def classify_intent(state):
     r = intent.classify(state["recent"], state["user_input"])
     # 兜底：LLM 幻觉意图不在词汇表内 → 归「其他」（避免路由 KeyError）
     return {"intent": r.intent, "reason": r.reason, "subtasks": r.subtasks}
+
+
+# ---- 消歧门（轻量消歧：意图层真歧义 → 带选项反问，命中短路到 END） ----
+def clarify_gate(state):
+    """classify 之后、路由之前：纯规则判定歧义；命中则 answer=反问/直答并短路"""
+    q = disambiguation.clarify(state["user_input"], state["intent"], state.get("recent", ""))
+    if q:
+        return {"clarify": True, "answer": q}
+    return {"clarify": False}
 
 
 # ---- 懒加载代理节点（派发到该意图时才加载子 Agent 模块） ----
@@ -95,6 +105,20 @@ def dispatch(state):
             sends.append(Send(f"p_{primary}", {"current_task": SubTask(intent=primary, text=state["user_input"])}))
         sends.extend(Send(f"p_{s.intent}", {"current_task": s}) for s in subs)
         return sends
+    return state["intent"]
+
+
+def route_after_gate(state):
+    """消歧门条件边（并行图）：命中 → 短路 END；未命中 → 原 dispatch fan-out 不变"""
+    if state.get("clarify"):
+        return "__clarify_end__"
+    return dispatch(state)
+
+
+def route_after_gate_serial(state):
+    """消歧门条件边（单意图图）：命中 → 短路 END；未命中 → 原字符串路由不变"""
+    if state.get("clarify"):
+        return "__clarify_end__"
     return state["intent"]
 
 
@@ -142,14 +166,17 @@ def _assemble(manifest: list[dict], parallel: bool) -> CompiledStateGraph:
         graph.add_node(merge)
 
     graph.add_edge(START, "classify_intent")
+    graph.add_node("clarify_gate", clarify_gate)
+    graph.add_edge("classify_intent", "clarify_gate")
     if parallel:
         # dict[str, str] 是 dict[Hashable, str] 的合法子集（str 即 Hashable），dict 泛型不变导致需要豁免
-        graph.add_conditional_edges("classify_intent", dispatch, routes)  # type: ignore[arg-type]
+        # {**routes, "__clarify_end__": END} 的字面量类型推断为 dict[str, str | object] → 一并豁免
+        graph.add_conditional_edges("clarify_gate", route_after_gate, {**routes, "__clarify_end__": END})  # type: ignore[arg-type, dict-item]
         for name in routes:
             graph.add_edge(f"p_{name}", "merge")
         graph.add_edge("merge", END)
     else:
-        graph.add_conditional_edges("classify_intent", lambda s: s["intent"], routes)  # type: ignore[arg-type]
+        graph.add_conditional_edges("clarify_gate", route_after_gate_serial, {**routes, "__clarify_end__": END})  # type: ignore[arg-type, dict-item]
     for name in routes:
         graph.add_edge(name, END)
     return graph.compile()
