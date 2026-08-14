@@ -69,16 +69,83 @@ def _write_report(summary: dict, failures: list[dict]) -> Path:
     return report
 
 
+def _run_judge(args) -> int:
+    """judge 层：黄金集样本真跑 chat（trace 落盘）→ LLM-as-judge 打分 → 报告 + 10% 人工复核样本。
+
+    只评意图集里的行程规划类样本（judge 的核心价值在回答质量，不是意图标签）；
+    样本上限 --judge-sample 控制 token；多数票 --judge-n。
+    """
+    from xiao_wen.eval import judge as j
+    from xiao_wen.eval.trace import run_chat_with_trace
+
+    cases = [json.loads(line) for line in GOLDEN.read_text().splitlines() if line.strip()]
+    trip_cases = [c for c in cases if c.get("expected") == "行程规划"]
+    if not trip_cases:
+        print("黄金集无行程规划样本，judge 无可评", file=sys.stderr)
+        return 2
+    sample = trip_cases[: args.judge_sample]
+    print(f"judge 层：{len(sample)} 条行程规划样本 × {args.judge_n} 次多数票（模型：{j.judge_env_used()}）")
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    verdicts: list[dict] = []
+    samples_path = OUT_DIR / "judge_samples.jsonl"
+    with samples_path.open("w", encoding="utf-8") as sf:
+        for idx, c in enumerate(sample, 1):
+            text = c["input"]
+            # 真跑 chat：每条独立 session（隔离记忆），trace 事件链供 judge 截断取段
+            _, events = run_chat_with_trace(text, session_id=f"judge_{idx}")
+            v = j.judge_with_votes(events, n=args.judge_n)
+            verdicts.append(
+                {"id": c.get("id", idx), "input": text, "score": v.score, "verdict": v.verdict, "reasons": v.reasons}
+            )
+            sf.write(json.dumps(verdicts[-1], ensure_ascii=False) + "\n")
+            print(f"  [{idx}/{len(sample)}] {text[:24]!r} → {v.score} {v.verdict}")
+
+    avg = sum(v["score"] for v in verdicts) / len(verdicts)
+    passes = sum(1 for v in verdicts if v["verdict"] == "PASS")
+    (OUT_DIR / "judge_report.md").write_text(
+        "\n".join(
+            [
+                "# judge 层报告（layer 3）",
+                f"- 时间：{datetime.now().isoformat(timespec='seconds')}",
+                f"- 样本：{len(verdicts)}（行程规划 × {args.judge_n} 次多数票）| 模型：{j.judge_env_used()}",
+                f"- 平均分：{avg:.2f} / 5 | PASS 率：{passes}/{len(verdicts)}（{passes / len(verdicts):.0%}）",
+                f"- 人工复核：前 10%（{max(1, len(verdicts) // 10)} 条）见 judge_samples.jsonl，比对人机一致率",
+                "",
+                "| id | 输入 | 分 | 判定 | 理由摘要 |",
+                "|---|---|---|---|---|",
+            ]
+            + [
+                f"| {v['id']} | {v['input'][:24]}… | {v['score']} | {v['verdict']} | {v['reasons'][0][:30]} |"
+                for v in verdicts
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    print(f"\n平均分 {avg:.2f}/5 | PASS {passes}/{len(verdicts)} | 人工复核样本：{samples_path}")
+    print(f"judge 报告：{OUT_DIR / 'judge_report.md'}")
+    return 0
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="晓问评测 harness（第一层：意图分类）")
+    ap = argparse.ArgumentParser(description="晓问评测 harness（规则/结构层 + judge 层）")
     ap.add_argument("--set", choices=["intent"], default="intent", help="评测集（本期仅 intent）")
     ap.add_argument("--threshold", type=float, default=1.0, help="通过率下限（0-1），低于则退出码 1")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument(
+        "--with-judge", action="store_true", help="judge 层（layer 3，烧 token）：对黄金集样本真跑 chat 链路后打分"
+    )
+    ap.add_argument("--judge-n", type=int, default=3, help="judge 同用例多数票次数（默认 3）")
+    ap.add_argument("--judge-sample", type=int, default=8, help="judge 评测样本上限（默认 8，控制 token）")
     args = ap.parse_args()
 
     if args.set != "intent":
         print(f"评测集 {args.set!r} 尚未实现（本期仅 intent）", file=sys.stderr)
         return 2
+
+    if args.with_judge:
+        return _run_judge(args)
 
     cases = [json.loads(line) for line in GOLDEN.read_text().splitlines() if line.strip()]
     results, failures = _collect(cases, args.verbose)

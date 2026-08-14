@@ -82,6 +82,30 @@ def _default_model() -> ChatOpenAI:
     )
 
 
+JUDGE_ENV_VARS = ("EVAL_JUDGE_MODEL", "EVAL_JUDGE_BASE_URL", "EVAL_JUDGE_API_KEY")
+
+
+def get_judge_llm(*, override=None) -> _GuardedLLM:
+    """judge 模型独立接缝（D4：考生考官分离）。
+
+    优先 EVAL_JUDGE_MODEL/BASE_URL/API_KEY；任一缺失回退 DEEPSEEK_*（同模型降级，
+    日志由 eval.judge.judge_env_used 标记来源）。override 供测试注入假模型。
+    """
+    if override is not None:
+        return _GuardedLLM(override)
+    model = os.environ.get("EVAL_JUDGE_MODEL") or os.environ["DEEPSEEK_MODEL"]
+    base_url = os.environ.get("EVAL_JUDGE_BASE_URL") or os.environ["DEEPSEEK_BASE_URL"]
+    api_key = os.environ.get("EVAL_JUDGE_API_KEY") or os.environ["DEEPSEEK_API_KEY"]
+    return _GuardedLLM(
+        ChatOpenAI(
+            model=model,
+            base_url=base_url,
+            api_key=SecretStr(api_key),
+            **_DEFAULT_CONFIG,
+        )
+    )
+
+
 def get_llm(*, override: BaseChatModel | None = None, **overrides) -> _GuardedLLM:
     """模型单一接缝：返回熔断守卫的 LLM 代理
 
