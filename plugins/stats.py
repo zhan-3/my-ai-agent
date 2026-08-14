@@ -14,7 +14,10 @@ from xiao_wen.memory import get_itineraries
 
 # ---- 插件元数据 ----
 INTENT = "差旅统计"
-DESCRIPTION = "统计历史出差的目的地、出差次数、常用城市、出差天数"
+DESCRIPTION = (
+    "汇总统计历史出差的画像数据（出差次数、总天数、年度趋势、常去城市排名）"
+    "——只做统计汇总，不查单次行程明细（如某次住哪、某城市住宿记录，明细归历史查询）"
+)
 
 
 def run(state: dict) -> dict:

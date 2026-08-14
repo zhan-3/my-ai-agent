@@ -14,7 +14,10 @@
 """
 
 INTENT = "历史查询"
-DESCRIPTION = "用户询问历史对话或历史行程 → 历史查询。"
+DESCRIPTION = (
+    "查询历史行程/偏好/对话的记录明细（可按城市、日期、住宿类型筛选）"
+    "——查单次或筛选明细找这里；问汇总统计（共几次、总天数、常去哪）不是明细查询"
+)
 
 from xiao_wen.memory import get_itineraries, get_preferences  # noqa: E402
 
