@@ -3,12 +3,14 @@ import { sendMessage, streamChat, type ChatResponse, type StreamEvent } from '@/
 import { ApiError } from '@/api/client'
 import { getStoredToken } from '@/lib/storage'
 import type { TripPlan } from '@/lib/trip'
+import type { TravelStats } from '@/api/contract'
 
 export interface ChatMessage {
   role: 'user' | 'ai'
   text: string
   intent?: string
   plan?: TripPlan | null
+  stats?: TravelStats | null
 }
 
 // 实时进度阶段：__start__ 理解中 / __intent__ 已识别意图 / __merge__ 并行汇总 / 其余为子 Agent 意图名
@@ -63,7 +65,7 @@ export function useChat({ onUnauthorized }: { onUnauthorized: () => void }) {
         const res = await streamChat(t, token, (ev) => {
           if (ev.type === 'stage') setStages((prev) => applyStage(prev, ev))
         })
-        append({ role: 'ai', text: res.answer, intent: res.intent, plan: res.plan ?? null })
+        append({ role: 'ai', text: res.answer, intent: res.intent, plan: res.plan ?? null, stats: res.stats ?? null })
         return res
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) {
@@ -74,7 +76,7 @@ export function useChat({ onUnauthorized }: { onUnauthorized: () => void }) {
           // 旧后端没有 /api/chat/stream：回退 POST /api/chat（行为与旧前端一致）
           try {
             const res = await sendMessage(t, token)
-            append({ role: 'ai', text: res.answer, intent: res.intent, plan: res.plan ?? null })
+            append({ role: 'ai', text: res.answer, intent: res.intent, plan: res.plan ?? null, stats: res.stats ?? null })
             return res
           } catch (e2) {
             if (e2 instanceof ApiError && e2.status === 401) {

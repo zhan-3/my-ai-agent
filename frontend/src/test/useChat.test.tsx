@@ -50,7 +50,7 @@ describe('useChat SSE 发送流', () => {
     expect(chatApi.streamChat).toHaveBeenCalledTimes(1)
     expect(result.current.messages).toEqual([
       { role: 'user', text: '你好' },
-      { role: 'ai', text: '答', intent: '行程规划', plan: okPlan },
+      { role: 'ai', text: '答', intent: '行程规划', plan: okPlan, stats: null },
     ])
     expect(result.current.busy).toBe(false)
     expect(result.current.stages).toEqual([]) // done 后进度清空

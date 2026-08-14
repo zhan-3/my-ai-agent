@@ -1,5 +1,5 @@
 import { request, ApiError } from './client'
-import type { ChatResponse, TripPlan } from './contract'
+import type { ChatResponse, TripPlan, TravelStats } from './contract'
 
 export { ApiError }
 export type { ChatResponse }
@@ -18,6 +18,7 @@ export interface StreamEvent {
   answer?: string
   reason?: string
   plan?: TripPlan | null
+  stats?: TravelStats | null
   message?: string
 }
 

@@ -67,3 +67,16 @@ def plan_or_none(raw: dict | None) -> TripPlan | None:
 
         logger.warning("plan 结构不符契约，降级为 None：%s", raw)
         return None
+
+
+def stats_or_none(raw: dict | None) -> TravelStats | None:
+    """图产出的 stats dict → 契约 TravelStats；结构不符时降级 None（同上）"""
+    if not raw:
+        return None
+    try:
+        return TravelStats.model_validate(raw)
+    except Exception:
+        from xiao_wen.stability import logger
+
+        logger.warning("stats 结构不符契约，降级为 None：%s", raw)
+        return None

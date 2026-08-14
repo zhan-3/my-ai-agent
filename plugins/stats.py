@@ -25,10 +25,10 @@ DESCRIPTION = (
 
 
 def run(state: dict) -> dict:
-    """统一子 Agent 接口：概要文本（完整画像由 /api/stats + 记忆面板展示）"""
+    """统一子 Agent 接口：概要文本 + 结构化 stats（聊天里渲染画像卡片）"""
     s = compute(state.get("session_id", "default"))
     if not s["has_data"]:
-        return {"answer": "📭 暂无历史行程记录"}
+        return {"answer": "📭 暂无历史行程记录", "stats": s}
     lines = [f"📊 差旅画像：共 {s['trips']} 次行程"]
     if s["total_days"]:
         lines.append(f"  累计出差 {s['total_days']} 天，平均每次 {s['avg_days']} 天")
@@ -39,5 +39,4 @@ def run(state: dict) -> dict:
     lines += [f"  · {c['city']} ×{c['count']} 次" for c in s["top_cities"]]
     if s["skipped_days"]:
         lines.append(f"\n（{s['skipped_days']} 条旧记录缺天数，未计入天数统计）")
-    lines.append("\n（完整画像见左侧「记忆面板」）")
-    return {"answer": "\n".join(lines)}
+    return {"answer": "\n".join(lines), "stats": s}

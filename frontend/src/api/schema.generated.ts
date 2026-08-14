@@ -197,6 +197,8 @@ export interface components {
             /** Reason */
             reason: string;
             plan?: components["schemas"]["TripPlan"] | null;
+            /** Stats */
+            stats?: components["schemas"]["TravelStats"] | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
