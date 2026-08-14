@@ -57,6 +57,25 @@ class TravelStats(BaseModel):
     upcoming_trips: int  # 未来规划条数（未发生，未计入画像；诚实标注）
 
 
+class HistoryItinerary(BaseModel):
+    """历史行程明细（结构化卡片；容忍旧数据缺字段）"""
+
+    start_date: str | None = None
+    from_city: str | None = None
+    to_city: str | None = None
+    duration_days: int | None = None
+    summary: str | None = None
+    status: str = "历史"  # 时空语义三态：历史 / 进行中 / 已规划
+
+
+class HistoryResult(BaseModel):
+    """历史查询结果（结构化；供聊天消息渲染行程卡片；空态由 answer 文本表达）"""
+
+    itineraries: list[HistoryItinerary] = []
+    preferences: list[Preference] = []
+    direction: str = "历史"  # 查询方向：历史 / 计划（已规划的未来行程）
+
+
 def plan_or_none(raw: dict | None) -> TripPlan | None:
     """图产出的 plan dict → 契约 TripPlan；结构不符时降级 None（答案文本仍在，展示层有回退）"""
     if not raw:
@@ -80,4 +99,17 @@ def stats_or_none(raw: dict | None) -> TravelStats | None:
         from xiao_wen.stability import logger
 
         logger.warning("stats 结构不符契约，降级为 None：%s", raw)
+        return None
+
+
+def history_or_none(raw: dict | None) -> HistoryResult | None:
+    """图产出的 history dict → 契约 HistoryResult；结构不符时降级 None（同上）"""
+    if not raw:
+        return None
+    try:
+        return HistoryResult.model_validate(raw)
+    except Exception:
+        from xiao_wen.stability import logger
+
+        logger.warning("history 结构不符契约，降级为 None：%s", raw)
         return None

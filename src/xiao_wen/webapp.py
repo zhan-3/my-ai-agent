@@ -23,7 +23,17 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from xiao_wen import auth
-from xiao_wen.contract import Itinerary, MemorySnapshot, Preference, TravelStats, TripPlan, plan_or_none, stats_or_none
+from xiao_wen.contract import (
+    HistoryResult,
+    Itinerary,
+    MemorySnapshot,
+    Preference,
+    TravelStats,
+    TripPlan,
+    history_or_none,
+    plan_or_none,
+    stats_or_none,
+)
 from xiao_wen.session import chat as run_chat  # 会话循环收口（默认 = 图工厂调度图，多意图并行）
 from xiao_wen.session import stream_chat  # 流式会话循环（SSE 阶段事件）
 
@@ -45,6 +55,7 @@ class ChatResponse(BaseModel):
     reason: str
     plan: TripPlan | None = None  # 结构化行程（契约 TripPlan，OpenAPI 自动出 schema）；非行程/结构不符为 None
     stats: TravelStats | None = None  # 差旅画像（契约 TravelStats）；非统计/结构不符为 None
+    history: HistoryResult | None = None  # 历史查询结构化行程（契约 HistoryResult）；非历史查询为 None
 
 
 class AuthResponse(BaseModel):
@@ -80,6 +91,7 @@ def chat(req: ChatRequest, authorization: str | None = Header(default=None)) -> 
             reason=r.reason,
             plan=plan_or_none(getattr(r, "plan", None)),
             stats=stats_or_none(getattr(r, "stats", None)),
+            history=history_or_none(getattr(r, "history", None)),
         )
     except Exception as e:
         from xiao_wen.stability import logger

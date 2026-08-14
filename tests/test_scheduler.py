@@ -67,7 +67,14 @@ def test_make_parallel_routes_current_task():
     node = gb.make_parallel(worker)
     out = node({"current_task": SubTask(intent="历史查询", text="查上次行程"), "user_input": "原输入"})
     assert out["collected"] == [
-        {"intent": "历史查询", "text": "查上次行程", "answer": "已处理", "plan": None, "stats": None}
+        {
+            "intent": "历史查询",
+            "text": "查上次行程",
+            "answer": "已处理",
+            "plan": None,
+            "stats": None,
+            "history": None,
+        }
     ]
     assert seen == ["查上次行程"]
 

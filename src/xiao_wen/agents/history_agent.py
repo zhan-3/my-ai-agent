@@ -86,6 +86,7 @@ def run(state) -> dict:
     want_pref = (not q) or pref_hit or not trip_hit
 
     parts: list[str] = []
+    items: list[dict] = []  # 结构化行程（前端卡片）：status 标注时空语义三态
     if want_trip:
         if plan_hit:
             pool, title = cls["upcoming"], "📅 已规划的行程："
@@ -99,14 +100,38 @@ def run(state) -> dict:
                     f"· {it.get('start_date', '?')} {it.get('from_city', '?')}→{it.get('to_city', '?')}，"
                     f"{it.get('duration_days', '?')}天：{it.get('summary', '')}"
                 )
+                if plan_hit:
+                    status = "已规划"
+                elif it in cls["ongoing"]:
+                    status = "进行中"
+                else:
+                    status = "历史"
+                items.append(
+                    {
+                        "start_date": it.get("start_date"),
+                        "from_city": it.get("from_city"),
+                        "to_city": it.get("to_city"),
+                        "duration_days": it.get("duration_days"),
+                        "summary": it.get("summary", ""),
+                        "status": status,
+                    }
+                )
             parts.append("\n".join(lines))
         elif cities:
             parts.append(f"📭 未找到{cities[0]}的记录，建议换个条件（日期/城市/住宿类型）再试。")
         else:
             parts.append("📭 暂无历史行程记录。" if not plan_hit else "📭 暂无已规划的行程，先告诉我你的出差安排吧。")
+    prefs_out: list[dict] = []
     if want_pref:
         if prefs:
             parts.append("💡 记忆偏好：" + "；".join(f"{p['category']} {p['content']}" for p in prefs))
+            prefs_out = [{"category": p["category"], "content": p["content"]} for p in prefs]
         else:
             parts.append("💡 暂无记忆偏好。")
-    return {"answer": "\n\n".join(parts)}
+    # 结构化输出（前端渲染卡片；空查询不产出 → None，前端不渲染）
+    history = (
+        {"itineraries": items, "preferences": prefs_out, "direction": "计划" if plan_hit else "历史"}
+        if items or prefs_out
+        else None
+    )
+    return {"answer": "\n\n".join(parts), "history": history}

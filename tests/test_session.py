@@ -326,9 +326,19 @@ def test_history_agent_filters_by_time(monkeypatch):
 
     hist = history_agent.run({"session_id": "x", "user_input": "我上次出差去哪了"})
     assert "北京" in hist["answer"] and "杭州规划" not in hist["answer"]
+    # 结构化输出（前端卡片）：只含已发生，status 标注
+    assert hist["history"]["direction"] == "历史"
+    assert [it["status"] for it in hist["history"]["itineraries"]] == ["历史"]
+    assert hist["history"]["itineraries"][0]["summary"] == "北京出差（已发生）"
 
     plan = history_agent.run({"session_id": "x", "user_input": "我接下来有什么安排"})
     assert "杭州规划" in plan["answer"] and "北京出差" not in plan["answer"]
+    # 结构化输出：计划向 → 只含未发生，status=已规划
+    assert plan["history"]["direction"] == "计划"
+    assert [it["status"] for it in plan["history"]["itineraries"]] == ["已规划"]
+
+    empty = history_agent.run({"session_id": "x", "user_input": "杭州的记录"})
+    assert empty["history"] is None, "无命中/无数据 → history 为 None，前端不渲染卡片"
 
 
 def test_preference_agent_records_multiple_preferences(monkeypatch):

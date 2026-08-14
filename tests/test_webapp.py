@@ -176,6 +176,57 @@ class TestChatAuthEnforced:
         r = client.post("/api/chat/stream", json={"user_input": "你好"})
         assert r.status_code == 401
 
+
+def test_chat_returns_structured_history(client, monkeypatch):
+    """历史查询产出 history → /api/chat 响应带 history；非历史查询 → None"""
+    history = {
+        "itineraries": [
+            {
+                "start_date": "2026-05-08",
+                "from_city": "上海",
+                "to_city": "北京",
+                "duration_days": 4,
+                "summary": "北京出差",
+                "status": "历史",
+            }
+        ],
+        "preferences": [],
+        "direction": "历史",
+    }
+
+    class HistResult:
+        answer = "🗂️ 历史行程：…"
+        intent = "历史查询"
+        reason = "r"
+        history: ClassVar[dict] = {}
+
+    HistResult.history = history
+    monkeypatch.setattr(webapp, "run_chat", lambda text, session_id: HistResult())
+    token = client.post("/api/auth/register", json={"username": "li", "password": "pass123"}).json()["token"]
+    r = client.post(
+        "/api/chat",
+        json={"user_input": "我上次的行程是什么"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["history"] == history
+    assert body["history"]["itineraries"][0]["status"] == "历史"
+
+    class PlainResult:
+        answer = "政策标准如下"
+        intent = "知识问答"
+        reason = "r"
+
+    monkeypatch.setattr(webapp, "run_chat", lambda text, session_id: PlainResult())
+    r2 = client.post(
+        "/api/chat",
+        json={"user_input": "住宿标准是什么"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r2.status_code == 200
+    assert r2.json()["history"] is None, "非历史查询不应带 history"
+
     def test_chat_stream_returns_sse_events(self, client, monkeypatch):
         """SSE：POST /api/chat/stream → text/event-stream，data 行含阶段事件 + done"""
 

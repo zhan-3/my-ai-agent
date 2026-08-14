@@ -40,6 +40,11 @@ def _first_stats(a: dict | None, b: dict | None) -> dict | None:
     return a if a is not None else b
 
 
+def _first_history(a: dict | None, b: dict | None) -> dict | None:
+    """history 归约器：同 stats（历史查询分支产出结构化行程，取第一个非空）"""
+    return a if a is not None else b
+
+
 class State(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     user_input: str
@@ -53,6 +58,7 @@ class State(TypedDict):
     session_id: NotRequired[str]  # 会话维度（记忆隔离；未传时 agent 兑底 "default"）
     plan: NotRequired[Annotated[dict | None, _first_plan]]  # 结构化行程（行程 Agent 产出；非行程为 None）
     stats: NotRequired[Annotated[dict | None, _first_stats]]  # 差旅画像（差旅统计 Agent 产出；非统计为 None）
+    history: NotRequired[Annotated[dict | None, _first_history]]  # 历史查询结构化结果（非历史查询为 None）
     clarify: NotRequired[bool]  # 消歧门：命中歧义时 True，answer=反问问题，路由短路到 END
 
 
@@ -97,6 +103,7 @@ def make_parallel(agent):
                     "answer": out["answer"],
                     "plan": out.get("plan"),
                     "stats": out.get("stats"),
+                    "history": out.get("history"),
                 }
             ]
         }
@@ -159,7 +166,9 @@ def merge(state):
     plan = next((p.get("plan") for p in parts if p.get("plan")), None)
     # 结构化 stats：同上（差旅统计分支产出画像数据，前端渲染卡片）
     stats = next((p.get("stats") for p in parts if p.get("stats")), None)
-    return {"answer": "\n".join(lines), "plan": plan, "stats": stats}
+    # 结构化 history：同上（历史查询分支产出结构化行程，前端渲染卡片）
+    history = next((p.get("history") for p in parts if p.get("history")), None)
+    return {"answer": "\n".join(lines), "plan": plan, "stats": stats, "history": history}
 
 
 # ---- 指纹缓存（热插拔：manifest 变化自动重建） ----

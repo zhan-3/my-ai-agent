@@ -19,7 +19,14 @@ const okPlan = {
   ],
 }
 
-const okResponse: chatApi.ChatResponse = { answer: '答', intent: '行程规划', reason: 'r', plan: okPlan }
+const okResponse: chatApi.ChatResponse = {
+  answer: '答',
+  intent: '行程规划',
+  reason: 'r',
+  plan: okPlan,
+  stats: null,
+  history: null,
+}
 
 /** 流式成功：模拟 SSE 阶段事件回调 + done 返回 */
 function mockStreamOk() {
@@ -50,7 +57,7 @@ describe('useChat SSE 发送流', () => {
     expect(chatApi.streamChat).toHaveBeenCalledTimes(1)
     expect(result.current.messages).toEqual([
       { role: 'user', text: '你好' },
-      { role: 'ai', text: '答', intent: '行程规划', plan: okPlan, stats: null },
+      { role: 'ai', text: '答', intent: '行程规划', plan: okPlan, stats: null, history: null },
     ])
     expect(result.current.busy).toBe(false)
     expect(result.current.stages).toEqual([]) // done 后进度清空

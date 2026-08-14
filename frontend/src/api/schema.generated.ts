@@ -4,26 +4,6 @@
  */
 
 export interface paths {
-    "/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Index
-         * @description 前端页面（单文件 HTML，无外部 CDN，离线可用）
-         */
-        get: operations["index__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/chat": {
         parameters: {
             query?: never;
@@ -125,6 +105,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stats
+         * @description 当前用户差旅画像（确定性聚合，零 LLM）：次数/天数/常去城市/年度趋势。
+         *
+         *     页面直接拉取渲染，不经 LLM——差旅统计是结构化数据查询，不是开放生成。
+         */
+        get: operations["stats_api_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/memory": {
         parameters: {
             query?: never;
@@ -137,6 +139,26 @@ export interface paths {
          * @description 当前用户记忆快照：偏好 + 历史行程（前端记忆侧栏可视化，体现 Agent 长期记忆）
          */
         get: operations["memory_api_memory_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Index
+         * @description React 前端入口：frontend/dist 构建产物；未构建时给出构建指引
+         */
+        get: operations["index__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -197,13 +219,55 @@ export interface components {
             /** Reason */
             reason: string;
             plan?: components["schemas"]["TripPlan"] | null;
-            /** Stats */
             stats?: components["schemas"]["TravelStats"] | null;
+            history?: components["schemas"]["HistoryResult"] | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HistoryItinerary
+         * @description 历史行程明细（结构化卡片；容忍旧数据缺字段）
+         */
+        HistoryItinerary: {
+            /** Start Date */
+            start_date?: string | null;
+            /** From City */
+            from_city?: string | null;
+            /** To City */
+            to_city?: string | null;
+            /** Duration Days */
+            duration_days?: number | null;
+            /** Summary */
+            summary?: string | null;
+            /**
+             * Status
+             * @default 历史
+             */
+            status: string;
+        };
+        /**
+         * HistoryResult
+         * @description 历史查询结果（结构化；供聊天消息渲染行程卡片；空态由 answer 文本表达）
+         */
+        HistoryResult: {
+            /**
+             * Itineraries
+             * @default []
+             */
+            itineraries: components["schemas"]["HistoryItinerary"][];
+            /**
+             * Preferences
+             * @default []
+             */
+            preferences: components["schemas"]["Preference"][];
+            /**
+             * Direction
+             * @default 历史
+             */
+            direction: string;
         };
         /**
          * Itinerary
@@ -226,7 +290,17 @@ export interface components {
             /** Itineraries */
             itineraries: components["schemas"]["Itinerary"][];
         };
-        /** TravelStats */
+        /** Preference */
+        Preference: {
+            /** Category */
+            category: string;
+            /** Content */
+            content: string;
+        };
+        /**
+         * TravelStats
+         * @description 差旅画像（确定性聚合，零 LLM；供 /api/stats 页面展示）
+         */
         TravelStats: {
             /** Has Data */
             has_data: boolean;
@@ -248,13 +322,6 @@ export interface components {
             }[];
             /** Upcoming Trips */
             upcoming_trips: number;
-        };
-        /** Preference */
-        Preference: {
-            /** Category */
-            category: string;
-            /** Content */
-            content: string;
         };
         /** TripDay */
         TripDay: {
@@ -308,26 +375,6 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    index__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-        };
-    };
     chat_api_chat_post: {
         parameters: {
             query?: never;
@@ -497,6 +544,37 @@ export interface operations {
             };
         };
     };
+    stats_api_stats_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TravelStats"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     memory_api_memory_get: {
         parameters: {
             query?: never;
@@ -524,6 +602,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    index__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
                 };
             };
         };

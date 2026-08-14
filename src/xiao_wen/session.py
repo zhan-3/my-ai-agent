@@ -21,6 +21,7 @@ class ChatResult:
     reason: str
     plan: dict | None = None  # 结构化行程（slice 1：行程 Agent 产出；非行程为 None）
     stats: dict | None = None  # 差旅画像（差旅统计 Agent 产出；非统计为 None）
+    history: dict | None = None  # 历史查询结构化结果（历史查询 Agent 产出；非历史查询为 None）
 
 
 # 防御：任何 Agent 返回空/缺失 answer 时的兜底文案（LLM 偶发 None/空串）
@@ -54,7 +55,14 @@ def chat(text: str, session_id: str = "default", *, graph=None, store=None) -> C
     raw = r.get("answer") if isinstance(r, dict) else getattr(r, "answer", "")
     answer = raw or _FALLBACK_ANSWER
     store.add_message("assistant", answer, session_id=session_id)
-    return ChatResult(answer=answer, intent=r["intent"], reason=r["reason"], plan=r.get("plan"), stats=r.get("stats"))
+    return ChatResult(
+        answer=answer,
+        intent=r["intent"],
+        reason=r["reason"],
+        plan=r.get("plan"),
+        stats=r.get("stats"),
+        history=r.get("history"),
+    )
 
 
 async def stream_chat(text: str, session_id: str = "default", *, graph=None, store=None) -> AsyncIterator[dict]:
@@ -122,7 +130,7 @@ async def stream_chat(text: str, session_id: str = "default", *, graph=None, sto
     if final is None:  # 防御：图没产出任何 state
         yield {"type": "error", "message": "⚠️ 服务暂时不可用，请稍后再试。"}
         return
-    from xiao_wen.contract import plan_or_none, stats_or_none
+    from xiao_wen.contract import history_or_none, plan_or_none, stats_or_none
     from xiao_wen.stability import logger
 
     store.add_message("user", text, session_id=session_id)
@@ -130,14 +138,16 @@ async def stream_chat(text: str, session_id: str = "default", *, graph=None, sto
     store.add_message("assistant", answer, session_id=session_id)
     plan = plan_or_none(final.get("plan"))
     stats = stats_or_none(final.get("stats"))
+    history = history_or_none(final.get("history"))
     yield {
         "type": "done",
         "answer": answer,
         "intent": final.get("intent", ""),
         "reason": final.get("reason", ""),
-        # SSE 由 json.dumps 手写序列化：plan / stats 必须输出 dict（与 POST /api/chat 响应体一致）
+        # SSE 由 json.dumps 手写序列化：plan / stats / history 必须输出 dict（与 POST /api/chat 响应体一致）
         "plan": plan.model_dump() if plan else None,
         "stats": stats.model_dump() if stats else None,
+        "history": history.model_dump() if history else None,
     }
 
 

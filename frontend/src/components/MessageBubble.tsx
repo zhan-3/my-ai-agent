@@ -3,6 +3,7 @@ import { isTripAnswer } from '@/lib/trip'
 import type { ChatMessage } from '@/hooks/useChat'
 import TripCard from '@/components/TripCard'
 import StatsCard from '@/components/StatsCard'
+import HistoryCard from '@/components/HistoryCard'
 
 // 单条消息气泡：用户 / 晓问（带子 Agent 徽章）。
 // SSE 阶段进度已替代打字机模拟（真实等待有实时反馈），答案到达即整段渲染。
@@ -10,6 +11,7 @@ export default function MessageBubble({ msg }: { msg: ChatMessage }) {
   // slice 1：后端带结构化 plan 即行程；旧后端回退到「意图+文本特征」判断
   const isTrip = msg.role === 'ai' && (msg.plan != null || isTripAnswer(msg.intent ?? '', msg.text))
   const hasStats = msg.role === 'ai' && msg.stats != null
+  const hasHistory = msg.role === 'ai' && msg.history != null && msg.history.itineraries.length > 0
 
   if (msg.role === 'user') {
     return (
@@ -41,6 +43,12 @@ export default function MessageBubble({ msg }: { msg: ChatMessage }) {
           <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-2.5 text-sm">
             <div className="mb-1.5 font-medium">📊 差旅画像</div>
             <StatsCard stats={msg.stats!} />
+          </div>
+        </div>
+      ) : hasHistory ? (
+        <div className="max-w-[85%]">
+          <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-2.5 text-sm">
+            <HistoryCard history={msg.history!} />
           </div>
         </div>
       ) : (
