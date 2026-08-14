@@ -138,9 +138,9 @@ def test_missing_elements_multi_turn_planning():
     assert "请补充" not in r2.answer, "要素已齐，不应再追问"
     # 状态验证：行程真实写入记忆库（outcome，而非仅回答文案）
     its = _memory_state()["itineraries"]
-    assert any(
-        it["to_city"] == "杭州" and it["start_date"].startswith("2026-05-08") for it in its
-    ), f"杭州行程应入库，实际：{its}"
+    assert any(it["to_city"] == "杭州" and it["start_date"].startswith("2026-05-08") for it in its), (
+        f"杭州行程应入库，实际：{its}"
+    )
 
     # 轮3：历史按城市过滤 → 命中刚生成的杭州行程
     r3 = chat("我最近去杭州的行程")
@@ -177,7 +177,7 @@ def test_pending_followup_recovers_plan():
     # 状态验证（两件事都真实落地，而非只回文案）：
     # 行程写入记忆库（上海→北京）+ 常驻城市偏好写入
     st = _memory_state()
-    assert any(
-        it["from_city"] == "上海" and it["to_city"] == "北京" for it in st["itineraries"]
-    ), f"续接行程应入库，实际：{st['itineraries']}"
+    assert any(it["from_city"] == "上海" and it["to_city"] == "北京" for it in st["itineraries"]), (
+        f"续接行程应入库，实际：{st['itineraries']}"
+    )
     assert any(p["content"] == "上海" for p in st["preferences"]), f"常驻城市应入库，实际：{st['preferences']}"

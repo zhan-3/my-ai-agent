@@ -151,9 +151,7 @@ def build_index(chunks):
         print(f"（复用 chroma 持久化索引，{existing} 条 · {EMB_MODEL}）")
         return col
     if existing:
-        print(
-            f"（索引过期：现有 {existing} 条 / 模型 {meta.get('model')} ≠ {EMB_MODEL}，清空重建…）"
-        )
+        print(f"（索引过期：现有 {existing} 条 / 模型 {meta.get('model')} ≠ {EMB_MODEL}，清空重建…）")
         col.delete(ids=col.get()["ids"])
     print(f"（构建 chroma 索引：{len(chunks)} 块 × {EMB_MODEL}，首次 1-2 分钟…）")
     for i in range(0, len(chunks), BATCH):

@@ -252,9 +252,7 @@ def _recover_pending(recent: str, user_input: str, result: IntentResult) -> Inte
     if result.intent not in ("偏好记录", "其他"):
         return result
     subs = list(result.subtasks)
-    if any(w in q for w in _PREF_STATEMENT_WORDS) and not any(
-        s.intent == "偏好记录" for s in subs
-    ):
+    if any(w in q for w in _PREF_STATEMENT_WORDS) and not any(s.intent == "偏好记录" for s in subs):
         subs.append(SubTask(intent="偏好记录", text=q))
     note = "（同时记偏好）" if subs else ""
     return IntentResult(
