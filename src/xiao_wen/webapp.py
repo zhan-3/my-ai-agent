@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from xiao_wen import auth
-from xiao_wen.contract import Itinerary, MemorySnapshot, Preference, TripPlan, plan_or_none
+from xiao_wen.contract import Itinerary, MemorySnapshot, Preference, TravelStats, TripPlan, plan_or_none
 from xiao_wen.session import chat as run_chat  # 会话循环收口（默认 = 图工厂调度图，多意图并行）
 from xiao_wen.session import stream_chat  # 流式会话循环（SSE 阶段事件）
 
@@ -140,6 +140,18 @@ def login(req: AuthRequest) -> AuthResponse:
 def me(authorization: str | None = Header(default=None)) -> dict:
     """校验当前 token → 返回用户名（前端登录态校验用）"""
     return {"username": _current_user(authorization)}
+
+
+@app.get("/api/stats", response_model=TravelStats)
+def stats(authorization: str | None = Header(default=None)) -> TravelStats:
+    """当前用户差旅画像（确定性聚合，零 LLM）：次数/天数/常去城市/年度趋势。
+
+    页面直接拉取渲染，不经 LLM——差旅统计是结构化数据查询，不是开放生成。
+    """
+    user = _current_user(authorization)
+    from xiao_wen.stats import compute
+
+    return TravelStats(**compute(user))
 
 
 @app.get("/api/memory", response_model=MemorySnapshot)

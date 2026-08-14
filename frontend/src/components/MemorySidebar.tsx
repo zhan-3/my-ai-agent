@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { getMemory, type MemorySnapshot } from '@/api/memory'
 import { getStoredToken } from '@/lib/storage'
 import { Badge } from '@/components/ui/badge'
+import StatsPanel from '@/components/StatsPanel'
 
 // 记忆侧栏：当前账号长期记忆（偏好 + 历史行程），refreshKey 变化时重新拉取
 export default function MemorySidebar({ refreshKey }: { refreshKey: number }) {
@@ -61,6 +62,7 @@ export default function MemorySidebar({ refreshKey }: { refreshKey: number }) {
           </ul>
         )}
       </div>
+      <StatsPanel refreshKey={refreshKey} />
       <div className="mt-auto text-[11px] leading-relaxed text-muted-foreground">
         💡 左侧是<b>当前账号</b>的长期记忆（Postgres / 内存后端），由子 Agent 自动读写——住宿偏好、
         常驻城市、历史行程都会实时落在这里，下次规划自动生效。

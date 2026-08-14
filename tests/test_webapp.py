@@ -94,6 +94,50 @@ class TestMemoryEndpoint:
         assert data["itineraries"][0]["to_city"] == "北京"
 
 
+class TestStatsEndpoint:
+    """/api/stats：差旅画像（确定性聚合，零 LLM）——401 / 空数据 / 聚合正确"""
+
+    def test_stats_requires_auth(self, client):
+        assert client.get("/api/stats").status_code == 401
+
+    def test_stats_empty(self, client):
+        token = client.post("/api/auth/register", json={"username": "zhang", "password": "pass123"}).json()["token"]
+        r = client.get("/api/stats", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["has_data"] is False
+        assert data["trips"] == 0
+
+    def test_stats_aggregates(self, client):
+        from xiao_wen import memory as memory_store
+
+        token = client.post("/api/auth/register", json={"username": "zhang", "password": "pass123"}).json()["token"]
+        memory_store.add_itinerary(
+            {"to_city": "北京", "start_date": "2026-03-10", "duration_days": 3},
+            "北京出差",
+            session_id="zhang",
+        )
+        memory_store.add_itinerary(
+            {"to_city": "上海", "start_date": "2026-05-01", "duration_days": 2},
+            "上海出差",
+            session_id="zhang",
+        )
+        memory_store.add_itinerary(
+            {"to_city": "北京", "start_date": "2025-11-20", "duration_days": 1},
+            "北京",
+            session_id="zhang",
+        )
+        r = client.get("/api/stats", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["has_data"] is True
+        assert data["trips"] == 3
+        assert data["total_days"] == 6
+        assert data["avg_days"] == 2.0
+        assert data["top_cities"][0] == {"city": "北京", "count": 2}
+        assert data["years"] == [{"year": "2025", "count": 1}, {"year": "2026", "count": 2}]
+
+
 class TestChatAuthEnforced:
     def test_chat_without_token_401(self, client):
         r = client.post("/api/chat", json={"user_input": "你好"})

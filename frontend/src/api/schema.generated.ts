@@ -224,6 +224,27 @@ export interface components {
             /** Itineraries */
             itineraries: components["schemas"]["Itinerary"][];
         };
+        /** TravelStats */
+        TravelStats: {
+            /** Has Data */
+            has_data: boolean;
+            /** Trips */
+            trips: number;
+            /** Total Days */
+            total_days: number;
+            /** Avg Days */
+            avg_days: number;
+            /** Skipped Days */
+            skipped_days: number;
+            /** Top Cities */
+            top_cities: {
+                [key: string]: unknown;
+            }[];
+            /** Years */
+            years: {
+                [key: string]: unknown;
+            }[];
+        };
         /** Preference */
         Preference: {
             /** Category */

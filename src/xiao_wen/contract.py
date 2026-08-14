@@ -44,6 +44,18 @@ class MemorySnapshot(BaseModel):
     itineraries: list[Itinerary]
 
 
+class TravelStats(BaseModel):
+    """差旅画像（确定性聚合，零 LLM；供 /api/stats 页面展示）"""
+
+    has_data: bool
+    trips: int
+    total_days: int
+    avg_days: float
+    skipped_days: int
+    top_cities: list[dict]
+    years: list[dict]
+
+
 def plan_or_none(raw: dict | None) -> TripPlan | None:
     """图产出的 plan dict → 契约 TripPlan；结构不符时降级 None（答案文本仍在，展示层有回退）"""
     if not raw:
