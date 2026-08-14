@@ -18,9 +18,46 @@ from xiao_wen.trip_planner import plan as _trip_plan  # noqa: E402
 from xiao_wen.web import get_weather  # noqa: E402
 
 
+def collect_upstream(user_input: str, session_id: str) -> dict:
+    """collect-then-compose 的收集阶段（确定性、零 LLM）：
+
+    上游 = 知识库（公司差旅政策/标准，rag 纯检索）+ 历史行程参考（最近 2 条）
+    + 用户偏好（trip_planner 内已有）。任一上游失败降级为空，不阻塞规划。
+    """
+    from xiao_wen import rag
+    from xiao_wen.memory import get_itineraries
+
+    policy = ""
+    try:
+        policy = "\n\n".join(rag.search_texts(user_input))  # rag 内部也已降级为 []
+    except Exception:
+        policy = ""  # 索引/网络异常：政策上下文降级为空，规划不阻塞
+    history_ref = ""
+    try:
+        its = get_itineraries(session_id=session_id)
+        history_ref = "\n".join(
+            f"- {it.get('start_date', '')} {it.get('from_city', '')}→{it.get('to_city', '')}"
+            f" {it.get('duration_days', '')}天：{it.get('summary', '')}"
+            for it in its[-2:]
+        )
+    except Exception:
+        history_ref = ""  # 记忆后端异常：历史参考降级为空
+    return {"policy": policy, "history_ref": history_ref}
+
+
 def run(state) -> dict:
-    """两阶段管线（要素提取→行程生成）收口于 trip_planner.plan（ADR-0003）；生成成功后附加目的地天气提醒"""
-    r = _trip_plan(state["user_input"], session_id=state.get("session_id", "default"), recent=state.get("recent", ""))
+    """collect-then-compose：先收集上游（政策/历史参考），再综合生成行程。
+
+    两阶段管线（要素提取→行程生成）收口于 trip_planner.plan（ADR-0003）；
+    生成成功后附加目的地天气提醒。
+    """
+    upstream = collect_upstream(state["user_input"], state.get("session_id", "default"))
+    r = _trip_plan(
+        state["user_input"],
+        session_id=state.get("session_id", "default"),
+        recent=state.get("recent", ""),
+        upstream=upstream,
+    )
     if isinstance(r, NeedsInfo):
         return {"answer": needs_info_text(r), "plan": None}
     answer = format_plan(r.plan)

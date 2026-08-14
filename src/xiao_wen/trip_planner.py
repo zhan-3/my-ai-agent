@@ -111,7 +111,10 @@ plan_prompt = ChatPromptTemplate.from_messages(
 
 输出键名严格为英文：days（数组，每项键名 date/transport/hotel/activities/notes）、summary、reasons（字符串数组）。""",
         ),
-        ("human", "差旅要素：{trip_json}\n用户历史偏好：{prefs}\n用户原话：{user_input}"),
+        (
+            "human",
+            "差旅要素：{trip_json}\n用户历史偏好：{prefs}\n公司差旅政策/标准：{policy}\n历史行程参考：{history_ref}\n用户原话：{user_input}",
+        ),
     ]
 )
 
@@ -193,10 +196,18 @@ def _missing(req: TripRequest) -> list[str]:
     return miss
 
 
-def plan(user_input: str, *, session_id: str = "default", recent: str = "") -> PlanResult | NeedsInfo:
+def plan(
+    user_input: str,
+    *,
+    session_id: str = "default",
+    recent: str = "",
+    upstream: dict | None = None,
+) -> PlanResult | NeedsInfo:
     """编排：提取 → 常驻城市补全 → 缺项检查（短路）→ 生成 → 写回长期记忆
 
     recent：对话上文（多轮要素延续，如用户补齐缺项时不再重复说过的地方）；
+    upstream：collect-then-compose 收集阶段注入的上游上下文
+    （{policy: 公司差旅政策/标准文本, history_ref: 历史行程参考}，缺省槽位为「无」）；
     顺序是产品行为（ADR-0003），勿改。
     """
     req = _extract_model().invoke({"input": user_input, "today": _today_cn(), "recent": recent or "无"})
@@ -229,10 +240,13 @@ def plan(user_input: str, *, session_id: str = "default", recent: str = "") -> P
         return NeedsInfo(missing=miss)
     prefs = get_preferences(session_id=session_id)
     prefs_text = "；".join(f"{p['category']}:{p['content']}" for p in prefs) or "无"
+    upstream = upstream or {}
     plan = _plan_model().invoke(
         {
             "trip_json": req.model_dump_json(),
             "prefs": prefs_text,
+            "policy": upstream.get("policy") or "无",
+            "history_ref": upstream.get("history_ref") or "无",
             "user_input": user_input,
         }
     )

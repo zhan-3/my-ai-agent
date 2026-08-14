@@ -77,8 +77,10 @@ def test_format_plan_no_reasons_ok():
 class _FakeChain:
     def __init__(self, out):
         self._out = out
+        self.calls: list[dict] = []
 
     def invoke(self, payload):
+        self.calls.append(payload)
         return self._out
 
 
@@ -142,6 +144,65 @@ def test_plan_city_name_fallback_when_extract_stutters(monkeypatch):
     r3 = _it.plan("好的", recent="用户: 去北京\n助手: 请补充出发城市")
     assert isinstance(r3, _it.NeedsInfo)
     assert "出发城市" in r3.missing
+
+
+def test_plan_injects_upstream_policy_and_history(monkeypatch):
+    """collect-then-compose：行程生成必须收到上游上下文（政策/历史参考）；
+    未传 upstream（默认）→ 槽位为「无」，行为向后兼容"""
+    plan_out = ItineraryPlan(summary="出差计划", days=[], reasons=[])
+    extract = _FakeChain(_req())
+    plan_chain = _FakeChain(plan_out)
+    monkeypatch.setattr(_it, "_extract_model", lambda: extract)
+    monkeypatch.setattr(_it, "_plan_model", lambda: plan_chain)
+
+    r = _it.plan(
+        "去北京开会",
+        upstream={"policy": "一线城市住宿不超过500元/晚", "history_ref": "上次住全季（前门店）"},
+    )
+    assert isinstance(r, _it.PlanResult)
+    payload = plan_chain.calls[-1]
+    assert "一线城市住宿不超过500元/晚" in payload["policy"]
+    assert "上次住全季（前门店）" in payload["history_ref"]
+
+    # 向后兼容：不传 upstream → 槽位 "无"，不崩
+    plan_chain2 = _FakeChain(plan_out)
+    monkeypatch.setattr(_it, "_plan_model", lambda: plan_chain2)
+    _it.plan("去北京开会")
+    payload2 = plan_chain2.calls[-1]
+    assert payload2["policy"] == "无"
+    assert payload2["history_ref"] == "无"
+
+
+def test_collect_upstream_gathers_and_degrades(monkeypatch):
+    """collect-then-compose 收集阶段：知识检索 + 历史参考；任一上游异常 → 降级为空，不阻塞"""
+    from xiao_wen import memory as ms
+    from xiao_wen import rag
+    from xiao_wen.agents import itinerary_agent as ia
+
+    # 正常收集：政策命中 2 段 + 历史最近 2 条
+    monkeypatch.setattr(rag, "search_texts", lambda q, k=5: ["政策段A", "政策段B"])
+    monkeypatch.setattr(
+        ms,
+        "get_itineraries",
+        lambda *, session_id="default": [
+            {"start_date": "2026-05-01", "from_city": "上海", "to_city": "北京", "duration_days": 4, "summary": "开会"},
+            {"start_date": "2026-06-01", "from_city": "济南", "to_city": "湖北", "duration_days": 3, "summary": "拜访"},
+            {"start_date": "2026-07-01", "from_city": "临沂", "to_city": "北京", "duration_days": 2, "summary": "培训"},
+        ],
+    )
+    up = ia.collect_upstream("去北京出差住哪", "u1")
+    assert "政策段A" in up["policy"] and "政策段B" in up["policy"]
+    assert "临沂→北京" in up["history_ref"] and "2026-06-01" in up["history_ref"]  # 取最近 2 条
+    assert "2026-05-01" not in up["history_ref"]
+
+    # 降级：rag 抛异常 → policy 空；记忆后端抛异常 → history_ref 空（规划不阻塞）
+    def boom(*a, **k):
+        raise RuntimeError("索引不可用")
+
+    monkeypatch.setattr(rag, "search_texts", boom)
+    monkeypatch.setattr(ms, "get_itineraries", boom)
+    up2 = ia.collect_upstream("去北京出差住哪", "u1")
+    assert up2 == {"policy": "", "history_ref": ""}
 
 
 def test_plan_home_city_completes_before_missing_check(monkeypatch):

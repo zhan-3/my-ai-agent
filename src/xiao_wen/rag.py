@@ -223,6 +223,21 @@ def _knowledge_model():
     return knowledge_prompt | llm.get_llm()
 
 
+def search_texts(query: str, k: int = 5) -> list[str]:
+    """纯检索（无 LLM）：返回命中文本段列表（空 = 无命中/索引不可用）。
+
+    供 collect-then-compose 收集者（行程规划等）注入上游上下文：
+    只要政策原文，不需要知识问答 agent 的一轮 LLM 生成。索引/网络异常降级空列表，不阻塞。
+    """
+    try:
+        chunks = merge_tiny_chunks(load_chunks())
+        col = build_index(chunks)
+        hits = search(query, col, k=k)
+        return [text for _, _, text in hits]
+    except Exception:
+        return []
+
+
 def knowledge_qa(query: str) -> str:
     """RAG 知识问答：检索 top-5 → 组装上下文 → LLM 生成
     检索来源写入日志（可追溯），答案不携带技术细节（前端保持干净）"""
