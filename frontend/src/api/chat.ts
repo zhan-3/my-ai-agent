@@ -69,7 +69,13 @@ export async function streamChat(
     for (const e of events) {
       onEvent(e)
       if (e.type === 'done' && e.answer != null) {
-        final = { answer: e.answer, intent: e.intent ?? '', reason: e.reason ?? '', plan: e.plan ?? null }
+        final = {
+          answer: e.answer,
+          intent: e.intent ?? '',
+          reason: e.reason ?? '',
+          plan: e.plan ?? null,
+          stats: e.stats ?? null,
+        }
       } else if (e.type === 'error') {
         throw new Error(e.message || '服务暂时不可用')
       }

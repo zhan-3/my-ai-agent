@@ -13,6 +13,7 @@ export const AGENTS: Record<string, AgentMeta> = {
   历史查询: { icon: '🕘', name: '历史查询 Agent', desc: '读取长期记忆中的历史行程，回顾上次出差' },
   知识问答: { icon: '📚', name: '知识库 Agent', desc: 'RAG 语义检索差旅政策文档，回答标准/制度类问题' },
   联网查询: { icon: '🌐', name: '联网查询 Agent', desc: 'ReAct 工具调用：天气（未来7天）/汇率/空气质量，带短期记忆指代消解' },
+  差旅统计: { icon: '📊', name: '差旅统计 Agent', desc: '汇总历史出差画像（次数/天数/年度趋势/常去城市排名），零 LLM 确定性聚合' },
   其他: { icon: '🤝', name: '兜底 Agent', desc: '企业差旅范围外的问题，给出边界说明' },
   error: { icon: '⚠️', name: '系统异常', desc: '' },
 }
