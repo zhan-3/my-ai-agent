@@ -35,6 +35,124 @@ def test_parallel_is_superset_of_single():
     assert business <= parallel, f"调度图缺失单意图图的业务节点：{business - parallel}"
 
 
+def test_both_graphs_have_collect_node():
+    """collect-then-compose：单/并行图都必须有 collect_upstream 节点（图级显式收集）"""
+    for parallel in (False, True):
+        app = gb.build_supervisor_graph(parallel=parallel)
+        nodes = set(app.get_graph().nodes)
+        assert "collect_upstream" in nodes, f"parallel={parallel} 图缺 collect_upstream 节点"
+
+
+def test_route_via_collect_reroutes_trip_planning():
+    """gate 后条件边：含行程规划（主导或 subtasks）→ 先过 collect；否则走原路由不变"""
+    # 单意图行程规划 → 收尾者路径
+    assert (
+        gb._route_via_collect({"intent": "行程规划", "subtasks": [], "recent": "", "user_input": "x"})
+        == "collect_upstream"
+    )
+    # 多意图含行程规划（subtasks）→ 也先 collect
+    assert (
+        gb._route_via_collect(
+            {
+                "intent": "知识问答",
+                "subtasks": [gb.SubTask(intent="行程规划", text="y")],
+                "recent": "",
+                "user_input": "x",
+            }
+        )
+        == "collect_upstream"
+    )
+    # 不含行程规划 → 原路由不变（字符串直返）
+    assert gb._route_via_collect({"intent": "知识问答", "subtasks": [], "recent": "", "user_input": "x"}) == "知识问答"
+    # 消歧短路优先于 collect（歧义时不需要收集）
+    assert gb._route_via_collect({"intent": "行程规划", "subtasks": [], "clarify": True}) == "__clarify_end__"
+
+
+def test_dispatch_branches_inherit_upstream():
+    """多意图 Send 分支必须继承 upstream（否则行程分支读不到 collect 产物）"""
+    sends = gb.dispatch(
+        {
+            "intent": "行程规划",
+            "user_input": "x",
+            "recent": "r",
+            "session_id": "s1",
+            "messages": [],
+            "subtasks": [gb.SubTask(intent="偏好记录", text="喜欢全季")],
+            "upstream": {"policy": "标准文本"},
+        }
+    )
+    assert all(s.arg["upstream"]["policy"] == "标准文本" for s in sends)
+
+
+def test_invoke_collect_writes_upstream_and_trip_agent_receives(monkeypatch):
+    """图 invoke（假 classify/假 agent）：含行程规划 → collect 节点执行写 upstream，
+    行程 agent 收到 state["upstream"]（收尾者读黑板）"""
+    import types
+
+    from xiao_wen import graph_builder as gb
+    from xiao_wen.agents import itinerary_agent
+
+    collected = []
+
+    def fake_collect(user_input, session_id):
+        collected.append(user_input)
+        return {"policy": "一线城市住宿不超过500", "history_ref": "上次住全季"}
+
+    monkeypatch.setattr(itinerary_agent, "collect_upstream", fake_collect)
+
+    seen = {}
+
+    def fake_run(state):
+        seen.update(state)
+        return {"answer": "已为你规划行程"}
+
+    monkeypatch.setattr(
+        gb,
+        "intent",
+        types.SimpleNamespace(
+            classify=lambda recent, user_input: types.SimpleNamespace(intent="行程规划", reason="t", subtasks=[]),
+            set_intents=lambda manifest: None,
+        ),
+    )
+    monkeypatch.setattr(gb, "load_agent", lambda name: types.SimpleNamespace(run=fake_run))
+
+    app = gb.build_supervisor_graph(parallel=False)
+    out = app.invoke({"user_input": "去北京开会", "recent": "用户: 你好", "messages": [], "subtasks": []})
+    assert collected == ["去北京开会"], "collect 节点应执行一次"
+    assert seen.get("upstream") == {"policy": "一线城市住宿不超过500", "history_ref": "上次住全季"}
+    assert out["answer"] == "已为你规划行程"
+
+
+def test_invoke_without_trip_skips_collect(monkeypatch):
+    """不含行程规划 → collect 节点不执行（upstream 不写，原路径不变）"""
+    import types
+
+    from xiao_wen import graph_builder as gb
+    from xiao_wen.agents import itinerary_agent
+
+    collected = []
+
+    def fake_collect(user_input, session_id):
+        collected.append(user_input)
+        return {"policy": "x"}
+
+    monkeypatch.setattr(itinerary_agent, "collect_upstream", fake_collect)
+    monkeypatch.setattr(
+        gb,
+        "intent",
+        types.SimpleNamespace(
+            classify=lambda recent, user_input: types.SimpleNamespace(intent="知识问答", reason="t", subtasks=[]),
+            set_intents=lambda manifest: None,
+        ),
+    )
+    monkeypatch.setattr(gb, "load_agent", lambda name: types.SimpleNamespace(run=lambda s: {"answer": "标准如下"}))
+
+    app = gb.build_supervisor_graph(parallel=False)
+    out = app.invoke({"user_input": "住宿标准是什么", "recent": "用户: 你好", "messages": [], "subtasks": []})
+    assert collected == [], "无行程规划不应触发 collect"
+    assert out["answer"] == "标准如下"
+
+
 def test_merge_picks_first_nonempty_plan():
     """并行 merge：多路结果中取第一个非空 plan（主导意图优先，其余分支无 plan）"""
     plan = {"summary": "北京出差", "days": [], "reasons": []}

@@ -46,12 +46,13 @@ def collect_upstream(user_input: str, session_id: str) -> dict:
 
 
 def run(state) -> dict:
-    """collect-then-compose：先收集上游（政策/历史参考），再综合生成行程。
+    """收尾者（collect-then-compose 的 compose 阶段）：读图级 collect 节点写入的黑板 upstream，
+    综合生成行程。上游缺失（直接调用/旧路径）→ upstream 空，槽位降级「无」，行为兼容。
 
     两阶段管线（要素提取→行程生成）收口于 trip_planner.plan（ADR-0003）；
     生成成功后附加目的地天气提醒。
     """
-    upstream = collect_upstream(state["user_input"], state.get("session_id", "default"))
+    upstream = state.get("upstream") or {}
     r = _trip_plan(
         state["user_input"],
         session_id=state.get("session_id", "default"),

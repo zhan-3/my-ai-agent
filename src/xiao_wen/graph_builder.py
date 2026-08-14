@@ -46,6 +46,12 @@ def _first_history(a: dict | None, b: dict | None) -> dict | None:
     return a if a is not None else b
 
 
+def _first_upstream(a: dict | None, b: dict | None) -> dict | None:
+    """upstream 归约器：collect 节点写入（图上只跑一次，无并发写）。
+    注意：dict 无 None 联合时缺失字段 current 为 {}（非 None），须用真值判断而非 is not None。"""
+    return a if a else b
+
+
 class State(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     user_input: str
@@ -61,6 +67,7 @@ class State(TypedDict):
     stats: NotRequired[Annotated[dict | None, _first_stats]]  # 差旅画像（差旅统计 Agent 产出；非统计为 None）
     history: NotRequired[Annotated[dict | None, _first_history]]  # 历史查询结构化结果（非历史查询为 None）
     clarify: NotRequired[bool]  # 消歧门：命中歧义时 True，answer=反问问题，路由短路到 END
+    upstream: NotRequired[Annotated[dict, _first_upstream]]  # collect-then-compose：collect 节点写入，行程 agent 读取
 
 
 # ---- 分类节点（唯一实现：恒返回 subtasks，由 parallel 参数决定是否使用） ----
@@ -155,6 +162,7 @@ def dispatch(state):
             "recent": state.get("recent", ""),
             "session_id": state.get("session_id", "default"),
             "messages": state.get("messages", []),
+            "upstream": state.get("upstream", {}),  # collect-then-compose：行程分支读黑板
         }
         sends: list[Send] = []
         primary = state["intent"]
@@ -184,6 +192,25 @@ def route_after_gate_serial(state):
     return state["intent"]
 
 
+def _needs_collect(state) -> bool:
+    """collect-then-compose 触发条件：主导意图或任一子任务为行程规划"""
+    if state.get("intent") == "行程规划":
+        return True
+    return any(s.intent == "行程规划" for s in state.get("subtasks", []))
+
+
+def _route_via_collect(state):
+    """gate 后条件边（collect-then-compose）：
+    消歧短路优先（歧义反问时不需要收集）→ 含行程规划先过 collect_upstream → 否则原路由不变。"""
+    if state.get("clarify"):
+        return "__clarify_end__"
+    if _needs_collect(state):
+        return "collect_upstream"
+    if isinstance(state.get("subtasks"), list) and state["subtasks"]:
+        return dispatch(state)
+    return state["intent"]
+
+
 def merge(state):
     parts = state["collected"]
     lines = [f"⚡ 同时为你处理了 {len(parts)} 个请求：", ""]
@@ -201,7 +228,11 @@ def merge(state):
 
 
 # ---- 指纹缓存（热插拔：manifest 变化自动重建） ----
-_cache: dict[tuple[tuple[str, ...], bool], CompiledStateGraph] = {}
+# STRUCT_VERSION：图结构版本（collect-then-compose 等结构性改动不改变 manifest 指纹，
+# 必须手动升版本让缓存失效重建——否则热插拔复用旧图，结构改动不生效）
+STRUCT_VERSION = 2
+
+_cache: dict[tuple[tuple[str, ...], bool, int], CompiledStateGraph] = {}
 
 
 def build_supervisor_graph(parallel: bool = False, recorder=None) -> CompiledStateGraph:
@@ -211,7 +242,7 @@ def build_supervisor_graph(parallel: bool = False, recorder=None) -> CompiledSta
     """
     manifest = discover()
     fingerprint = tuple(m["INTENT"] for m in manifest)
-    key = (fingerprint, parallel)
+    key = (fingerprint, parallel, STRUCT_VERSION)
     if recorder is not None:
         return _assemble(manifest, parallel, recorder)
     if key in _cache:
@@ -223,9 +254,24 @@ def build_supervisor_graph(parallel: bool = False, recorder=None) -> CompiledSta
     return app
 
 
+def _make_collect():
+    """collect-then-compose 收集节点：确定性收集上游（政策/历史/偏好）写入黑板 upstream。
+
+    模块属性访问（itinerary_agent.collect_upstream）便于测试 monkeypatch。
+    """
+
+    def node(state):
+        from xiao_wen.agents import itinerary_agent
+
+        return {"upstream": itinerary_agent.collect_upstream(state["user_input"], state.get("session_id", "default"))}
+
+    return node
+
+
 def _assemble(manifest: list[dict], parallel: bool, recorder=None) -> CompiledStateGraph:
     graph = StateGraph(State)
     graph.add_node("classify_intent", _make_classify(recorder))
+    graph.add_node("collect_upstream", _make_collect())
     routes: dict[str, str] = {}
     for m in manifest:
         graph.add_node(m["INTENT"], _make_node(m["INTENT"], recorder))
@@ -242,12 +288,22 @@ def _assemble(manifest: list[dict], parallel: bool, recorder=None) -> CompiledSt
     if parallel:
         # dict[str, str] 是 dict[Hashable, str] 的合法子集（str 即 Hashable），dict 泛型不变导致需要豁免
         # {**routes, "__clarify_end__": END} 的字面量类型推断为 dict[str, str | object] → 一并豁免
-        graph.add_conditional_edges("clarify_gate", route_after_gate, {**routes, "__clarify_end__": END})  # type: ignore[arg-type, dict-item]
+        graph.add_conditional_edges(
+            "clarify_gate",
+            _route_via_collect,
+            {**routes, "collect_upstream": "collect_upstream", "__clarify_end__": END},  # type: ignore[dict-item]
+        )  # type: ignore[arg-type]
+        graph.add_conditional_edges("collect_upstream", route_after_gate, {**routes, "__clarify_end__": END})  # type: ignore[arg-type, dict-item]
         for name in routes:
             graph.add_edge(f"p_{name}", "merge")
         graph.add_edge("merge", END)
     else:
-        graph.add_conditional_edges("clarify_gate", route_after_gate_serial, {**routes, "__clarify_end__": END})  # type: ignore[arg-type, dict-item]
+        graph.add_conditional_edges(
+            "clarify_gate",
+            _route_via_collect,
+            {**routes, "collect_upstream": "collect_upstream", "__clarify_end__": END},  # type: ignore[dict-item]
+        )  # type: ignore[arg-type]
+        graph.add_conditional_edges("collect_upstream", route_after_gate_serial, {**routes, "__clarify_end__": END})  # type: ignore[arg-type, dict-item]
     for name in routes:
         graph.add_edge(name, END)
     return graph.compile()
