@@ -17,3 +17,5 @@ Single-context layout: one `CONTEXT.md` and `docs/adr/` at the repo root. See `d
 Before committing code changes, run the gate checks in this order (fast first):
 `uv run ruff check src tests plugins scripts` → `uv run ruff format --check src tests scripts` → `uv run pytest -m "not integration"` → `uv run mypy src/xiao_wen tests scripts`.
 Unit tests need Postgres (single memory backend): `docker-compose up -d postgres` + `export POSTGRES_TEST_URL=postgresql://postgres:123456@localhost:5432/xiao_wen_test`.
+
+本地一键跑法：`scripts/gate.sh`（同序四步）；`--integration`/`--golden`/`--full` 追加集成测试与黄金集回归（真 LLM，需 .env 密钥）。
