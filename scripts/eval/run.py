@@ -19,6 +19,7 @@ from xiao_wen.intent import _intents, classify
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 GOLDEN = ROOT / "tests" / "data" / "intent_golden.jsonl"
+MATRIX = ROOT / "tests" / "data" / "matrix_golden.jsonl"
 OUT_DIR = ROOT / "eval_runs" / "latest"
 
 
@@ -130,7 +131,12 @@ def _run_judge(args) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="晓问评测 harness（规则/结构层 + judge 层）")
-    ap.add_argument("--set", choices=["intent"], default="intent", help="评测集（本期仅 intent）")
+    ap.add_argument(
+        "--set",
+        choices=["intent", "matrix"],
+        default="intent",
+        help="评测集：intent（黄金集）/ matrix（要素矩阵 243 组合）",
+    )
     ap.add_argument("--threshold", type=float, default=1.0, help="通过率下限（0-1），低于则退出码 1")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument(
@@ -140,14 +146,15 @@ def main() -> int:
     ap.add_argument("--judge-sample", type=int, default=8, help="judge 评测样本上限（默认 8，控制 token）")
     args = ap.parse_args()
 
-    if args.set != "intent":
-        print(f"评测集 {args.set!r} 尚未实现（本期仅 intent）", file=sys.stderr)
+    if args.set != "intent" and args.set != "matrix":
+        print(f"评测集 {args.set!r} 尚未实现（本期仅 intent/matrix）", file=sys.stderr)
         return 2
 
     if args.with_judge:
         return _run_judge(args)
 
-    cases = [json.loads(line) for line in GOLDEN.read_text().splitlines() if line.strip()]
+    data_path = GOLDEN if args.set == "intent" else MATRIX
+    cases = [json.loads(line) for line in data_path.read_text().splitlines() if line.strip()]
     results, failures = _collect(cases, args.verbose)
     summary = metrics.summarize(results, _intent_order(), threshold=args.threshold)
 
