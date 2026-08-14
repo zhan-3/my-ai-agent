@@ -696,3 +696,71 @@ def test_chat_falls_back_on_empty_answer(monkeypatch):
     assert r.answer == sess._FALLBACK_ANSWER
     msgs = store.get_recent_messages(6)
     assert msgs[-1]["content"] == sess._FALLBACK_ANSWER
+
+
+def test_stream_chat_error_midstream_yields_error_and_skips_writeback():
+    """SSE 错误路径：流中途炸（已发部分阶段事件后异常）→ error 收尾，不中断、无 done、不写回记忆"""
+    import asyncio
+
+    from xiao_wen.session import stream_chat
+
+    class BoomMidGraph:
+        async def astream_events(self, state, **kwargs):
+            yield {
+                "event": "on_chain_start",
+                "name": "classify_intent",
+                "metadata": {"langgraph_node": "classify_intent"},
+                "data": {},
+            }
+            yield {
+                "event": "on_chain_start",
+                "name": "行程规划",
+                "metadata": {"langgraph_node": "行程规划"},
+                "data": {},
+            }
+            raise RuntimeError("LLM 熔断")
+
+    out = []
+
+    async def run():
+        async for ev in stream_chat("规划行程", graph=BoomMidGraph()):
+            out.append(ev)
+
+    asyncio.run(run())
+    assert out[0]["type"] == "stage"
+    assert out[-1]["type"] == "error" and "稍后再试" in out[-1]["message"]
+    assert all(e["type"] != "done" for e in out), "中途异常不应产出 done"
+    assert memory_store.get_recent_messages(6) == [], "异常时不写回记忆"
+
+
+def test_stream_chat_empty_state_yields_error_not_done():
+    """SSE 防御分支：图跑完但没产出任何 state → error 事件（而非假 done 兜底）"""
+    import asyncio
+
+    from xiao_wen.session import stream_chat
+
+    class EmptyGraph:
+        async def astream_events(self, state, **kwargs):
+            yield {
+                "event": "on_chain_start",
+                "name": "知识问答",
+                "metadata": {"langgraph_node": "知识问答"},
+                "data": {},
+            }
+            yield {
+                "event": "on_chain_end",
+                "name": "知识问答",
+                "metadata": {"langgraph_node": "知识问答"},
+                "data": {"output": None},
+            }
+
+    out = []
+
+    async def run():
+        async for ev in stream_chat("住宿标准", graph=EmptyGraph()):
+            out.append(ev)
+
+    asyncio.run(run())
+    assert out[-1]["type"] == "error"
+    assert all(e["type"] != "done" for e in out)
+    assert memory_store.get_recent_messages(6) == []

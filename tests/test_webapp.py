@@ -229,3 +229,23 @@ class TestFrontendServing:
         r = client.get("/")
         assert r.status_code == 200
         assert "<div id=root>晓问 React 前端</div>" in r.text
+
+
+class TestChatStreamErrorPath:
+    """SSE 错误路径：端点防御层（stream_chat 未消化异常 → error 帧，客户端永不悬挂）"""
+
+    def test_chat_stream_midstream_error_still_sse_error_frame(self, client, monkeypatch):
+        async def boom_stream(text, session_id):
+            yield {"type": "stage", "status": "start"}
+            raise RuntimeError("stream 内部炸了")
+
+        monkeypatch.setattr(webapp, "stream_chat", boom_stream)
+        token = client.post("/api/auth/register", json={"username": "zhang", "password": "pass123"}).json()["token"]
+        r = client.post(
+            "/api/chat/stream",
+            json={"user_input": "你好"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        assert '"type": "error"' in r.text and "稍后再试" in r.text
+        assert '"type": "done"' not in r.text
