@@ -13,10 +13,8 @@ from xiao_wen import auth, webapp
 
 
 @pytest.fixture()
-def client(monkeypatch):
-    # 隔离：用户存储 + 记忆后端都用 InMemory（测试注入，复用同一实例保证注册/登录可见）
-    auth.set_user_store(auth.InMemoryUserStore())
-    monkeypatch.delenv("POSTGRES_URL", raising=False)
+def client():
+    # 隔离：用户存储走真实 Postgres（conftest autouse 已清 users 表 + 统一注入测试库 URL）
     auth._user_store = None
     yield TestClient(webapp.app)
     auth._user_store = None

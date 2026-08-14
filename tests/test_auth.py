@@ -1,14 +1,26 @@
-"""认证模块测试（纯逻辑，无 LLM 无 DB）——切片① 红绿
+"""认证模块测试（纯逻辑 + 真实 Postgres users 表）
 
 决策集（grilling 默认 + bcrypt）：
-- JWT 无状态认证（pyjwt，HS256）；用户存储 Postgres users 表 / InMemory 演示兜底
+- JWT 无状态认证（pyjwt，HS256）；用户存储唯一后端 Postgres users 表
 - bcrypt 密码哈希（用户指定）；注册即登录（返回 token）
 - 认证后会话维度 = 用户身份（webapp 层强制，见切片②）
 """
 
+import os
+
 import jwt
+import pytest
 
 from xiao_wen import auth
+from xiao_wen.memory_pg import PostgresUserStore
+
+
+def _fresh_store() -> PostgresUserStore:
+    """真实 Postgres 用户存储（测试库；conftest 已清 users 表，这里再清一次保险）"""
+    url = os.environ.get("POSTGRES_TEST_URL") or os.environ["POSTGRES_URL"]
+    s = PostgresUserStore(url)
+    s.clear_all()
+    return s
 
 
 class TestPasswordHashing:
@@ -41,68 +53,67 @@ class TestToken:
 
 
 class TestRegisterLogin:
-    def test_register_creates_user_and_returns_token(self, monkeypatch):
-        store = auth.InMemoryUserStore()
-        monkeypatch.setattr(auth, "_get_user_store", lambda: store)
-        token = auth.register("zhang", "pass123")
-        assert token is not None
-        # token 解出用户名
-        assert auth.decode_token(token, auth.JWT_SECRET) == "zhang"
-        # 存储的是哈希不是明文
-        rec = store.get_user("zhang")
-        assert rec is not None and rec["password_hash"] != "pass123"
+    def test_register_creates_user_and_returns_token(self):
+        store = _fresh_store()
+        auth.set_user_store(store)
+        try:
+            token = auth.register("zhang", "pass123")
+            assert token is not None
+            # token 解出用户名
+            assert auth.decode_token(token, auth.JWT_SECRET) == "zhang"
+            # 存储的是哈希不是明文
+            rec = store.get_user("zhang")
+            assert rec is not None and rec["password_hash"] != "pass123"
+        finally:
+            auth._user_store = None
 
-    def test_register_duplicate_returns_none(self, monkeypatch):
-        store = auth.InMemoryUserStore()
-        monkeypatch.setattr(auth, "_get_user_store", lambda: store)
-        assert auth.register("zhang", "pass123") is not None
-        assert auth.register("zhang", "other") is None
+    def test_register_duplicate_returns_none(self):
+        store = _fresh_store()
+        auth.set_user_store(store)
+        try:
+            assert auth.register("zhang", "pass123") is not None
+            assert auth.register("zhang", "other") is None
+        finally:
+            auth._user_store = None
 
-    def test_login_success_and_failures(self, monkeypatch):
-        store = auth.InMemoryUserStore()
-        monkeypatch.setattr(auth, "_get_user_store", lambda: store)
-        auth.register("zhang", "pass123")
-        assert auth.login("zhang", "pass123") is not None
-        assert auth.login("zhang", "wrong") is None
-        assert auth.login("nobody", "pass123") is None
+    def test_login_success_and_failures(self):
+        store = _fresh_store()
+        auth.set_user_store(store)
+        try:
+            auth.register("zhang", "pass123")
+            assert auth.login("zhang", "pass123") is not None
+            assert auth.login("zhang", "wrong") is None
+            assert auth.login("nobody", "pass123") is None
+        finally:
+            auth._user_store = None
 
-    def test_authenticate_uses_current_secret(self, monkeypatch):
-        store = auth.InMemoryUserStore()
-        monkeypatch.setattr(auth, "_get_user_store", lambda: store)
-        auth.register("zhang", "pass123")
-        token = auth.login("zhang", "pass123")
-        assert token is not None
-        assert auth.authenticate(token) == "zhang"
-        assert auth.authenticate("junk") is None
+    def test_authenticate_uses_current_secret(self):
+        store = _fresh_store()
+        auth.set_user_store(store)
+        try:
+            auth.register("zhang", "pass123")
+            token = auth.login("zhang", "pass123")
+            assert token is not None
+            assert auth.authenticate(token) == "zhang"
+            assert auth.authenticate("junk") is None
+        finally:
+            auth._user_store = None
 
 
-class TestUserStoreDispatch:
-    def test_env_postgres_dispatches_pg_store(self, monkeypatch):
-        import importlib
-
-        mpg = importlib.import_module("xiao_wen.memory_pg")
-        calls = []
-
-        class FakePG:
-            def __init__(self, url: str):
-                calls.append(url)
-
-        monkeypatch.setattr(mpg, "PostgresUserStore", FakePG)
-        monkeypatch.setenv("POSTGRES_URL", "postgresql://postgres:123456@localhost:5432/xiao_wen")
-        auth._user_store = None
-        auth._get_user_store()
-        assert calls == ["postgresql://postgres:123456@localhost:5432/xiao_wen"]
-        auth._user_store = None
-
-    def test_no_env_uses_inmemory(self, monkeypatch):
+class TestUserStoreConstraints:
+    def test_get_user_store_requires_postgres_url(self, monkeypatch):
+        """未配 POSTGRES_URL → 明确报错（无内存兜底）"""
         monkeypatch.delenv("POSTGRES_URL", raising=False)
         auth._user_store = None
-        assert isinstance(auth._get_user_store(), auth.InMemoryUserStore)
-        auth._user_store = None
+        try:
+            with pytest.raises(RuntimeError, match="POSTGRES_URL"):
+                auth._get_user_store()
+        finally:
+            auth._user_store = None
 
 
-def test_inmemory_user_store_crud():
-    s = auth.InMemoryUserStore()
+def test_postgres_user_store_crud():
+    s = _fresh_store()
     assert s.register("u1", "h1") is not None
     assert s.register("u1", "h2") is None  # 用户名唯一
     rec = s.get_user("u1")

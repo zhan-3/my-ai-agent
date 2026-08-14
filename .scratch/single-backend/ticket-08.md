@@ -27,3 +27,12 @@ messages/preferences/itineraries 三张表。
 - test_memory_backend：协议/隔离改打真实 PG + 缺 URL 报错测试；stability 删内存分支（缺配 → ⚠️）
 - 顺带修 docker-compose.yml：postgres 18+ 要求卷挂 /var/lib/postgresql（旧布局拒启）
 - auth 的 InMemoryUserStore 同款兜底保留（未在本次范围，待用户决定）
+
+## 追加（彻底单后端）
+
+- auth.py：删 InMemoryUserStore + env 演示兜底；用户存储唯一后端 Postgres（缺 URL 明确报错）
+- conftest：autouse 同时清 users 表 + monkeypatch.setenv POSTGRES_URL 统一指向测试库
+  （memory/auth 懒构造都走它）
+- test_auth 改打真实 PG users 表（注册唯一/登录/校验 + 缺 URL 报错）；test_webapp client fixture
+  去掉 InMemory 注入
+- 门禁全绿（ruff/pytest 190/mypy），黄金 100%

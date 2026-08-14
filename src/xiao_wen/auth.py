@@ -1,11 +1,11 @@
-"""认证模块：JWT 无状态认证（pyjwt）+ 用户存储（Postgres users 表 / InMemory 演示兜底）
+"""认证模块：JWT 无状态认证（pyjwt）+ 用户存储（唯一后端 Postgres users 表）
 
 - 决策集（grilling 定案）：JWT（不选 Session Cookie/OAuth）+ bcrypt 密码哈希
-  + 用户存储随记忆后端同 env 分派（POSTGRES_URL → Postgres users 表，无 → InMemory 演示）
+  + 用户存储唯一后端 Postgres（memory_pg.PostgresUserStore，POSTGRES_URL 必配）
 - 会话隔离升级（ADR-0007）：认证后 webapp 层把 JWT 解出的用户名作为会话维度
   （session_id = user_id），客户端不再自填 session_id——「会话隔离」升级为「用户隔离」
 - JWT_SECRET：环境变量注入；未设时用开发默认值（生产必须显式设置，见 README）
-- 依赖懒导入：psycopg 仅在 POSTGRES_URL 分派路径触发（保持演示零强制 PG 依赖）
+- 依赖懒导入：psycopg 仅在 PostgresUserStore 构造路径触发
 """
 
 import os
@@ -29,44 +29,29 @@ class UserStore(Protocol):
     def get_user(self, username: str) -> dict | None: ...
 
 
-class InMemoryUserStore:
-    """进程内存用户存储（无 POSTGRES_URL 时的演示/测试兜底，重启即失）"""
-
-    def __init__(self) -> None:
-        self._users: dict[str, dict] = {}
-
-    def register(self, username: str, password_hash: str) -> dict | None:
-        if username in self._users:
-            return None
-        rec = {"username": username, "password_hash": password_hash}
-        self._users[username] = rec
-        return rec
-
-    def get_user(self, username: str) -> dict | None:
-        return self._users.get(username)
-
-
-# ---- 模块级当前用户存储（测试注入；生产按 env 分派，与 memory._get_backend 同款模式） ----
+# ---- 模块级当前用户存储（测试注入 set_user_store；生产懒构造 Postgres） ----
 _user_store: UserStore | None = None
 
 
 def set_user_store(store: UserStore) -> None:
-    """注入用户存储（测试注入 fresh InMemoryUserStore 隔离）"""
+    """注入用户存储（测试注入 PostgresUserStore(test_url) 隔离）"""
     global _user_store  # noqa: PLW0603 —— 注入是模块级状态的刻意设计
     _user_store = store
 
 
 def _get_user_store() -> UserStore:
-    """惰性分派：POSTGRES_URL 时 PostgresUserStore（产品持久化），否则 InMemoryUserStore（演示）"""
+    """懒构造产品后端：Postgres users 表（唯一后端）。未配 POSTGRES_URL 直接报错。"""
     global _user_store  # noqa: PLW0603
     if _user_store is None:
         url = os.environ.get("POSTGRES_URL")
-        if url:
-            from xiao_wen.memory_pg import PostgresUserStore  # 懒导入：pg 依赖可选
+        if not url:
+            raise RuntimeError(
+                "用户存储需要 POSTGRES_URL（唯一后端 Postgres）："
+                "docker compose up -d postgres && export POSTGRES_URL=..."
+            )
+        from xiao_wen.memory_pg import PostgresUserStore  # 懒导入：pg 依赖可选
 
-            _user_store = PostgresUserStore(url)
-        else:
-            _user_store = InMemoryUserStore()
+        _user_store = PostgresUserStore(url)
     return _user_store
 
 
@@ -128,11 +113,3 @@ def login(username: str, password: str) -> str | None:
 def authenticate(token: str) -> str | None:
     """校验请求携带的 token → 返回用户名（None = 未登录/失效）"""
     return decode_token(token)
-
-
-if __name__ == "__main__":
-    # 自检：注册即登录 → 校验 → 登录
-    set_user_store(InMemoryUserStore())
-    t = register("自检用户", "pass123") or ""
-    print("注册登录 token:", t[:20], "…")
-    print("authenticate:", authenticate(t or ""))
