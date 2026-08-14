@@ -24,6 +24,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send
 
 from xiao_wen import disambiguation, intent
+from xiao_wen.eval.trace import AGENT_OUT_KEYS
 from xiao_wen.intent import SubTask
 from xiao_wen.plugin_registry import discover, load_agent
 
@@ -78,10 +79,38 @@ def clarify_gate(state):
     return {"clarify": False}
 
 
-# ---- 懒加载代理节点（派发到该意图时才加载子 Agent 模块） ----
-def _make_node(intent_name: str):
+def _make_classify(recorder=None):
+    """classify_intent 的 trace 包装：评测 recorder 注入时记录 classify 事件（subtasks 序列化）。"""
+
     def node(state):
-        return load_agent(intent_name).run(state)
+        out = classify_intent(state)
+        if recorder is not None:
+            recorder.record(
+                {
+                    "type": "classify",
+                    "intent": out["intent"],
+                    "reason": out["reason"],
+                    "subtasks": [s.intent for s in out["subtasks"]],
+                }
+            )
+        return out
+
+    return node
+
+
+# ---- 懒加载代理节点（派发到该意图时才加载子 Agent 模块） ----
+def _make_node(intent_name: str, recorder=None):
+    def node(state):
+        out = load_agent(intent_name).run(state)
+        if recorder is not None and isinstance(out, dict):
+            recorder.record(
+                {
+                    "type": "agent",
+                    "agent": intent_name,
+                    "out": {k: out.get(k) for k in AGENT_OUT_KEYS if k in out},
+                }
+            )
+        return out
 
     return node
 
@@ -175,11 +204,16 @@ def merge(state):
 _cache: dict[tuple[tuple[str, ...], bool], CompiledStateGraph] = {}
 
 
-def build_supervisor_graph(parallel: bool = False) -> CompiledStateGraph:
-    """从当前注册表 manifest 组装主管图；指纹缓存保证热插拔运行时生效。"""
+def build_supervisor_graph(parallel: bool = False, recorder=None) -> CompiledStateGraph:
+    """从当前注册表 manifest 组装主管图；指纹缓存保证热插拔运行时生效。
+
+    recorder（评测 trace）：运行时对象，带它时绕过指纹缓存直连组装（不污染生产缓存）。
+    """
     manifest = discover()
     fingerprint = tuple(m["INTENT"] for m in manifest)
     key = (fingerprint, parallel)
+    if recorder is not None:
+        return _assemble(manifest, parallel, recorder)
     if key in _cache:
         return _cache[key]
     _cache.clear()  # manifest 变了：旧指纹的图都过期，一次只留最新一代
@@ -189,15 +223,15 @@ def build_supervisor_graph(parallel: bool = False) -> CompiledStateGraph:
     return app
 
 
-def _assemble(manifest: list[dict], parallel: bool) -> CompiledStateGraph:
+def _assemble(manifest: list[dict], parallel: bool, recorder=None) -> CompiledStateGraph:
     graph = StateGraph(State)
-    graph.add_node(classify_intent)
+    graph.add_node("classify_intent", _make_classify(recorder))
     routes: dict[str, str] = {}
     for m in manifest:
-        graph.add_node(m["INTENT"], _make_node(m["INTENT"]))
+        graph.add_node(m["INTENT"], _make_node(m["INTENT"], recorder))
         routes[m["INTENT"]] = m["INTENT"]
         if parallel:
-            graph.add_node(f"p_{m['INTENT']}", make_parallel(_make_node(m["INTENT"])))
+            graph.add_node(f"p_{m['INTENT']}", make_parallel(_make_node(m["INTENT"], recorder)))
 
     if parallel:
         graph.add_node(merge)

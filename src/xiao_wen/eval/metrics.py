@@ -9,8 +9,49 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Any
+
+# ---- 结构层校验器（行程集 itinerary.jsonl 用；纯函数，可单测） ----
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DAY_FIELDS = ("date", "transport", "hotel", "activities", "notes")
+
+
+def check_trip_plan(plan: dict | None, *, expected_days: int | None = None) -> list[str]:
+    """结构层校验：返回问题列表（空 = 通过）。
+
+    - plan 为 None（契约降级）→ plan 缺失
+    - summary 非空、days 非空列表
+    - expected_days 给定时 days 数量必须相等
+    - 每 day 字段齐全（contract.TripDay 五字段）；activities 必须是 list
+    - 日期必须 YYYY-MM-DD 可解析，除非 plan 标记 date_is_vague=True（模糊日期跳过格式）
+    """
+    problems: list[str] = []
+    if plan is None:
+        return ["plan 缺失（契约降级为 None）"]
+    if not (plan.get("summary") or "").strip():
+        problems.append("summary 为空")
+    days = plan.get("days")
+    if not isinstance(days, list) or not days:
+        problems.append("days 为空")
+        return problems
+    if expected_days is not None and len(days) != expected_days:
+        problems.append(f"days 数量 {len(days)} != 期望 {expected_days}")
+    vague = bool(plan.get("date_is_vague"))
+    for i, d in enumerate(days):
+        if not isinstance(d, dict):
+            problems.append(f"day[{i}] 不是对象")
+            continue
+        missing = [k for k in _DAY_FIELDS if k not in d]
+        if missing:
+            problems.append(f"day[{i}] 缺字段 {missing}")
+        if not vague and not _DATE_RE.match(str(d.get("date", ""))):
+            problems.append(f"day[{i}] 日期不可解析: {d.get('date')!r}")
+        if not isinstance(d.get("activities"), list):
+            problems.append(f"day[{i}] activities 不是列表")
+    return problems
 
 
 def confusion_matrix(results: list[dict], intents: list[str]) -> dict[str, dict[str, int]]:

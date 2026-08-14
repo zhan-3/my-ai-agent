@@ -28,12 +28,13 @@ class ChatResult:
 _FALLBACK_ANSWER = "（暂无回复，请换个说法再试一次）"
 
 
-def chat(text: str, session_id: str = "default", *, graph=None, store=None) -> ChatResult:
+def chat(text: str, session_id: str = "default", *, graph=None, store=None, recorder=None) -> ChatResult:
     """一轮对话闭环。
 
     - graph：默认调度图（懒导入 graph_builder，走指纹缓存；多意图并行走 Send fan-out）
     - store：默认 xiao_wen.memory（读 recent / 写回两轮）；可注入假存储
     - session_id：会话维度（webapp 层 = 用户名），记忆按此隔离（ADR-0006 / ADR-0007）
+    - recorder（评测 trace）：注入时在 recent/final/memory_write 三处记录事件；默认 None 零开销
     """
     if graph is None:
         from xiao_wen.graph_builder import build_supervisor_graph
@@ -43,6 +44,8 @@ def chat(text: str, session_id: str = "default", *, graph=None, store=None) -> C
         store = memory
 
     recent = store.format_recent_messages(6, session_id=session_id)
+    if recorder is not None:
+        recorder.record({"type": "recent", "recent": recent})
     r = graph.invoke(
         {
             "messages": [("human", text)],
@@ -55,6 +58,19 @@ def chat(text: str, session_id: str = "default", *, graph=None, store=None) -> C
     raw = r.get("answer") if isinstance(r, dict) else getattr(r, "answer", "")
     answer = raw or _FALLBACK_ANSWER
     store.add_message("assistant", answer, session_id=session_id)
+    if recorder is not None:
+        recorder.record(
+            {
+                "type": "final",
+                "intent": r["intent"],
+                "reason": r["reason"],
+                "answer": answer,
+                "plan": r.get("plan"),
+                "stats": r.get("stats"),
+                "history": r.get("history"),
+            }
+        )
+        recorder.record({"type": "memory_write", "user": text, "assistant": answer})
     return ChatResult(
         answer=answer,
         intent=r["intent"],

@@ -23,3 +23,19 @@
 - 插桩用 `EVAL_TRACE` env 或显式 recorder 参数，默认关闭；`_make_node` 已是懒加载代理，包一层即可
 - trace 事件一行一个 JSON（jsonl），不嵌套大对象（每 agent 出参截断到可判定的字段：answer/plan 契约校验后）
 - 意图集直接受益：run.py 现有 `_collect` 逻辑迁移进新 sets 框架，行为不变
+
+## Answer
+
+已实现并验证（tdd：先写 7 个测试红 → 实现绿 → 门禁全绿）：
+
+- `src/xiao_wen/eval/trace.py`：Recorder（事件列表 + dump jsonl）+ `run_chat_with_trace`（构造带 recorder 的图交给 session.chat，返回 (ChatResult, events)）
+- `graph_builder.py`：`build_supervisor_graph(parallel, recorder)`——带 recorder 时绕过指纹缓存直连 `_assemble`（不污染生产缓存）；`_make_classify`/`_make_node` 包 recorder（classify 事件 subtasks 序列化为字符串列表；agent 事件只留白名单键 answer/plan/stats/history）
+- `session.py`：`chat(..., recorder=None)` 三处插桩（recent/final/memory_write），默认 None 零开销
+- `src/xiao_wen/eval/metrics.py`：+`check_trip_plan`（结构层校验器：plan 缺失/summary 空/days 数量/日期 YYYY-MM-DD/字段齐全/activities 列表；date_is_vague 跳过日期格式）
+- `src/xiao_wen/eval/runners.py`：`run_intent_set(cases, classify_fn, verbose)`（迁移 run.py 旧 _collect，classify_fn 可注入）
+- `scripts/eval/run.py`：_collect 改调 runners（行为不变）
+- 测试 `tests/test_eval_harness.py`（7 个）：完整事件链（假 classify/假 agent 不烧 LLM）、JSON 可序列化、dump jsonl、结构校验器正/反/模糊日期、runner 注入假 classifier
+
+验证：unit 全过 + ruff/format/mypy 全绿；黄金集 84 条仍 100% PASS；真 LLM 冒烟 `run_chat_with_trace("我规划的行程是什么")` 事件链完整（input→classify→agent→final）。
+
+Status: resolved

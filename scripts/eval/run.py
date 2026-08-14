@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from xiao_wen.eval import metrics
+from xiao_wen.eval.runners import run_intent_set
 from xiao_wen.intent import _intents, classify
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -26,33 +27,8 @@ def _intent_order() -> list[str]:
 
 
 def _collect(cases: list[dict], verbose: bool) -> tuple[list[dict], list[dict]]:
-    """批量 classify：返回 (results, raw_failures)。results 即 metrics 输入约定。"""
-    results = []
-    failures = []
-    for i, c in enumerate(cases):
-        r = classify(c.get("recent", ""), c["input"])
-        got_sub = [s.intent for s in r.subtasks]
-        result = {
-            "id": c.get("id", f"intent-{i:03d}"),
-            "input": c["input"],
-            "recent": c.get("recent", ""),
-            "expected": c["expected"],
-            "got": r.intent,
-            "reason": r.reason,
-            "subtasks_expected": c.get("subtasks", []),
-            "subtasks_got": got_sub,
-            "source": c.get("source", "human"),
-            "note": c.get("note", ""),
-        }
-        results.append(result)
-        if r.intent != c["expected"] or (c.get("subtasks") is not None and got_sub != c["subtasks"]):
-            failures.append(result)
-            if verbose:
-                print(
-                    f"  ✗ {c['input'][:34]!r} → {r.intent} (期望 {c['expected']})"
-                    f" | subtasks={got_sub} | {r.reason[:40]}"
-                )
-    return results, failures
+    """批量 classify：迁移到 xiao_wen.eval.runners.run_intent_set（此处保留薄包装）。"""
+    return run_intent_set(cases, classify_fn=classify, verbose=verbose)
 
 
 def _write_report(summary: dict, failures: list[dict]) -> Path:
