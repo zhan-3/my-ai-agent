@@ -39,8 +39,10 @@ _PROMPT = ChatPromptTemplate.from_messages(
         (
             "system",
             "你是评测样本生成器。给定一条种子用户请求（含其意图标签），按指定变异方向"
-            "生成 1 条语义等价但表达不同的新请求。只输出 JSON 对象："
-            '{{"input": "新请求文本"}}，不要多余内容。',
+            "生成 1 条语义等价但表达不同的新请求。"
+            '输出 JSON 对象：{{"input": 新请求文本, "expected": 种子意图, '
+            '"subtasks": 意图列表（单意图为 []; 变体若含多个独立请求，主导意图（第一个）'
+            "必须等于 expected，其余次意图列入）}}。不要多余内容。",
         ),
         (
             "human",
@@ -52,6 +54,19 @@ _PROMPT = ChatPromptTemplate.from_messages(
 
 class _Output(dict):
     pass
+
+
+# 意图词汇表（规则校验 subtasks 合法值）
+_INTENT_SET = {"行程规划", "偏好记录", "历史查询", "知识问答", "联网查询", "其他"}
+
+
+def _valid(line: dict, seed_expected: str) -> bool:
+    """生成后规则校验：主导意图必须继承种子、subtasks 合法、首元素=主导。"""
+    exp = line.get("expected", "")
+    subs = line.get("subtasks") or []
+    if exp != seed_expected:
+        return False
+    return not subs or (subs[0] == exp and all(s in _INTENT_SET for s in subs))
 
 
 def main() -> int:
@@ -72,14 +87,20 @@ def main() -> int:
         for vi, variant in enumerate(VARIANTS[: args.per_seed]):
             try:
                 out = llm.invoke(_PROMPT.format_messages(seed=seed["input"], intent=seed["expected"], variant=variant))
-                text = str(out.get("input", "")).strip()
+                line = {
+                    "input": str(out.get("input", "")).strip(),
+                    "expected": seed["expected"],
+                    "subtasks": list(out.get("subtasks") or []),
+                    "note": f"合成:{variant.split('：')[0]}",
+                }
             except Exception as e:
                 print(f"  [{si}.{vi + 1}] 生成失败: {e}", file=__import__("sys").stderr)
                 continue
-            if not text:
+            if not line["input"] or not _valid(line, seed["expected"]):
+                print(f"  [{si}.{vi + 1}] 校验不通过丢弃: {line['input'][:30]!r}")
                 continue
-            samples.append({"input": text, "expected": seed["expected"], "note": f"合成:{variant.split('：')[0]}"})
-            print(f"[{si}.{vi + 1}] {seed['expected']} | {text[:46]}")
+            samples.append(line)
+            print(f"[{si}.{vi + 1}] {seed['expected']} {line['subtasks']} | {line['input'][:40]}")
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(json.dumps(s, ensure_ascii=False) for s in samples) + "\n", encoding="utf-8")
