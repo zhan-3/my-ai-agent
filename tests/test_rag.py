@@ -104,10 +104,11 @@ def test_embed_retries_transient_failure(monkeypatch):
 
 
 class FakeCol:
-    """最小 chroma 集合替身：记录 delete/upsert，模拟 count/get"""
+    """最小 chroma 集合替身：记录 delete/upsert，模拟 count/get/metadata"""
 
-    def __init__(self, count: int):
+    def __init__(self, count: int, metadata: dict | None = None):
         self.n = count
+        self.metadata = metadata or {}
         self.deleted: list | None = None
         self.upserted: list = []
 
@@ -119,6 +120,9 @@ class FakeCol:
 
     def delete(self, ids=None):
         self.deleted = ids
+
+    def modify(self, metadata=None):
+        self.metadata = metadata or {}
 
     def upsert(self, **kw):
         self.upserted.append(kw)
@@ -139,12 +143,22 @@ def test_build_index_rebuilds_on_count_mismatch(monkeypatch):
 
 
 def test_build_index_reuses_on_count_match(monkeypatch):
-    """索引块数与当前一致 → 直接复用，不删除不重建"""
-    fake = FakeCol(count=2)
+    """索引块数与当前一致**且模型版本一致** → 直接复用，不删除不重建"""
+    fake = FakeCol(count=2, metadata={"model": rag.EMB_MODEL})
     monkeypatch.setattr(rag, "get_collection", lambda: fake)
     monkeypatch.setattr(rag, "embed_texts", _fake_embeddings)
     rag.build_index([("a", "x" * 50)] * 2)
-    assert fake.deleted is None and not fake.upserted, "块数一致应复用"
+    assert fake.deleted is None and not fake.upserted, "块数与模型一致应复用"
+
+
+def test_build_index_rebuilds_on_model_change(monkeypatch):
+    """换 embedding 模型（维度相同但向量空间不同）→ 即使块数一致也必须重建"""
+    fake = FakeCol(count=2, metadata={"model": "text-embedding-v3"})  # 旧索引：v3
+    monkeypatch.setattr(rag, "get_collection", lambda: fake)
+    monkeypatch.setattr(rag, "embed_texts", _fake_embeddings)
+    rag.build_index([("a", "x" * 50)] * 2)
+    assert fake.deleted is not None and len(fake.deleted) == 2, "模型变了应清空重建"
+    assert fake.upserted, "应重建新索引"
 
 
 # ---------------- 集成层：向量检索（真实 embedding，-m integration） ----------------

@@ -30,8 +30,9 @@ load_dotenv()
 # 项目根目录（单一来源：xiao_wen.ROOT，C7 收敛）
 DOCS_DIR = ROOT / "docs" / "documents"
 CHROMA_DIR = ROOT / "data" / "chroma"
-EMB_MODEL = "text-embedding-v3"
-EMB_DIM = 1024
+# embedding 模型可配置（.env 覆盖；换模型必须重建索引，见 build_index 模型版本检查）
+EMB_MODEL = os.environ.get("DASHSCOPE_EMB_MODEL", "text-embedding-v3")
+EMB_DIM = int(os.environ.get("DASHSCOPE_EMB_DIM", "1024"))
 BATCH = 10  # 每次 API 调用批量 embedding 条数
 COLLECTION = "travel_docs"
 
@@ -138,17 +139,23 @@ def get_collection():
 
 def build_index(chunks):
     """文档块 → dashscope embedding → 存入 chroma（磁盘持久化）
-    仅当块数与现有索引完全一致才复用，否则清空重建（防 stale 索引：
-    文档/切分变更后旧块残留导致检索错位）"""
+
+    索引版本化（防 stale）：块数一致**且** collection 元数据记录的模型名与当前一致才复用；
+    换 embedding 模型（如 v3→v4）后旧向量与新区块不在同一向量空间，即使维度相同也必须
+    清空重建——块数一致复用的旧逻辑防不了换模型，这里补上模型版本检查。
+    """
     col = get_collection()
+    meta = getattr(col, "metadata", None) or {}
     existing = col.count()
-    if existing == len(chunks):
-        print(f"（复用 chroma 持久化索引，{existing} 条）")
+    if existing == len(chunks) and meta.get("model") == EMB_MODEL:
+        print(f"（复用 chroma 持久化索引，{existing} 条 · {EMB_MODEL}）")
         return col
     if existing:
-        print(f"（索引过期：现有 {existing} 条 ≠ 当前 {len(chunks)} 块，清空重建…）")
+        print(
+            f"（索引过期：现有 {existing} 条 / 模型 {meta.get('model')} ≠ {EMB_MODEL}，清空重建…）"
+        )
         col.delete(ids=col.get()["ids"])
-    print(f"（构建 chroma 索引：{len(chunks)} 块 × embedding，首次 1-2 分钟…）")
+    print(f"（构建 chroma 索引：{len(chunks)} 块 × {EMB_MODEL}，首次 1-2 分钟…）")
     for i in range(0, len(chunks), BATCH):
         batch = chunks[i : i + BATCH]
         vecs = embed_texts([t for _, t in batch])
@@ -159,6 +166,7 @@ def build_index(chunks):
             metadatas=[{"source": stem} for stem, _ in batch],  # 元数据：可按来源过滤
         )
         time.sleep(0.2)
+    col.modify(metadata={"model": EMB_MODEL})  # 记录模型版本（不能带 hnsw:space，chromadb 拒绝改距离函数）
     return col
 
 
