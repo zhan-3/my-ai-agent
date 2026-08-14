@@ -28,7 +28,7 @@
 | 代码检查 | ruff（dev 依赖） | E/F/I/UP/B/SIM 等规则全绿，门禁一部分 |
 | 插件机制 | 子 Agent 注册中心 | 动态发现/懒加载/渐进式披露（内置+外部） |
 | 稳定性层 | 自研 + LangChain 内置 | 重试/超时/熔断/兜底/日志/健康检查 |
-| 测试框架 | pytest 9 + pytest.mark | 分层测试 132 个：单元 117（无 LLM，含 6 个 Postgres 条件跑）+ 集成 15（真实模型） |
+| 测试框架 | pytest 9 + pytest.mark | 分层测试 210 个：单元 190（无 LLM，全部跑真实 Postgres）+ 集成 20（真实模型） |
 
 ## 3. 系统架构
 
@@ -169,7 +169,7 @@ export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 │   ├── conftest.py              # 每测试注入 PostgresBackend 并清三张表（单后端）
 │   ├── test_memory.py           # 记忆：追加/覆盖/常驻城市/历史
 │   ├── test_memory_backend.py   # 后端协议：Postgres 直测 + 会话隔离矩阵 + 缺 URL 报错
-│   ├── test_memory_pg.py        # （Postgres，条件跑）真库读写 + session 隔离
+│   ├── test_memory_pg.py        # Postgres 真库读写 + session 隔离
 │   ├── test_auth.py             # 认证：bcrypt 哈希 / JWT 签验 / 注册登录 / env 分派
 │   ├── test_webapp.py           # webapp 端点：注册/登录/me + 聊天强制用户隔离
 │   ├── test_itinerary.py        # 行程：缺失检查 + 结果格式
@@ -337,7 +337,9 @@ FastAPI 复用 `xiao_wen.system` 完整系统零重写，原生 HTML/JS 前端�
 **已知问题（诚实声明）**
 - 行程中的车次/航班为模型生成的**参考方案**，非真实预订（演示未接票务系统）。
 - 天气/汇率/空气质量来自免费公开 API：① geocoding 子域名曾失效（已换 OSM Nominatim）；② API 不稳定（已加重试+降级，仍可能偶发失败）。
-- 演示模式（未设 `POSTGRES_URL`）记忆为进程内存，**重启即失**；持久化需设 `POSTGRES_URL`（本地 `docker compose up -d`）。
+- 记忆 = **Postgres（唯一后端）**：`docker compose up -d postgres` 起本地 Postgres，然后
+  export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
+  （记忆按用户隔离；未配 URL 记忆调用直接报错，无内存兜底）。
 - 认证按用户名隔离（JWT，ADR-0007），但**无角色授权**（无 admin/普通用户之分）——多角色需再接授权层。
 - 向量检索依赖外部 Embedding API，结果不可解释，复杂语义仍有边界。
 

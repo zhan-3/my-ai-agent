@@ -43,3 +43,10 @@ ADR-0006 落地了按 `session_id` 的记忆隔离，但 README 诚实声明了�
 - users 表只存 bcrypt 哈希；密码不落明文、日志不记密码。
 - 演示模式（无 POSTGRES_URL）：用户存 InMemory，重启即失（与记忆后端一致）。
 - 未来多角色授权、OAuth 接入、token 刷新均在 auth.py 内演进（单一接缝）。
+
+## 后续变更（2026-08 单后端化）
+
+- **InMemoryUserStore 删除**：用户存储唯一后端 Postgres users 表（`POSTGRES_URL`
+  必配，未配报错，与 ADR-0006 同源）。webapp 测试不再注入内存用户存储，走真实 PG
+  （conftest 每测试清 users 表）。
+- 无角色授权、无 token 刷新的现状不变（仍在 auth.py 单接缝内演进）。

@@ -41,3 +41,13 @@ session_id 参数只占位（ADR-0002 明说"会话隔离暂缓"）。多人/多
 - JSON 文件后端删除（load_memory/save_memory/MEMORY_PATH 及损坏兜底测试随删）。
 - 未来产品化若需"随时恢复"或"记忆语义检索"，可平滑加 checkpointer/PostgresStore
   （同一 Postgres，连接串/表结构兼容演进）。
+
+## 后续变更（2026-08 单后端化）
+
+- **InMemoryBackend 删除**：记忆唯一后端 Postgres（`POSTGRES_URL` 必配，未配直接报错，
+  不再静默内存兜底）。`MemoryBackend` 协议补 `health_check` 契约。
+- **测试策略升级为强制真实 PG**：conftest 每测试清三张表 + users 表并注入全新
+  PostgresBackend；优先 `POSTGRES_TEST_URL`（独立测试库），其次 `POSTGRES_URL`，
+  两者皆无 `pytest.fail`（CI 的 unit/integration 两个 job 均配 postgres:16 服务）。
+- **认证用户存储同源**：`InMemoryUserStore` 同步删除（见 ADR-0007 后续变更）。
+- docker-compose 卷挂载改为 `/var/lib/postgresql`（postgres 18+ 新布局）。

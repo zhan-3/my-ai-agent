@@ -42,7 +42,7 @@ _Avoid_: 聊天、交互（泛指时用）
 _Avoid_: 上下文、最近对话（口语用）
 
 **会话隔离 / 用户隔离**:
-记忆按会话维度划分：内部 API 用 `session_id`（默认 `default`）；webapp 层认证后强制会话维度 = 用户名（JWT 解出，客户端不自填，ADR-0007）。链路贯穿 webapp → chat → 图 State → 子 Agent → 存储后端；存储经后端协议分派：`POSTGRES_URL` 时 Postgres（持久化 + 隔离，含 users 表），否则 InMemory（演示兜底，重启即失）。对应 LangGraph checkpointer 的 thread 维度语义（ADR-0006/0007）。
+记忆按会话维度划分：内部 API 用 `session_id`（默认 `default`）；webapp 层认证后强制会话维度 = 用户名（JWT 解出，客户端不自填，ADR-0007）。链路贯穿 webapp → chat → 图 State → 子 Agent → 存储后端；存储**唯一后端 Postgres**（psycopg 四表含 users，`POSTGRES_URL` 必配，未配直接报错；持久化 + 隔离）。对应 LangGraph checkpointer 的 thread 维度语义（ADR-0006/0007）。
 _Avoid_: 多角色（授权未做，用户维度 ≠ 角色维度）
 
 **长期记忆**:
