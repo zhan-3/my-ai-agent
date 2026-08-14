@@ -239,10 +239,22 @@ def _recover_pending(recent: str, user_input: str, result: IntentResult) -> Inte
     q = user_input.strip()
     if not q or any(w in q for w in _ABANDON_WORDS + _QUERY_WORDS):
         return result
+    # 主导意图已是行程规划（LLM 直接归对）→ 仍需确保偏好记录进 subtasks：
+    # 「追问上下文的偏好陈述」同时是补全+记偏好两件事，不依赖 LLM 原分类
+    if result.intent == "行程规划" and any(w in q for w in _PREF_STATEMENT_WORDS):
+        if not any(s.intent == "偏好记录" for s in result.subtasks):
+            return IntentResult(
+                intent=result.intent,
+                reason=result.reason,
+                subtasks=[*result.subtasks, SubTask(intent="偏好记录", text=q)],
+            )
+        return result
     if result.intent not in ("偏好记录", "其他"):
         return result
     subs = list(result.subtasks)
-    if result.intent == "偏好记录" and any(w in q for w in _PREF_STATEMENT_WORDS):
+    if any(w in q for w in _PREF_STATEMENT_WORDS) and not any(
+        s.intent == "偏好记录" for s in subs
+    ):
         subs.append(SubTask(intent="偏好记录", text=q))
     note = "（同时记偏好）" if subs else ""
     return IntentResult(

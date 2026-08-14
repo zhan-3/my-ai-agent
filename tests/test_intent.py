@@ -54,6 +54,26 @@ def test_recover_pending_reroutes_preference_to_plan():
     assert [s.intent for s in r.subtasks] == ["偏好记录"]
 
 
+def test_recover_pending_ensures_pref_subtask_when_plan_already():
+    """LLM 已直接归行程规划（不稳的另一分支）→ 规则仍确保偏好记录进 subtasks：
+    追问上下文里的偏好陈述，无论 LLM 原分类如何，都收敛到「行程规划 + 偏好记录」"""
+    recent = "请补充：\n· 出发城市"
+    r = _intent._recover_pending(
+        recent, "我现在常住上海", _intent.IntentResult(intent="行程规划", reason="", subtasks=[])
+    )
+    assert r.intent == "行程规划"
+    assert [s.intent for s in r.subtasks] == ["偏好记录"]
+    # 已含偏好（LLM 自己拆过）→ 不重复添加
+    dup = _intent._recover_pending(
+        recent,
+        "我现在常住上海",
+        _intent.IntentResult(
+            intent="行程规划", reason="", subtasks=[_intent.SubTask(intent="偏好记录", text="我现在常住上海")]
+        ),
+    )
+    assert [s.intent for s in dup.subtasks] == ["偏好记录"]
+
+
 def test_recover_pending_pure_short_answer():
     """纯补全（如单个城市词）→ 行程规划，无偏好 subtask"""
     recent = "请补充：\n· 出发城市"
