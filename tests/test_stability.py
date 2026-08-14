@@ -95,7 +95,9 @@ def test_health_check_memory_backend_ready(monkeypatch):
     from xiao_wen import memory as memory_mod
     from xiao_wen import stability as st
 
-    monkeypatch.setenv("POSTGRES_URL", os.environ.get("POSTGRES_TEST_URL", "postgresql://postgres:123456@localhost:5432/xiao_wen_test"))
+    monkeypatch.setenv(
+        "POSTGRES_URL", os.environ.get("POSTGRES_TEST_URL", "postgresql://postgres:123456@localhost:5432/xiao_wen_test")
+    )
     memory_mod._backend = None
     try:
         report = st.health_check()

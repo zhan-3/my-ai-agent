@@ -82,7 +82,10 @@ from_city/to_city：只在原文明确提到城市时才填（如「从广州」
 示例：{{"from_city": "北京", "to_city": "杭州", "start_date": "2026-08-20", "duration_days": 3, "hotel_pref": "无", "budget_pref": "中等", "date_is_vague": false}}，
 模糊示例：{{"from_city": "北京", "to_city": "杭州", "start_date": "2026-08-17", "duration_days": 3, "hotel_pref": "无", "budget_pref": "中等", "date_is_vague": true}}（用户只说了「下周」）""",
         ),
-        ("human", "今天是 {today}。\n用户输入：{input}\n对话上文（仅用于补全省略信息，如本轮没重复说过的城市）：{recent}"),
+        (
+            "human",
+            "今天是 {today}。\n用户输入：{input}\n对话上文（仅用于补全省略信息，如本轮没重复说过的城市）：{recent}",
+        ),
     ]
 )
 

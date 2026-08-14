@@ -50,10 +50,10 @@ jobs:
         run: uv sync --frozen --all-groups
 
       - name: Lint (ruff)
-        run: uv run ruff check src tests plugins
+        run: uv run ruff check src tests plugins scripts
 
       - name: Format check
-        run: uv run ruff format --check src tests
+        run: uv run ruff format --check src tests scripts
 
       - name: Run unit tests
         env:
@@ -61,7 +61,7 @@ jobs:
         run: uv run pytest -q -m "not integration"
 
       - name: Type check (mypy)
-        run: uv run mypy src/xiao_wen tests
+        run: uv run mypy src/xiao_wen tests scripts
 
   integration:
     name: Integration tests

@@ -71,10 +71,11 @@ def _write_report(summary: dict, failures: list[dict]) -> Path:
         "|---|---|---|---|---|---|",
     ]
     for i, m in summary["by_intent"].items():
-        lines.append(
-            f"| {i} | {m['total']} | {m['ok']} | {m['precision']:.2f} | {m['recall']:.2f} | {m['f1']:.2f} |"
-        )
-    lines += ["", "## 混淆矩阵（行=期望，列=实际）", "", "| 期望 \\ 实际 | " + " | ".join(intents) + " |", "|" + "---|" * (len(intents) + 1)]
+        lines.append(f"| {i} | {m['total']} | {m['ok']} | {m['precision']:.2f} | {m['recall']:.2f} | {m['f1']:.2f} |")
+    lines += ["", "## 混淆矩阵（行=期望，列=实际）", ""]
+    head = "| 期望 \\ 实际 | " + " | ".join(intents) + " |"
+    sep = "|" + "---|" * (len(intents) + 1)
+    lines += [head, sep]
     for exp in intents:
         row = " | ".join(str(cm[exp][act]) for act in intents)
         lines.append(f"| {exp} | {row} |")

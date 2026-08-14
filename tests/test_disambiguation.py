@@ -43,8 +43,7 @@ def test_advice_question_clarifies():
 
 # ---- 触发器 C：选项应答（确定性，需 recent 含上一轮航班反问） ----
 _FLIGHT_RECENT = (
-    "user: 帮我查一下回程日期有没有航班\n"
-    "assistant: 你是想①查航班/车次时刻信息，还是②规划含这段出行的行程？"
+    "user: 帮我查一下回程日期有没有航班\nassistant: 你是想①查航班/车次时刻信息，还是②规划含这段出行的行程？"
 )
 
 
