@@ -13,9 +13,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from xiao_wen import memory
 from xiao_wen.eval import metrics
 from xiao_wen.eval.runners import run_intent_set
-from xiao_wen import memory
 from xiao_wen.intent import _intents, classify
 
 ROOT = Path(__file__).resolve().parent.parent.parent
