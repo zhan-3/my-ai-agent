@@ -19,13 +19,7 @@ def request(**overrides: Any):
 
 
 def day(day_date: str, hotel: str = "全季酒店"):
-    return trip_planner.DayPlan(
-        date=day_date,
-        transport="高铁",
-        hotel=hotel,
-        activities=["公务：开会"],
-        notes="",
-    )
+    return trip_planner.DayPlan(date=day_date, transport="高铁", hotel=hotel, activities=["公务：开会"], notes="")
 
 
 def plan(*days):
@@ -45,36 +39,19 @@ def test_validate_trip_accepts_contiguous_days_and_policy_evidence():
 
 
 def test_validate_trip_blocks_missing_day():
-    result = validate_trip(
-        request(),
-        plan(day("2026-03-05"), day("2026-03-07")),
-    )
+    result = validate_trip(request(), plan(day("2026-03-05"), day("2026-03-07")))
     assert not result.passed
     assert any(issue.code == "day_count_mismatch" for issue in result.blocking_issues)
 
 
 def test_validate_trip_blocks_non_contiguous_dates():
-    result = validate_trip(
-        request(),
-        plan(day("2026-03-05"), day("2026-03-07"), day("2026-03-08")),
-    )
+    result = validate_trip(request(), plan(day("2026-03-05"), day("2026-03-07"), day("2026-03-08")))
     assert any(issue.code == "date_not_contiguous" for issue in result.blocking_issues)
 
 
 def test_validate_trip_blocks_policy_claim_without_evidence():
     result = validate_trip(
-        request(),
-        plan(
-            trip_planner.DayPlan(
-                date="2026-03-05",
-                transport="高铁",
-                hotel="按一线城市 1800 元/晚标准住宿",
-                activities=["公务：开会"],
-                notes="",
-            ),
-            day("2026-03-06"),
-            day("2026-03-07"),
-        ),
+        request(), plan(day("2026-03-05", "按一线城市 1800 元/晚标准住宿"), day("2026-03-06"), day("2026-03-07"))
     )
     assert any(issue.code == "unsupported_policy_claim" for issue in result.blocking_issues)
 
@@ -83,3 +60,19 @@ def test_validate_trip_allows_empty_candidate_for_legacy_dry_runs():
     result = validate_trip(request(), plan())
     assert result.passed
     assert any(issue.code == "empty_plan" for issue in result.warnings)
+
+
+def test_validate_trip_blocks_return_date_mismatch():
+    result = validate_trip(
+        request(return_date="2026-03-08"), plan(day("2026-03-05"), day("2026-03-06"), day("2026-03-07"))
+    )
+    assert any(issue.code == "return_date_mismatch" for issue in result.blocking_issues)
+
+
+def test_validate_trip_blocks_budget_total_mismatch():
+    result = validate_trip(
+        request(),
+        plan(day("2026-03-05"), day("2026-03-06"), day("2026-03-07")),
+        budget={"transport_cost": 100, "hotel_cost": 200, "meal_cost": 300, "total": 999},
+    )
+    assert any(issue.code == "budget_mismatch" for issue in result.blocking_issues)

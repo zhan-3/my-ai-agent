@@ -300,12 +300,14 @@ def plan(
     policy_text = upstream.get("policy") or ""
     evidence_ids = tuple(upstream.get("policy_evidence_ids") or ())
     policy_context = upstream.get("policy_context")
+    budget = estimate_budget(req)
     validation = validate_trip(
         req,
         plan,
         policy_text=policy_text,
         evidence_ids=evidence_ids,
         policy_context=policy_context,
+        budget=budget,
     )
     if validation.blocking_issues:
         return ValidationFailure(issues=[issue.message for issue in validation.blocking_issues])
@@ -314,8 +316,15 @@ def plan(
     facts = req.model_dump()
     if not req.duration_days:
         facts.pop("duration_days", None)
+    facts["budget_estimate"] = budget
     if evidence_ids:
         facts["policy_evidence_ids"] = list(evidence_ids)
+    if policy_context is not None:
+        facts["policy_snapshot_id"] = getattr(policy_context, "snapshot_id", "")
+    facts["validation_status"] = "passed"
+    from xiao_wen.validation import VALIDATOR_VERSION
+
+    facts["validator_version"] = VALIDATOR_VERSION
     add_itinerary(facts, plan.summary, session_id=session_id)
     return PlanResult(plan=plan, request=req)
 

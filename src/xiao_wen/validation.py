@@ -12,6 +12,8 @@ from datetime import date, timedelta
 
 from xiao_wen.trip_planner import ItineraryPlan, TripRequest
 
+VALIDATOR_VERSION = "trip-validator-v1"
+
 _POLICY_CLAIM_RE = re.compile(
     r"(?:政策|标准|规定|报销|限额|上限).{0,30}\d+(?:\.\d+)?\s*(?:元|天|晚|%|百分之)"
     r"|\d+(?:\.\d+)?\s*(?:元|天|晚|%|百分之).{0,20}(?:政策|标准|规定|报销|限额|上限)"
@@ -44,6 +46,7 @@ def validate_trip(
     policy_text: str = "",
     evidence_ids: tuple[str, ...] = (),
     policy_context: object | None = None,
+    budget: dict[str, int] | None = None,
 ) -> ValidationResult:
     """校验行程日期、天数和政策数字依据。
 
@@ -84,10 +87,35 @@ def validate_trip(
         expected = [start + timedelta(days=i) for i in range(len(parsed_dates))]
         if parsed_dates != expected:
             blocking.append(ValidationIssue("date_not_contiguous", "逐日日期必须从出发日连续排列", "days"))
+        if request.return_date:
+            try:
+                return_date = date.fromisoformat(request.return_date)
+                if return_date != parsed_dates[-1]:
+                    blocking.append(
+                        ValidationIssue("return_date_mismatch", "返程日期与行程最后一天不一致", "return_date")
+                    )
+            except ValueError:
+                blocking.append(ValidationIssue("invalid_return_date", "返程日期不是有效的 YYYY-MM-DD", "return_date"))
+
+    if budget is not None:
+        components = ("transport_cost", "hotel_cost", "meal_cost")
+        if any(key not in budget for key in components) or budget.get("total") != sum(
+            budget.get(key, 0) for key in components
+        ):
+            blocking.append(ValidationIssue("budget_mismatch", "预算分项与预算总额不一致", "budget"))
 
     policy_claims = [reason for reason in plan.reasons if _POLICY_CLAIM_RE.search(reason)]
     policy_claims.extend(item.hotel for item in days if _POLICY_CLAIM_RE.search(item.hotel))
     policy_facts = getattr(policy_context, "facts", ())
+    policy_status = getattr(policy_context, "status", "")
+    if policy_status in {"ambiguous", "stale"}:
+        blocking.append(
+            ValidationIssue(
+                f"{policy_status}_policy_evidence",
+                "政策证据存在冲突或已过期，不能作为确定性依据",
+                "policy",
+            )
+        )
     if policy_claims and not evidence_ids:
         blocking.append(
             ValidationIssue(

@@ -16,6 +16,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from datetime import date
 from functools import lru_cache
 from http import HTTPStatus
 
@@ -53,6 +54,8 @@ class Evidence:
     similarity: float
     section: str | None = None
     version: str | None = None
+    effective_from: str | None = None
+    effective_to: str | None = None
 
 
 @dataclass(frozen=True)
@@ -72,9 +75,21 @@ class PolicyContext:
 
     query: str
     evidence: tuple[Evidence, ...]
-    status: str = "not_found"  # grounded / partial / not_found
+    status: str = "not_found"  # grounded / partial / ambiguous / stale / not_found
     facts: tuple[PolicyFact, ...] = ()
     snapshot_id: str = ""
+
+    @property
+    def has_stale_evidence(self) -> bool:
+        today = date.today()
+        for item in self.evidence:
+            if item.effective_to:
+                try:
+                    if today > date.fromisoformat(item.effective_to):
+                        return True
+                except ValueError:
+                    return True
+        return False
 
     @property
     def evidence_ids(self) -> tuple[str, ...]:
@@ -102,27 +117,41 @@ def _extract_policy_facts(evidence: tuple[Evidence, ...]) -> tuple[PolicyFact, .
             match = re.search(pattern, text)
             if match:
                 facts.append(PolicyFact(key, int(match.group(1)), unit, scope, evidence_ids))
-    # 同一事实出现冲突时不选择其中一个；调用方可据此要求确认。
-    unique: dict[tuple[str, str], PolicyFact] = {}
-    for fact in facts:
-        identity = (fact.key, repr(sorted(fact.scope.items())))
-        prior = unique.get(identity)
-        if prior is None or prior.value == fact.value:
-            unique[identity] = fact
-        else:
-            unique.pop(identity)
-    return tuple(unique.values())
+    return tuple(facts)
 
 
 def policy_context_from_texts(query: str, texts: list[tuple[str, str]]) -> PolicyContext:
-    evidence = tuple(Evidence(_evidence_id(source, text), source, text, 0.0) for source, text in texts)
+    evidence_items = []
+    for source, text in texts:
+        expires = re.search(r"(?:有效期至|生效至|截止日期)\s*[:：]?\s*(\d{4}-\d{2}-\d{2})", text)
+        version = re.search(r"(?:版本|v)\s*[:：]?\s*([0-9]+(?:\.[0-9]+)*)", text, re.IGNORECASE)
+        evidence_items.append(
+            Evidence(
+                _evidence_id(source, text),
+                source,
+                text,
+                0.0,
+                version=version.group(1) if version else None,
+                effective_to=expires.group(1) if expires else None,
+            )
+        )
+    evidence = tuple(evidence_items)
     facts = _extract_policy_facts(evidence)
+    conflicting_keys = {
+        (fact.key, tuple(sorted(fact.scope.items())))
+        for fact in facts
+        if sum(other.key == fact.key and other.scope == fact.scope and other.value != fact.value for other in facts)
+    }
+    status = "not_found" if not evidence else ("ambiguous" if conflicting_keys else "grounded")
+    exposed_facts = () if conflicting_keys else facts
     snapshot = hashlib.sha256("\\n".join(item.evidence_id for item in evidence).encode()).hexdigest()[:16]
+    if status == "grounded" and any(item.effective_to for item in evidence):
+        status = "stale" if PolicyContext(query, evidence).has_stale_evidence else status
     return PolicyContext(
         query=query,
         evidence=evidence,
-        facts=facts,
-        status="grounded" if evidence else "not_found",
+        facts=exposed_facts if status == "grounded" else (),
+        status=status,
         snapshot_id=f"policy-{snapshot}",
     )
 
@@ -208,6 +237,11 @@ def load_chunks(max_len: int = 400):
     return final
 
 
+def _section_from_text(text: str) -> str | None:
+    match = re.search(r"([一二三四五六七八九十]+)、[^ ]+", text)
+    return match.group(0) if match else None
+
+
 def merge_tiny_chunks(chunks, min_len: int = 20):
     merged = []
     i, n = 0, len(chunks)
@@ -252,7 +286,9 @@ def build_index(chunks):
             ids=[f"c{i + j}" for j in range(len(batch))],
             embeddings=vecs,
             documents=[t for _, t in batch],
-            metadatas=[{"source": stem} for stem, _ in batch],  # 元数据：可按来源过滤
+            metadatas=[
+                {"source": stem, "section": _section_from_text(text)} for stem, text in batch
+            ],  # 元数据：来源 + 章节
         )
         time.sleep(0.2)
     col.modify(metadata={"model": EMB_MODEL})  # 记录模型版本（不能带 hnsw:space，chromadb 拒绝改距离函数）
@@ -273,7 +309,7 @@ def _split_compound_query(query: str) -> list[str]:
     return parts
 
 
-def search(query: str, col, k: int = 5, min_sim: float | None = None):
+def _search_with_metadata(query: str, col, k: int = 5, min_sim: float | None = None):
     """问题 embedding → chroma 余弦检索 top-k（HNSW 近似最近邻）
 
     复合问句（含和/与/以及/、）拆成子问句多路检索后合并去重：
@@ -284,15 +320,20 @@ def search(query: str, col, k: int = 5, min_sim: float | None = None):
     threshold = MIN_SIM if min_sim is None else min_sim
     subs = _split_compound_query(query)
     per = max(1, -(-k // len(subs)))  # 每子问句席位：k 按主题数均分向上取整
-    out: dict[str, tuple[float, str, str]] = {}
+    out: dict[str, tuple[float, dict, str]] = {}
     for sub in subs:
         qv = embed_texts([sub])[0]
         res = col.query(query_embeddings=[qv], n_results=per)
         for doc, meta, dist in zip(res["documents"][0], res["metadatas"][0], res["distances"][0], strict=True):
             sim = 1 - dist  # 余弦距离 → 相似度
-            out.setdefault(doc, (sim, meta["source"], doc))
+            out.setdefault(doc, (sim, meta, doc))
     ranked = sorted(out.values(), key=lambda t: t[0], reverse=True)
     return [t for t in ranked if t[0] >= threshold][:k]
+
+
+def search(query: str, col, k: int = 5, min_sim: float | None = None):
+    """兼容旧接缝：返回 (similarity, source, text)。"""
+    return [(sim, meta["source"], text) for sim, meta, text in _search_with_metadata(query, col, k, min_sim)]
 
 
 # ---- 5. 增强 + 生成 ----
@@ -329,19 +370,32 @@ def retrieve_policy(query: str, k: int = 5) -> PolicyContext:
     """
     try:
         texts = search_texts(query, k=k)
-        hits = [(0.0, "legacy-search_texts", text) for text in texts]
+        hits = [(0.0, {"source": "legacy-search_texts"}, text) for text in texts]
     except Exception:
         hits = []
-    context = policy_context_from_texts(query, [(source, text) for _, source, text in hits])
+    text_context = policy_context_from_texts(query, [(hit[1]["source"], hit[2]) for hit in hits])
+    evidence = tuple(
+        Evidence(
+            item.evidence_id,
+            item.source,
+            item.text,
+            hit[0],
+            section=hit[1].get("section"),
+            version=hit[1].get("version"),
+            effective_from=hit[1].get("effective_from"),
+            effective_to=hit[1].get("effective_to"),
+        )
+        for item, hit in zip(text_context.evidence, hits, strict=True)
+    )
+    status = text_context.status
+    if status == "grounded" and PolicyContext(query, evidence).has_stale_evidence:
+        status = "stale"
     return PolicyContext(
-        query=context.query,
-        evidence=tuple(
-            Evidence(item.evidence_id, item.source, item.text, hit[0])
-            for item, hit in zip(context.evidence, hits, strict=True)
-        ),
-        facts=_extract_policy_facts(context.evidence),
-        status=context.status,
-        snapshot_id=context.snapshot_id,
+        query=text_context.query,
+        evidence=evidence,
+        facts=_extract_policy_facts(evidence) if status == "grounded" else (),
+        status=status,
+        snapshot_id=text_context.snapshot_id,
     )
 
 
@@ -354,7 +408,7 @@ def search_texts(query: str, k: int = 5) -> list[str]:
     try:
         chunks = merge_tiny_chunks(load_chunks())
         col = build_index(chunks)
-        hits = search(query, col, k=k)
+        hits = _search_with_metadata(query, col, k=k)
         return [text for _, _, text in hits]
     except Exception:
         return []

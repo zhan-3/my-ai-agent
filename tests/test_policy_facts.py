@@ -21,3 +21,23 @@ def test_policy_context_without_evidence_is_not_found():
     assert context.status == "not_found"
     assert context.facts == ()
     assert context.evidence_ids == ()
+
+
+def test_policy_context_marks_expired_evidence_stale():
+    context = rag.policy_context_from_texts(
+        "住宿标准", [("policy-v1", "版本 1.0；一线城市住宿标准不超过500元/晚；有效期至 2020-01-01")]
+    )
+    assert context.status == "stale"
+    assert context.facts == ()
+
+
+def test_policy_context_marks_conflicting_facts_ambiguous():
+    context = rag.policy_context_from_texts(
+        "住宿标准",
+        [
+            ("policy-v1", "一线城市住宿标准不超过500元/晚"),
+            ("policy-v2", "一线城市住宿标准不超过800元/晚"),
+        ],
+    )
+    assert context.status == "ambiguous"
+    assert context.facts == ()
