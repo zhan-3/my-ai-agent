@@ -286,7 +286,14 @@ TRAIN_TABLE: dict[tuple[str, str], tuple[str, str, str, str, int]] = {
 TIER1_CITIES = {"北京", "上海", "广州", "深圳"}
 TIER2_CITIES = {"杭州", "南京", "成都", "武汉", "西安", "重庆", "天津", "苏州", "长沙", "郑州"}
 HOTEL_RATE = {"一线": 500, "二线": 400, "三线": 300}
-MEAL_RATE_PER_DAY = 200  # 午晚餐 100 元/餐 × 2（早餐通常含在房费）
+# 预算档位（经济/中等/舒适）→ 住宿系数（在差旅标准价上调整）+ 每日餐饮标准。
+# 「中等」即差旅政策标准价；「经济」下调、「舒适」上调，让用户预算偏好真正参与估算。
+BUDGET_LEVELS = {
+    "经济": {"hotel_factor": 0.7, "meal_per_day": 120},  # 住宿 70%、餐标 60×2
+    "中等": {"hotel_factor": 1.0, "meal_per_day": 200},  # 差旅标准价、餐标 100×2
+    "舒适": {"hotel_factor": 1.5, "meal_per_day": 300},  # 住宿 150%、餐标 150×2
+}
+DEFAULT_BUDGET_LEVEL = "中等"
 
 
 def city_tier(city: str) -> str:
@@ -304,8 +311,8 @@ def train_info(from_city: str, to_city: str) -> tuple[str, str, str, str, int] |
 
 
 def estimate_budget(req: TripRequest) -> dict:
-    """确定性预算估算：交通（车次表真实票价，查不到按中等里程档）+ 住宿（城市分级×晚数）+
-    餐饮（标准×天数）。全部参考价，不依赖 LLM 编数字（避免幻觉）"""
+    """确定性预算估算：交通（车次表真实票价，查不到按中等里程档）+ 住宿（城市分级×预算档×晚数）+
+    餐饮（预算档餐标×天数）。全部参考价，不依赖 LLM 编数字（避免幻觉）"""
     assert isinstance(req.duration_days, int), "缺项检查后 duration 必为 int"
     nights = max(req.duration_days - 1, 0)  # 最后一天返程，住 (天数-1) 晚；一日往返 0 晚
     info = train_info(req.from_city, req.to_city)
@@ -317,17 +324,22 @@ def estimate_budget(req: TripRequest) -> dict:
         train_line = "高铁往返（具体车次以出票为准）"
     transport_cost = train_fare * 2  # 往返
     tier = city_tier(req.to_city)
-    hotel_per_night = HOTEL_RATE[tier]
+    level = BUDGET_LEVELS.get(req.budget_pref, BUDGET_LEVELS[DEFAULT_BUDGET_LEVEL])
+    budget_level = req.budget_pref if req.budget_pref in BUDGET_LEVELS else DEFAULT_BUDGET_LEVEL
+    hotel_per_night = round(HOTEL_RATE[tier] * level["hotel_factor"])
     hotel_cost = hotel_per_night * nights
-    meal_cost = MEAL_RATE_PER_DAY * req.duration_days
+    meal_per_day = level["meal_per_day"]
+    meal_cost = meal_per_day * req.duration_days
     return {
         "train_line": train_line,
         "train_fare": train_fare,
         "transport_cost": transport_cost,
         "tier": tier,
+        "budget_level": budget_level,
         "hotel_per_night": hotel_per_night,
         "nights": nights,
         "hotel_cost": hotel_cost,
+        "meal_per_day": meal_per_day,
         "meal_cost": meal_cost,
         "total": transport_cost + hotel_cost + meal_cost,
     }
@@ -339,15 +351,16 @@ def format_budget(req: TripRequest) -> str:
     if b["nights"] == 0:
         hotel_line = "· 住宿：当日往返，无需住宿\n"
     else:
+        label = "按差旅标准" if b["budget_level"] == "中等" else f"{b['budget_level']}档"
         hotel_line = (
-            f"· 住宿：{req.to_city}（{b['tier']}）按差旅标准 "
+            f"· 住宿：{req.to_city}（{b['tier']}）{label} "
             f"{b['hotel_per_night']} 元/晚 × {b['nights']} 晚 ≈ {b['hotel_cost']} 元\n"
         )
     return (
         "💰 费用估算（参考价，以实际出票为准）：\n"
         f"· 交通：{b['train_line']}，二等座约 {b['train_fare']} 元/程，往返约 {b['transport_cost']} 元\n"
         f"{hotel_line}"
-        f"· 餐饮：午晚餐 100 元/餐 × 2 × {req.duration_days} 天 ≈ {b['meal_cost']} 元\n"
+        f"· 餐饮：{b['meal_per_day']} 元/天 × {req.duration_days} 天 ≈ {b['meal_cost']} 元\n"
         f"· 合计：约 {b['total']} 元"
     )
 

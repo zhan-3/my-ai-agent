@@ -294,6 +294,42 @@ def test_format_budget_day_trip_no_hotel_line():
     assert "无需住宿" in text
 
 
+def test_estimate_budget_respects_budget_pref():
+    """预算档位真正参与估算：中等=差旅标准价，经济下调、舒适上调（住宿+餐饮）"""
+    base = {"to_city": "杭州", "from_city": "北京", "duration_days": 3}
+    b_mid = _it.estimate_budget(_req(**base, budget_pref="中等"))
+    b_eco = _it.estimate_budget(_req(**base, budget_pref="经济"))
+    b_com = _it.estimate_budget(_req(**base, budget_pref="舒适"))
+
+    assert b_mid["hotel_per_night"] == 400  # 二线标准价
+    assert b_mid["meal_per_day"] == 200
+
+    assert b_eco["hotel_per_night"] == 280  # 400 × 0.7
+    assert b_eco["meal_per_day"] == 120
+    assert b_eco["hotel_cost"] == 280 * 2
+    assert b_eco["total"] < b_mid["total"]
+
+    assert b_com["hotel_per_night"] == 600  # 400 × 1.5
+    assert b_com["meal_per_day"] == 300
+    assert b_com["total"] > b_mid["total"]
+
+
+def test_estimate_budget_unknown_budget_pref_falls_back_mid():
+    """未知/空档位 → 回退中等，不崩"""
+    b = _it.estimate_budget(_req(budget_pref="豪华"))
+    assert b["budget_level"] == "中等"
+    assert b["hotel_per_night"] == 500  # 北京一线标准价
+    assert b["meal_per_day"] == 200
+
+
+def test_format_budget_labels_economy_level():
+    """经济档预算块明示「经济档」与下调后的标准价/餐标"""
+    req = _req(to_city="杭州", from_city="北京", duration_days=3, budget_pref="经济")
+    text = _it.format_budget(req)
+    assert "经济档" in text and "280 元/晚" in text
+    assert "120 元/天" in text
+
+
 def test_missing_treats_garbage_city_as_missing(monkeypatch):
     """提取器被 LLM 填了垃圾城市值（如「出差」）时仍应视为缺项——不能编造无目的地行程"""
     assert "目的城市" in _it._missing(_req(to_city="出差"))
