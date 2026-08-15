@@ -307,7 +307,7 @@ def estimate_budget(req: TripRequest) -> dict:
     """确定性预算估算：交通（车次表真实票价，查不到按中等里程档）+ 住宿（城市分级×晚数）+
     餐饮（标准×天数）。全部参考价，不依赖 LLM 编数字（避免幻觉）"""
     assert isinstance(req.duration_days, int), "缺项检查后 duration 必为 int"
-    nights = max(req.duration_days - 1, 1)  # 最后一天返程，住 (天数-1) 晚，至少 1 晚
+    nights = max(req.duration_days - 1, 0)  # 最后一天返程，住 (天数-1) 晚；一日往返 0 晚
     info = train_info(req.from_city, req.to_city)
     if info:
         train_fare = info[4]
@@ -336,10 +336,17 @@ def estimate_budget(req: TripRequest) -> dict:
 def format_budget(req: TripRequest) -> str:
     """预算块（独立于 format_plan，供展示层拼接）：真实数字锚点 → 行程有“实感”"""
     b = estimate_budget(req)
+    if b["nights"] == 0:
+        hotel_line = "· 住宿：当日往返，无需住宿\n"
+    else:
+        hotel_line = (
+            f"· 住宿：{req.to_city}（{b['tier']}）按差旅标准 "
+            f"{b['hotel_per_night']} 元/晚 × {b['nights']} 晚 ≈ {b['hotel_cost']} 元\n"
+        )
     return (
         "💰 费用估算（参考价，以实际出票为准）：\n"
         f"· 交通：{b['train_line']}，二等座约 {b['train_fare']} 元/程，往返约 {b['transport_cost']} 元\n"
-        f"· 住宿：{req.to_city}（{b['tier']}）按差旅标准 {b['hotel_per_night']} 元/晚 × {b['nights']} 晚 ≈ {b['hotel_cost']} 元\n"
+        f"{hotel_line}"
         f"· 餐饮：午晚餐 100 元/餐 × 2 × {req.duration_days} 天 ≈ {b['meal_cost']} 元\n"
         f"· 合计：约 {b['total']} 元"
     )

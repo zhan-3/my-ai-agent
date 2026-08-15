@@ -276,6 +276,24 @@ def test_format_budget_readable():
     assert "参考价" in text and "合计" in text
 
 
+def test_estimate_budget_day_trip_no_hotel():
+    """一日往返：不住宿（0 晚），住宿费为 0，只算交通往返 + 当日餐饮"""
+    req = _req(to_city="杭州", from_city="北京", duration_days=1)
+    b = _it.estimate_budget(req)
+    assert b["nights"] == 0
+    assert b["hotel_cost"] == 0
+    assert b["hotel_per_night"] == 400  # 仍按城市分级报标准价，只是晚数为 0
+    assert b["total"] == b["transport_cost"] + b["meal_cost"]
+
+
+def test_format_budget_day_trip_no_hotel_line():
+    """一日往返：预算块不出现「× 0 晚」，明示无住宿"""
+    req = _req(to_city="杭州", from_city="北京", duration_days=1)
+    text = _it.format_budget(req)
+    assert "0 晚" not in text
+    assert "无需住宿" in text
+
+
 def test_missing_treats_garbage_city_as_missing(monkeypatch):
     """提取器被 LLM 填了垃圾城市值（如「出差」）时仍应视为缺项——不能编造无目的地行程"""
     assert "目的城市" in _it._missing(_req(to_city="出差"))
