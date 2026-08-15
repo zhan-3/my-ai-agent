@@ -13,10 +13,11 @@ DESCRIPTION = (
 
 
 def collect_upstream(user_input: str, session_id: str) -> dict:
-    """collect-then-compose 的收集阶段（确定性、零 LLM）：
+    """collect-then-compose 的收集阶段（串行节点，图上只跑一次、先于 fan-out）：
 
     上游 = 知识库（公司差旅政策/标准，rag 纯检索）+ 历史行程参考（最近 2 条）
-    + 用户偏好（trip_planner 内已有）。任一上游失败降级为空，不阻塞规划。
+    + 本轮偏好（结构化提取，供行程分支生成时并入 prefs）。
+    任一上游失败降级为空，不阻塞规划。
     """
     from xiao_wen import rag
     from xiao_wen.memory import get_itineraries
@@ -36,7 +37,26 @@ def collect_upstream(user_input: str, session_id: str) -> dict:
         )
     except Exception:
         history_ref = ""  # 记忆后端异常：历史参考降级为空
-    return {"policy": policy, "history_ref": history_ref}
+    prefs_turn = _extract_turn_prefs(user_input)
+    return {"policy": policy, "history_ref": history_ref, "prefs_turn": prefs_turn}
+
+
+def _extract_turn_prefs(user_input: str) -> str:
+    """本轮偏好结构化提取：复用偏好提取器，把「本轮新陈述的偏好」拼成一行文本。
+
+    竞态根因（多意图并行）：p_偏好记录（写库）与 p_行程规划（读偏好）并行，写读顺序不定，
+    行程分支可能读不到本轮刚说的偏好。这里在串行 collect 阶段先提取一次注入上游黑板，
+    行程分支生成时并入 prefs。不写库（写库仍由偏好分支负责），只用于本轮生成上下文。
+    """
+    from xiao_wen.agents import preference_agent
+
+    try:
+        r = preference_agent._invoke_pref_model(user_input)
+    except Exception:
+        return ""  # 提取失败降级为空：历史偏好仍可用，规划不阻塞
+    if not r.records:
+        return ""
+    return "；".join(f"{rec.category}:{rec.content}" for rec in r.records)
 
 
 def run(state) -> dict:

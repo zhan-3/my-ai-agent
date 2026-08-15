@@ -174,10 +174,14 @@ def test_plan_injects_upstream_policy_and_history(monkeypatch):
 
 
 def test_collect_upstream_gathers_and_degrades(monkeypatch):
-    """collect-then-compose 收集阶段：知识检索 + 历史参考；任一上游异常 → 降级为空，不阻塞"""
+    """collect-then-compose 收集阶段：知识检索 + 历史参考 + 本轮偏好；任一上游异常 → 降级为空，不阻塞"""
     from xiao_wen import memory as ms
     from xiao_wen import rag
     from xiao_wen.agents import itinerary_agent as ia
+    from xiao_wen.agents import preference_agent as pa
+
+    # 本轮偏好提取：默认空（无偏好陈述）——避免测试真实调用 LLM
+    monkeypatch.setattr(pa, "_invoke_pref_model", lambda _: pa.PreferenceList(records=[]))
 
     # 正常收集：政策命中 2 段 + 历史最近 2 条
     monkeypatch.setattr(rag, "search_texts", lambda q, k=5: ["政策段A", "政策段B"])
@@ -194,15 +198,40 @@ def test_collect_upstream_gathers_and_degrades(monkeypatch):
     assert "政策段A" in up["policy"] and "政策段B" in up["policy"]
     assert "临沂→北京" in up["history_ref"] and "2026-06-01" in up["history_ref"]  # 取最近 2 条
     assert "2026-05-01" not in up["history_ref"]
+    assert up["prefs_turn"] == ""
 
-    # 降级：rag 抛异常 → policy 空；记忆后端抛异常 → history_ref 空（规划不阻塞）
+    # 降级：rag 抛异常 → policy 空；记忆后端抛异常 → history_ref 空；偏好提取抛异常 → prefs_turn 空
     def boom(*a, **k):
         raise RuntimeError("索引不可用")
 
     monkeypatch.setattr(rag, "search_texts", boom)
     monkeypatch.setattr(ms, "get_itineraries", boom)
+    monkeypatch.setattr(pa, "_invoke_pref_model", boom)
     up2 = ia.collect_upstream("去北京出差住哪", "u1")
-    assert up2 == {"policy": "", "history_ref": ""}
+    assert up2 == {"policy": "", "history_ref": "", "prefs_turn": ""}
+
+
+def test_collect_upstream_extracts_turn_prefs(monkeypatch):
+    """本轮含偏好陈述 → 结构化提取进 prefs_turn（不写库，只供生成上下文）"""
+    from xiao_wen import memory as ms
+    from xiao_wen import rag
+    from xiao_wen.agents import itinerary_agent as ia
+    from xiao_wen.agents import preference_agent as pa
+
+    monkeypatch.setattr(rag, "search_texts", lambda q, k=5: [])
+    monkeypatch.setattr(ms, "get_itineraries", lambda *, session_id="default": [])
+    monkeypatch.setattr(
+        pa,
+        "_invoke_pref_model",
+        lambda _: pa.PreferenceList(
+            records=[
+                pa.PreferenceRecord(category="住宿", content="喜欢住全季", is_update=False),
+                pa.PreferenceRecord(category="常驻城市", content="上海", is_update=True),
+            ]
+        ),
+    )
+    up = ia.collect_upstream("帮我安排行程，喜欢住全季", "u1")
+    assert up["prefs_turn"] == "住宿:喜欢住全季；常驻城市:上海"
 
 
 def test_plan_home_city_completes_before_missing_check(monkeypatch):
@@ -263,6 +292,17 @@ def test_plan_normalizes_people_count(monkeypatch):
     assert isinstance(r3, _it.PlanResult)
     assert r3.request is not None
     assert r3.request.people_count == 1
+
+
+def test_plan_injects_turn_prefs_into_generation(monkeypatch):
+    """上游含本轮偏好 → plan 生成时并入 prefs（消除多意图写读竞态）"""
+    plan_out = ItineraryPlan(summary="行程", days=[], reasons=[])
+    chain = _FakeChain(plan_out)
+    monkeypatch.setattr(_it, "_extract_model", lambda: _FakeChain(_req()))
+    monkeypatch.setattr(_it, "_plan_model", lambda: chain)
+    r = _it.plan("安排行程", upstream={"policy": "", "history_ref": "", "prefs_turn": "住宿:喜欢住全季"})
+    assert isinstance(r, _it.PlanResult)
+    assert "本轮陈述偏好：住宿:喜欢住全季" in chain.calls[0]["prefs"]
 
 
 def test_needs_info_text_lists_missing():

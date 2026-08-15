@@ -270,6 +270,13 @@ def plan(
     prefs = get_preferences(session_id=session_id)
     prefs_text = "；".join(f"{p['category']}:{p['content']}" for p in prefs) or "无"
     upstream = upstream or {}
+    # 本轮偏好（collect 串行阶段结构化提取）：并入历史偏好，消除多意图并行「偏好写库 vs 行程读偏好」竞态。
+    # 上游缺失（直接调用/旧路径）时无本轮偏好 → 回退纯历史偏好，行为兼容。
+    turn_prefs = upstream.get("prefs_turn") or ""
+    if turn_prefs:
+        prefs_text = (
+            f"{prefs_text}\n本轮陈述偏好：{turn_prefs}" if prefs_text != "无" else f"本轮陈述偏好：{turn_prefs}"
+        )
     plan = _plan_model().invoke(
         {
             "trip_json": req.model_dump_json(),
