@@ -7,6 +7,7 @@
 - 链懒构建（走 LLM 单一接缝，熔断守卫自动继承）
 """
 
+import logging
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -15,6 +16,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
 
 from xiao_wen import llm
+
+logger = logging.getLogger(__name__)
 
 # 模块级当前词汇表：None = 未注入，classify 时从注册表 discover() 取默认（六内置 + 外部扩展）
 _current_intents: list[dict] | None = None
@@ -201,6 +204,11 @@ def _pref_only_correction(recent: str, user_input: str, result: IntentResult) ->
         return result
     if result.intent not in ("行程规划", "其他"):
         return result
+    logger.info(
+        "pref-only-lock: %s → 偏好记录 (input=%.30r)",
+        result.intent,
+        user_input,
+    )
     return IntentResult(
         intent="偏好记录",
         reason=f"规则兑底：无行程要素的纯偏好陈述「{q}」归偏好记录（防无上文指代脑补续接）",
@@ -208,11 +216,14 @@ def _pref_only_correction(recent: str, user_input: str, result: IntentResult) ->
     )
 
 
-def classify(recent: str, user_input: str) -> IntentResult:
+def classify(recent: str, user_input: str, *, _depth: int = 0) -> IntentResult:
     """意图分类：recent=最近对话（短期记忆，指代消解），user_input=当前输入
 
     返回 intent/reason/subtasks；subtasks 为空数组表示单意图（原路由路径不变）。
     意图不在当前词汇表内（LLM 幻觉）时兜底归「其他」。
+
+    内部参数 _depth：拆分兜底的递归护栏（ticket split-guard/01）。拆分兜底只在
+    _depth==0 时执行，子句分类以 _depth=1 调用——封顶递归深度 1，子句不再二次拆分。
     """
     r = _intent_model().invoke({"recent": recent, "input": user_input})
     assert isinstance(r, Intent)
@@ -227,13 +238,20 @@ def classify(recent: str, user_input: str) -> IntentResult:
     # （防 LLM 把「上次一样，还是住汉庭吧」脑补成行程续接）
     result = _pref_only_correction(recent, user_input, result)
     # 拆分兜底：主导意图清晰但 LLM 把「顺便/还有X」整句吞掉（subtasks 空）→
-    # 在强拆分标记处确定性切句，尾部子句再分类补进 subtasks（防次要请求被静默丢弃）
-    if not result.subtasks:
+    # 在强拆分标记处确定性切句，尾部子句再分类补进 subtasks（防次要请求被静默丢弃）。
+    # 仅在 _depth==0（顶层调用）执行：子句分类不再二次拆分（递归深度封顶 1）。
+    if _depth == 0 and not result.subtasks:
         for chunk in _split_subtasks(user_input):
-            sub = classify(recent, chunk)
+            sub = classify(recent, chunk, _depth=1)
             if sub.intent in (result.intent, "其他"):
                 continue  # 子句与主导同意图（已被覆盖）或属闲聊 → 不进并行
             result.subtasks.append(SubTask(intent=sub.intent, text=chunk))
+        if result.subtasks:
+            logger.info(
+                "split-fallback: %d 子句追加, input=%.30r",
+                len(result.subtasks),
+                user_input,
+            )
     # 归一化：多意图契约 = subtasks 含全部请求（主导在前，text=完整输入）——
     # LLM 常只把次要请求放进 subtasks、漏掉主导（黄金集锁定 [主导, 次要] 形状；
     # dispatch 的同类兜底仍在，此处让 classify 自身契约自洽）
@@ -291,6 +309,7 @@ def _recover_pending(recent: str, user_input: str, result: IntentResult) -> Inte
     # 「追问上下文的偏好陈述」同时是补全+记偏好两件事，不依赖 LLM 原分类
     if result.intent == "行程规划" and any(w in q for w in _PREF_STATEMENT_WORDS):
         if not any(s.intent == "偏好记录" for s in result.subtasks):
+            logger.info("recover-pending: 行程规划+偏好陈述 → 追加偏好记录 (input=%.30r)", user_input)
             return IntentResult(
                 intent=result.intent,
                 reason=result.reason,
@@ -303,6 +322,7 @@ def _recover_pending(recent: str, user_input: str, result: IntentResult) -> Inte
     if any(w in q for w in _PREF_STATEMENT_WORDS) and not any(s.intent == "偏好记录" for s in subs):
         subs.append(SubTask(intent="偏好记录", text=q))
     note = "（同时记偏好）" if subs else ""
+    logger.info("recover-pending: %s → 行程规划%s (input=%.30r)", result.intent, note, user_input)
     return IntentResult(
         intent="行程规划",
         reason=f"规则兑底：上一轮在追问行程要素，本轮「{q}」视为补全{note}",

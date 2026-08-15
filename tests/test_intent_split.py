@@ -122,3 +122,40 @@ def test_classify_llm_subtasks_present_no_fallback(monkeypatch):
     _stub_model(monkeypatch, invoke)
     r = _intent.classify("", "我上次的行程是什么")
     assert r.subtasks == [] and calls["n"] == 1
+
+
+# ---------------- 递归护栏（ticket split-guard/01） ----------------
+
+
+def test_split_fallback_no_recursion(monkeypatch):
+    """递归护栏：顶层拆分后，子句分类（_depth=1）不再二次拆分。
+    无护栏时 _split_subtasks 会被每个子句再调用一次（返回空）；有护栏只调一次。"""
+    calls = {"split": 0}
+    real_split = _intent._split_subtasks
+
+    def spy_split(text):
+        calls["split"] += 1
+        return real_split(text)
+
+    monkeypatch.setattr(_intent, "_split_subtasks", spy_split)
+    inputs: list[str] = []
+
+    def invoke(payload):
+        inputs.append(payload["input"])
+        if len(inputs) == 1:
+            return Intent(intent="行程规划", reason="规划", subtasks=[])
+        return Intent(intent="联网查询", reason="查", subtasks=[])
+
+    _stub_model(monkeypatch, invoke)
+    r = _intent.classify("", "帮我规划去武汉的行程，顺便查下武汉天气，另外看看汇率")
+    assert calls["split"] == 1
+    assert [s.intent for s in r.subtasks] == ["行程规划", "联网查询", "联网查询"]
+
+
+def test_split_fallback_depth_param_default():
+    """签名兼容：外部调用 classify(recent, text) 无需传 _depth（keyword-only，默认 0）"""
+    import inspect
+
+    sig = inspect.signature(_intent.classify)
+    assert sig.parameters["_depth"].default == 0
+    assert sig.parameters["_depth"].kind == inspect.Parameter.KEYWORD_ONLY

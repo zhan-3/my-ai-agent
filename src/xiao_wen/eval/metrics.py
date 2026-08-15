@@ -119,12 +119,12 @@ def errors(results: list[dict]) -> list[dict]:
     return [r for r in results if not _case_ok(r)]
 
 
-def summarize(results: list[dict], intents: list[str], threshold: float) -> dict[str, Any]:
+def summarize(results: list[dict], intents: list[str], threshold: float, set_name: str = "intent") -> dict[str, Any]:
     """一键汇总：metrics.json 的完整载荷（可 JSON 序列化，落盘即用）。"""
     acc = accuracy(results)
     errs = errors(results)
     return {
-        "set": "intent",
+        "set": set_name,
         "total": len(results),
         "passed": len(results) - len(errs),
         "accuracy": round(acc, 4),
