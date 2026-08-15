@@ -7,7 +7,7 @@
 
 **Blocked by:** None
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `trip_planner.py`：提取后归一化 from_city/to_city 的「无/未知/出差」→「待定」；`_UNKNOWN` 提为模块级常量并含「无」（两处共用：缺项检查 + 常驻补全）
 - [ ] 单测（RED→GREEN）：`_missing` 对「无」报缺项；plan() 提取出「无」+ 有常驻城市 → 补全后生成；无常驻城市 → 缺项短路（不再静默进生成）

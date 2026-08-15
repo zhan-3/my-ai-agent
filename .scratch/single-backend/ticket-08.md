@@ -17,7 +17,7 @@ messages/preferences/itineraries 三张表。
 
 **Blocked by:** None
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## Answer
 

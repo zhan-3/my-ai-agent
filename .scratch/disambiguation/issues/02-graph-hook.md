@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `graph_builder.py`：State 加 `clarify` 字段；`clarify_gate` 节点 + 条件边（`__clarify_end__` → END）；serial/parallel 两图都接
 - [ ] `session.py`：`_stage_event` 忽略 `clarify_gate`

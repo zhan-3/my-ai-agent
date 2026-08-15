@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `src/xiao_wen/disambiguation.py`：触发器 A/B，意图+模式双重匹配，订/买与休闲类不触发
 - [ ] `tests/test_disambiguation.py`：正例（查航班/有没有航班/住哪里比较好/推荐）+ 反例（订机票/规划行程/杭州有什么好玩的/政策标准查询）

@@ -16,7 +16,7 @@
 
 **Blocked by:** None
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] test_endtoend.py 追加 E2E-05~08（@pytest.mark.integration，跑法 `uv run pytest -m integration -k end_to_end`）
 - [ ] 逐条真跑验证通过（断言只锁稳定标记）

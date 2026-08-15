@@ -8,7 +8,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `src/xiao_wen/eval/trace.py`：TraceRecord 模型 + `_make_node` recorder 包装（env 开关）+ chat 包装（recent/写回/契约输出）
 - [ ] `src/xiao_wen/eval/metrics.py`：结构层校验器（days 数/日期/要素集合）+ 意图混淆矩阵

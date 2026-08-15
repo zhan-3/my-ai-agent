@@ -1,6 +1,8 @@
 # 晓问 Agent 评测体系（layer 2/3）+ 意图分类 embedding 降级层
 
-Status: ready-for-agent
+Status: resolved
+Note: phase-1（trace harness #01 / judge 层 #02 / 样本铺开 matrix 243 + synthetic 48）已交付；
+剩余范围（embedding 意图层 D2、D5 剩余五集、stories #6/#7/#9/#12/#13/#14/#15）移至 spec-phase2.md
 Type: spec
 Feature: agent-eval
 

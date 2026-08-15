@@ -14,7 +14,8 @@
 
 **Blocked by:** None
 
-**Status:** ready-for-agent
+**Status:** resolved
+**Superseded-by:** 01-trace-harness.md（后者为现行版，本票保留作历史；早期只覆盖意图集，后扩展为统一 harness）
 
 - [ ] metrics.py 纯函数 + 单测（混淆矩阵形状/每意图指标/错误提取）
 - [ ] scripts/eval/run.py CLI（--set/--threshold/--verbose，落盘三件套，退出码）

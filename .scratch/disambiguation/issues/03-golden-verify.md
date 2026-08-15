@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 黄金集 +4 条 recent 多轮用例（「②」→ 行程规划、「①」→ 其他、航班+反问上下文）
 - [ ] `uv run python scripts/golden_intents.py --threshold 0.95` 通过

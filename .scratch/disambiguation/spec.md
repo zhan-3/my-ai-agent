@@ -1,6 +1,6 @@
 # 轻量消歧 spec
 
-Status: ready-for-agent
+Status: resolved
 Type: spec
 Feature: disambiguation
 

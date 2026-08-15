@@ -10,7 +10,7 @@
 
 **Blocked by:** None
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `intent.py`：`_split_subtasks`（纯函数）+ classify 兜底追加
 - [ ] 单测（桩 LLM）：切句（单/多标记/无标记/「我还有事」不拆）、补全、同意图跳过、其他跳过

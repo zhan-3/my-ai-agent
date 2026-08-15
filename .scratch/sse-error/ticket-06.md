@@ -13,7 +13,7 @@ stream_chat try/except（熔断降级）+ 端点 gen() 防御包装（客户端�
 
 **Blocked by:** None
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] session 层：中途炸 → error 收尾、无 done、不写回记忆；空产出 → error 非假 done
 - [x] webapp 层：stream_chat 未消化异常 → 端点仍产 error SSE 帧
