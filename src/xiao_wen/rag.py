@@ -11,9 +11,11 @@
 - 生成：命中块拼进提示词 → LLM 依据资料回答
 """
 
+import hashlib
 import os
 import re
 import time
+from dataclasses import dataclass
 from functools import lru_cache
 from http import HTTPStatus
 
@@ -39,6 +41,91 @@ COLLECTION = "travel_docs"
 # 检索相似度阈值：低于此值的命中视为语义无关丢弃（防无关文档拼进提示词引发幻觉）。
 # text-embedding-v3 余弦相似度：相关文档通常 >0.4，无关 <0.3；可 .env 用 RAG_MIN_SIM 覆盖。
 MIN_SIM = float(os.environ.get("RAG_MIN_SIM", "0.35"))
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """一条可追溯的检索证据；ID 对同一来源和文本稳定。"""
+
+    evidence_id: str
+    source: str
+    text: str
+    similarity: float
+    section: str | None = None
+    version: str | None = None
+
+
+@dataclass(frozen=True)
+class PolicyFact:
+    """由可见政策原文确定性抽取的事实；每个事实必须绑定证据。"""
+
+    key: str
+    value: int | float | str
+    unit: str
+    scope: dict[str, str]
+    evidence_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PolicyContext:
+    """本轮政策检索快照，供行程生成和运行时验证共同使用。"""
+
+    query: str
+    evidence: tuple[Evidence, ...]
+    status: str = "not_found"  # grounded / partial / not_found
+    facts: tuple[PolicyFact, ...] = ()
+    snapshot_id: str = ""
+
+    @property
+    def evidence_ids(self) -> tuple[str, ...]:
+        return tuple(item.evidence_id for item in self.evidence)
+
+    @property
+    def text(self) -> str:
+        return "\\n\\n".join(item.text for item in self.evidence)
+
+
+def _extract_policy_facts(evidence: tuple[Evidence, ...]) -> tuple[PolicyFact, ...]:
+    """从已检索原文提取当前 Demo 所需的有限政策事实，不从模型输出提取。"""
+    facts: list[PolicyFact] = []
+    evidence_ids = tuple(item.evidence_id for item in evidence)
+    for item in evidence:
+        text = item.text
+        patterns = [
+            ("hotel_rate", r"一线城市.*?不超过\s*(\d+)\s*元/晚", "元/晚", {"city_tier": "一线"}),
+            ("hotel_rate", r"二线城市.*?不超过\s*(\d+)\s*元/晚", "元/晚", {"city_tier": "二线"}),
+            ("hotel_rate", r"三线(?:及以下)?城市.*?不超过\s*(\d+)\s*元/晚", "元/晚", {"city_tier": "三线"}),
+            ("breakfast_rate", r"早餐.*?不超过\s*(\d+)\s*元/餐", "元/餐", {}),
+            ("meal_rate", r"(?:午餐和晚餐|午餐|晚餐).*?每餐不超过\s*(\d+)\s*元", "元/餐", {}),
+        ]
+        for key, pattern, unit, scope in patterns:
+            match = re.search(pattern, text)
+            if match:
+                facts.append(PolicyFact(key, int(match.group(1)), unit, scope, evidence_ids))
+    # 同一事实出现冲突时不选择其中一个；调用方可据此要求确认。
+    unique: dict[tuple[str, str], PolicyFact] = {}
+    for fact in facts:
+        identity = (fact.key, repr(sorted(fact.scope.items())))
+        prior = unique.get(identity)
+        if prior is None or prior.value == fact.value:
+            unique[identity] = fact
+        else:
+            unique.pop(identity)
+    return tuple(unique.values())
+
+
+def policy_context_from_texts(query: str, texts: list[tuple[str, str]]) -> PolicyContext:
+    evidence = tuple(Evidence(_evidence_id(source, text), source, text, 0.0) for source, text in texts)
+    facts = _extract_policy_facts(evidence)
+    snapshot = hashlib.sha256("\\n".join(item.evidence_id for item in evidence).encode()).hexdigest()[:16]
+    return PolicyContext(
+        query=query,
+        evidence=evidence,
+        facts=facts,
+        status="grounded" if evidence else "not_found",
+        snapshot_id=f"policy-{snapshot}",
+    )
+
 
 # ---- 1. LLM（知识生成，走单一接缝，懒构建）----
 # ---- 2. dashscope embedding（懒校验 + 重试：导入不读 env，首次调用才校验）----
@@ -227,6 +314,35 @@ knowledge_prompt = ChatPromptTemplate.from_messages(
 @lru_cache
 def _knowledge_model():
     return knowledge_prompt | llm.get_llm()
+
+
+def _evidence_id(source: str, text: str) -> str:
+    digest = hashlib.sha256(f"{source}\\n{text}".encode()).hexdigest()[:16]
+    return f"ev-{digest}"
+
+
+def retrieve_policy(query: str, k: int = 5) -> PolicyContext:
+    """检索并保留证据身份；异常或无命中明确返回 not_found。
+
+    目前复用 search_texts 这个既有检索接缝，确保测试适配器和旧调用仍能注入
+    检索结果；后续 PolicyFact 阶段再把相似度/章节元数据完整接入这里。
+    """
+    try:
+        texts = search_texts(query, k=k)
+        hits = [(0.0, "legacy-search_texts", text) for text in texts]
+    except Exception:
+        hits = []
+    context = policy_context_from_texts(query, [(source, text) for _, source, text in hits])
+    return PolicyContext(
+        query=context.query,
+        evidence=tuple(
+            Evidence(item.evidence_id, item.source, item.text, hit[0])
+            for item, hit in zip(context.evidence, hits, strict=True)
+        ),
+        facts=_extract_policy_facts(context.evidence),
+        status=context.status,
+        snapshot_id=context.snapshot_id,
+    )
 
 
 def search_texts(query: str, k: int = 5) -> list[str]:

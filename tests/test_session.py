@@ -443,8 +443,13 @@ def test_itinerary_agent_returns_structured_plan(monkeypatch):
     plan = trip_planner.ItineraryPlan(
         days=[
             trip_planner.DayPlan(
-                date="2026-10-08", transport="高铁 G1", hotel="汉庭", activities=["上午开会"], notes=""
+                date=f"2026-10-{day:02d}",
+                transport="高铁 G1",
+                hotel="汉庭",
+                activities=["上午开会"],
+                notes="",
             )
+            for day in range(8, 12)
         ],
         summary="北京出差 4 天",
         reasons=["按差旅标准选住宿"],

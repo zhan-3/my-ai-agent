@@ -75,6 +75,13 @@ class NeedsInfo:
     missing: list[str]  # 缺失要素清单（基础项 E：缺项提示）
 
 
+@dataclass
+class ValidationFailure:
+    """候选行程未通过运行时验证；失败结果不得写回长期记忆。"""
+
+    issues: list[str]
+
+
 # ---- 两阶段提示词（与验收契约一致） ----
 
 extract_prompt = ChatPromptTemplate.from_messages(
@@ -218,7 +225,7 @@ def plan(
     session_id: str = "default",
     recent: str = "",
     upstream: dict | None = None,
-) -> PlanResult | NeedsInfo:
+) -> PlanResult | NeedsInfo | ValidationFailure:
     """编排：提取 → 常驻城市补全 → 缺项检查（短路）→ 生成 → 写回长期记忆
 
     recent：对话上文（多轮要素延续，如用户补齐缺项时不再重复说过的地方）；
@@ -287,11 +294,28 @@ def plan(
         }
     )
     assert isinstance(plan, ItineraryPlan)
+    # 生成后、写回前做确定性验证：日期/天数/政策证据不满足时不污染历史记忆。
+    from xiao_wen.validation import validate_trip
+
+    policy_text = upstream.get("policy") or ""
+    evidence_ids = tuple(upstream.get("policy_evidence_ids") or ())
+    policy_context = upstream.get("policy_context")
+    validation = validate_trip(
+        req,
+        plan,
+        policy_text=policy_text,
+        evidence_ids=evidence_ids,
+        policy_context=policy_context,
+    )
+    if validation.blocking_issues:
+        return ValidationFailure(issues=[issue.message for issue in validation.blocking_issues])
     # 写库前剔除无效天数（0/缺）：facts 缺 duration_days = 旧记录缺天数语义，
     # 差旅统计按「字段缺失」计 skipped_days，不被 0 污染平均天数
     facts = req.model_dump()
     if not req.duration_days:
         facts.pop("duration_days", None)
+    if evidence_ids:
+        facts["policy_evidence_ids"] = list(evidence_ids)
     add_itinerary(facts, plan.summary, session_id=session_id)
     return PlanResult(plan=plan, request=req)
 
@@ -460,6 +484,11 @@ def handle(
     r = plan(user_input, session_id=session_id, recent=recent, upstream=upstream)
     if isinstance(r, NeedsInfo):
         return TripOutcome(answer=needs_info_text(r), plan=None)
+    if isinstance(r, ValidationFailure):
+        return TripOutcome(
+            answer="⚠️ 行程候选未通过一致性校验，暂未写入历史记录：\n· " + "\n· ".join(r.issues),
+            plan=None,
+        )
     answer = format_plan(r.plan)
     req = r.request
     if req and req.date_is_vague:

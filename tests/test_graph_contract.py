@@ -106,12 +106,13 @@ def _trip_plan(text: str) -> trip_planner.ItineraryPlan:
     return trip_planner.ItineraryPlan(
         days=[
             trip_planner.DayPlan(
-                date="2026-03-05",
+                date=day_date,
                 transport="高铁 G1 次 上海虹桥→北京南",
                 hotel="全季酒店（北京）",
                 activities=["14:00 公务：开会"],
                 notes="",
             )
+            for day_date in ("2026-03-05", "2026-03-06", "2026-03-07")
         ],
         summary="3 天北京出差行程",
         reasons=["住宿按差旅政策一线城市不超过 500 元/晚"],
@@ -182,7 +183,7 @@ def test_multi_intent_fanout_merge_contract(monkeypatch):
         }
     )
     _patch_llm_seam(monkeypatch, fake)
-    monkeypatch.setattr(rag_mod, "search_texts", lambda q, k=5: [])
+    monkeypatch.setattr(rag_mod, "search_texts", lambda q, k=5: ["一线城市住宿不超过 500 元/晚"])
     monkeypatch.setattr(web_mod, "get_weather", types.SimpleNamespace(invoke=lambda d: "北京 晴"))
 
     app = gb.build_supervisor_graph()

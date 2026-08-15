@@ -208,7 +208,11 @@ def test_collect_upstream_gathers_and_degrades(monkeypatch):
     monkeypatch.setattr(ms, "get_itineraries", boom)
     monkeypatch.setattr(pa, "_invoke_pref_model", boom)
     up2 = ia.collect_upstream("去北京出差住哪", "u1")
-    assert up2 == {"policy": "", "history_ref": "", "prefs_turn": ""}
+    assert up2["policy"] == ""
+    assert up2["policy_context"].status == "not_found"
+    assert up2["policy_evidence_ids"] == ()
+    assert up2["history_ref"] == ""
+    assert up2["prefs_turn"] == ""
 
 
 def test_collect_upstream_extracts_turn_prefs(monkeypatch):
@@ -244,6 +248,30 @@ def test_plan_home_city_completes_before_missing_check(monkeypatch):
     r = _it.plan("去北京开会")
     assert isinstance(r, _it.PlanResult)
     assert r.plan.summary == "上海→北京"
+
+
+def test_plan_does_not_write_back_when_runtime_validation_fails(monkeypatch):
+    """日期与天数不一致时阻断写回，避免把未经证明的候选行程存进历史。"""
+    from xiao_wen import memory as ms
+
+    bad_plan = ItineraryPlan(
+        summary="错误行程",
+        days=[
+            _it.DayPlan(
+                date="2026-10-08",
+                transport="高铁",
+                hotel="酒店",
+                activities=["开会"],
+                notes="",
+            )
+        ],
+        reasons=[],
+    )
+    _stub_models(monkeypatch, _req(duration_days=4), plan_out=bad_plan)
+    r = _it.plan("安排行程")
+    assert isinstance(r, _it.ValidationFailure)
+    assert any("天" in issue for issue in r.issues)
+    assert ms.get_itineraries() == []
 
 
 def test_plan_generates_and_writes_back(monkeypatch):

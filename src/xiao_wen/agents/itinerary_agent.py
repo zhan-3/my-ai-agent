@@ -19,14 +19,37 @@ def collect_upstream(user_input: str, session_id: str) -> dict:
     + 本轮偏好（结构化提取，供行程分支生成时并入 prefs）。
     任一上游失败降级为空，不阻塞规划。
     """
+    from contextlib import suppress
+
     from xiao_wen import rag
     from xiao_wen.memory import get_itineraries
 
-    policy = ""
-    try:
-        policy = "\n\n".join(rag.search_texts(user_input))  # rag 内部也已降级为 []
-    except Exception:
-        policy = ""  # 索引/网络异常：政策上下文降级为空，规划不阻塞
+    policy_context = rag.PolicyContext(query=user_input, evidence=(), status="not_found")
+    with suppress(Exception):
+        policy_context = rag.retrieve_policy(user_input)
+    policy = policy_context.text
+    # 兼容旧的纯文本收集接缝：测试/旧适配器可只提供 search_texts；正式路径优先保留证据。
+    if not policy:
+        try:
+            legacy_texts = rag.search_texts(user_input)
+        except Exception:
+            legacy_texts = []
+        if legacy_texts:
+            policy = "\n\n".join(legacy_texts)
+            policy_context = rag.PolicyContext(
+                query=user_input,
+                evidence=tuple(
+                    rag.Evidence(
+                        evidence_id=f"legacy-policy-{i}",
+                        source="legacy-search_texts",
+                        text=text,
+                        similarity=0.0,
+                    )
+                    for i, text in enumerate(legacy_texts)
+                ),
+                status="grounded",
+                snapshot_id="legacy-policy",
+            )
     history_ref = ""
     try:
         its = get_itineraries(session_id=session_id)
@@ -38,7 +61,13 @@ def collect_upstream(user_input: str, session_id: str) -> dict:
     except Exception:
         history_ref = ""  # 记忆后端异常：历史参考降级为空
     prefs_turn = _extract_turn_prefs(user_input)
-    return {"policy": policy, "history_ref": history_ref, "prefs_turn": prefs_turn}
+    return {
+        "policy": policy,
+        "policy_context": policy_context,
+        "policy_evidence_ids": policy_context.evidence_ids,
+        "history_ref": history_ref,
+        "prefs_turn": prefs_turn,
+    }
 
 
 def _extract_turn_prefs(user_input: str) -> str:
