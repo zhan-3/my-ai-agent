@@ -231,6 +231,40 @@ def test_plan_generates_and_writes_back(monkeypatch):
     assert its[0]["summary"] == "出差计划"
 
 
+def test_plan_derives_duration_from_return_date(monkeypatch):
+    """用户给了明确返程日期但没说天数 → 用日期差推算 duration_days（含首尾）"""
+    req = _req(duration_days=0, return_date="2026-10-12")  # 默认 10-08 出发
+    plan_out = ItineraryPlan(summary="五天行程", days=[], reasons=[])
+    _stub_models(monkeypatch, req, plan_out=plan_out)
+    r = _it.plan("10月8日去北京，12日回")
+    assert isinstance(r, _it.PlanResult)
+    assert r.request is not None
+    assert r.request.duration_days == 5  # 10-08 → 10-12 含首尾 5 天
+
+
+def test_plan_normalizes_people_count(monkeypatch):
+    """人数为字符串「待定」或 0 → 归一化成 1；数字字符串「3」→ 3"""
+    plan_out = ItineraryPlan(summary="出行", days=[], reasons=[])
+
+    _stub_models(monkeypatch, _req(people_count="待定"), plan_out=plan_out)
+    r1 = _it.plan("安排行程")
+    assert isinstance(r1, _it.PlanResult)
+    assert r1.request is not None
+    assert r1.request.people_count == 1
+
+    _stub_models(monkeypatch, _req(people_count="3"), plan_out=plan_out)
+    r2 = _it.plan("安排行程")
+    assert isinstance(r2, _it.PlanResult)
+    assert r2.request is not None
+    assert r2.request.people_count == 3
+
+    _stub_models(monkeypatch, _req(people_count=0), plan_out=plan_out)
+    r3 = _it.plan("安排行程")
+    assert isinstance(r3, _it.PlanResult)
+    assert r3.request is not None
+    assert r3.request.people_count == 1
+
+
 def test_needs_info_text_lists_missing():
     text = _it.needs_info_text(_it.NeedsInfo(missing=["出发日期", "出差天数"]))
     assert "出发日期" in text and "出差天数" in text
@@ -328,6 +362,26 @@ def test_format_budget_labels_economy_level():
     text = _it.format_budget(req)
     assert "经济档" in text and "280 元/晚" in text
     assert "120 元/天" in text
+
+
+def test_estimate_budget_multiplies_by_people():
+    """多人出行：交通×人数、房数向上取整、餐饮×人数"""
+    req = _req(to_city="杭州", from_city="北京", duration_days=3, people_count=3)
+    b = _it.estimate_budget(req)
+    assert b["people"] == 3
+    assert b["rooms"] == 2  # 3 人 → 2 间双人标间
+    assert b["transport_cost"] == 553 * 2 * 3
+    assert b["hotel_cost"] == 400 * 2 * 2  # 400/晚 × 2 间 × 2 晚
+    assert b["meal_cost"] == 200 * 3 * 3
+    assert b["total"] == b["transport_cost"] + b["hotel_cost"] + b["meal_cost"]
+
+
+def test_format_budget_shows_people_when_multi():
+    """多人：预算块明示人数与房数"""
+    req = _req(to_city="杭州", from_city="北京", duration_days=3, people_count=3)
+    text = _it.format_budget(req)
+    assert "（3 人）" in text
+    assert "× 2 间" in text
 
 
 def test_missing_treats_garbage_city_as_missing(monkeypatch):
