@@ -164,6 +164,39 @@ def test_build_index_rebuilds_on_model_change(monkeypatch):
     assert fake.upserted, "应重建新索引"
 
 
+def test_search_filters_low_similarity_hits(monkeypatch):
+    """低于阈值的命中丢弃：无关文档不拼进上下文（防 LLM 依据无关资料幻觉）"""
+
+    class FakeCol:
+        def query(self, query_embeddings, n_results):
+            # 三个命中：sim = 1 - dist → 0.6 / 0.4 / 0.1
+            return {
+                "documents": [["住宿标准块", "报销块", "无关环保块"]],
+                "metadatas": [[{"source": "01"}, {"source": "02"}, {"source": "08"}]],
+                "distances": [[0.4, 0.6, 0.9]],
+            }
+
+    monkeypatch.setattr(rag, "embed_texts", lambda texts: [[0.1] * 4 for _ in texts])
+    hits = rag.search("出差住宿标准", FakeCol(), k=5, min_sim=0.35)
+    sims = [sim for sim, _, _ in hits]
+    assert sims == [0.6, 0.4], f"低相似度 0.1 应被丢弃，实际相似度 {sims}"
+
+
+def test_search_all_below_threshold_returns_empty(monkeypatch):
+    """全部命中低于阈值 → 返回空（调用方走「资料中没有提到」兜底，不硬答）"""
+
+    class FakeCol:
+        def query(self, query_embeddings, n_results):
+            return {
+                "documents": [["无关环保块"]],
+                "metadatas": [[{"source": "08"}]],
+                "distances": [[0.85]],  # sim = 0.15 < 0.35
+            }
+
+    monkeypatch.setattr(rag, "embed_texts", lambda texts: [[0.1] * 4 for _ in texts])
+    assert rag.search("出差住宿标准", FakeCol(), k=5, min_sim=0.35) == []
+
+
 # ---------------- 集成层：向量检索（真实 embedding，-m integration） ----------------
 
 

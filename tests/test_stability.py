@@ -75,6 +75,25 @@ def test_with_retry_respects_breaker_open():
         assert "熔断已打开" in str(e)
 
 
+def test_breaker_failure_count_thread_safe():
+    """并发 record_failure：failures 计数不丢（无锁时 += 读-改-写竞态会丢计数）"""
+    import threading
+
+    b = CircuitBreaker(failure_threshold=10_000, recovery_time=60.0)  # 阈值高于总次数，不触发 open
+    n_threads, per_thread = 8, 200
+
+    def worker():
+        for _ in range(per_thread):
+            b.record_failure()
+
+    threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert b.failures == n_threads * per_thread
+
+
 def test_health_check_memory_backend_ready(monkeypatch):
     """Postgres 可连时健康检查报告记忆存储 = ✅（唯一后端 Postgres）"""
     import os

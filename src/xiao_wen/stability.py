@@ -11,6 +11,7 @@
 import functools
 import logging
 import os
+import threading
 import time
 
 from xiao_wen import ROOT
@@ -43,26 +44,30 @@ class CircuitBreaker:
         self.failures = 0
         self.state = "closed"
         self.last_open_at = 0.0
+        self._lock = threading.Lock()  # 并发保护：状态迁移/计数读写原子化（共享全局熔断器多线程可见）
 
     @property
     def is_open(self) -> bool:
-        if self.state == "open" and time.time() - self.last_open_at >= self.recovery_time:
-            self.state = "half_open"
-            logger.info("熔断恢复期：半开试探（放行一个请求）")
-        return self.state == "open"
+        with self._lock:
+            if self.state == "open" and time.time() - self.last_open_at >= self.recovery_time:
+                self.state = "half_open"
+                logger.info("熔断恢复期：半开试探（放行一个请求）")
+            return self.state == "open"
 
     def record_success(self) -> None:
-        if self.state != "closed":
-            logger.info("熔断复位：closed")
-        self.failures = 0
-        self.state = "closed"
+        with self._lock:
+            if self.state != "closed":
+                logger.info("熔断复位：closed")
+            self.failures = 0
+            self.state = "closed"
 
     def record_failure(self) -> None:
-        self.failures += 1
-        self.last_open_at = time.time()
-        if self.state == "half_open" or self.failures >= self.failure_threshold:
-            self.state = "open"
-            logger.warning("熔断打开：连续失败 %d 次，%.1fs 内快速失败", self.failures, self.recovery_time)
+        with self._lock:
+            self.failures += 1
+            self.last_open_at = time.time()
+            if self.state == "half_open" or self.failures >= self.failure_threshold:
+                self.state = "open"
+                logger.warning("熔断打开：连续失败 %d 次，%.1fs 内快速失败", self.failures, self.recovery_time)
 
 
 def with_retry(retries: int = 2, base_delay: float = 0.5, breaker: CircuitBreaker | None = None):

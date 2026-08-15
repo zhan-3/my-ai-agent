@@ -4,7 +4,32 @@ C7：get_air_quality 与 get_weather 共用 _geocode（本地 CITY_COORDS 优先
 常用城市零依赖、不打 nominatim；未知城市给友好文案。
 """
 
+import pytest
+import requests
+
 from xiao_wen import web
+
+
+def test_get_json_raises_on_non_2xx(monkeypatch):
+    """非 2xx 响应（如 500 返回错误 JSON）应触发重试并最终抛异常，不静默返回错误内容"""
+    calls = {"n": 0}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            raise requests.HTTPError("500 Server Error")
+
+        def json(self):
+            return {"error": "internal"}
+
+    def fake_get(url, params=None, headers=None, timeout=None, proxies=None):
+        calls["n"] += 1
+        return FakeResponse()
+
+    monkeypatch.setattr(web.requests, "get", fake_get)
+    monkeypatch.setattr(web.time, "sleep", lambda s: None)  # 跳过重试间隔
+    with pytest.raises(RuntimeError, match="已重试"):
+        web._get_json("https://example.com/api")
+    assert calls["n"] == 3  # 首次 + 2 次重试
 
 
 def test_air_quality_known_city_uses_local_coords(monkeypatch):

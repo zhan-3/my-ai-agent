@@ -182,6 +182,8 @@ def test_stream_chat_error_yields_error_event():
 
     class BoomGraph:
         async def astream_events(self, state, **kwargs):
+            if False:  # 使函数成为 async generator（有 yield），否则 async for 得到未 await 的协程
+                yield None
             raise RuntimeError("LLM 挂了")
 
     out = []
@@ -821,3 +823,66 @@ def test_stream_chat_empty_state_yields_error_not_done():
     assert out[-1]["type"] == "error"
     assert all(e["type"] != "done" for e in out)
     assert memory_store.get_recent_messages(6) == []
+
+
+def test_session_lock_per_session_reuse():
+    """per-session 锁：同 session 复用同一把，不同 session 相互独立"""
+    from xiao_wen import session as s
+
+    assert s._session_lock_for("a") is s._session_lock_for("a")
+    assert s._session_lock_for("a") is not s._session_lock_for("b")
+
+
+def test_chat_same_session_serialized():
+    """同 session 并发两轮 chat：闭环串行化，user/assistant 写回成对不交错
+
+    无锁时第二轮会读旧 recent 并提前进入 invoke，写回顺序错乱（user,user,ai,ai）。
+    """
+    import threading
+    import time
+
+    from xiao_wen import session as s
+
+    seq: list[str] = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingGraph:
+        def invoke(self, state_in):
+            seq.append(f"{state_in['user_input']}:invoke")
+            entered.set()
+            release.wait(timeout=5)  # 第一轮阻塞持锁，第二轮必须等待
+            return {"answer": f"{state_in['user_input']}-ans", "intent": "其他", "reason": "r"}
+
+    class FakeStore:
+        def format_recent_messages(self, n, session_id=None):
+            return "无"
+
+        def add_message(self, role, content, session_id=None):
+            seq.append(f"{content}:{role}")
+            return {}
+
+    def run(text):
+        s.chat(text, "u-serial", graph=BlockingGraph(), store=FakeStore())
+
+    t1 = threading.Thread(target=run, args=("first",))
+    t1.start()
+    assert entered.wait(timeout=2), "第一轮应进入 invoke"
+
+    t2 = threading.Thread(target=run, args=("second",))
+    t2.start()
+    time.sleep(0.2)  # 给第二轮时间尝试拿锁
+    assert "second:invoke" not in seq, "串行化下第二轮不应在锁释放前开始"
+
+    release.set()  # 放行第一轮
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    assert seq == [
+        "first:invoke",
+        "first:user",
+        "first-ans:assistant",
+        "second:invoke",
+        "second:user",
+        "second-ans:assistant",
+    ], seq

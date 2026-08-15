@@ -10,6 +10,7 @@
   只在此处降级一次，webapp / SSE 直接消费模型，不再重复校验
 """
 
+import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
@@ -36,6 +37,20 @@ class ChatResult:
 
 # 防御：任何 Agent 返回空/缺失 answer 时的兜底文案（LLM 偶发 None/空串）
 _FALLBACK_ANSWER = "（暂无回复，请换个说法再试一次）"
+
+# per-session 串行化锁：一轮闭环「读 recent → LLM 生成 → 写回两轮」非原子，同 session
+# 并发（webapp 多线程 POST / 同用户 chat+stream 交错）会读到一致旧快照后交错写回，
+# 短期记忆顺序错乱。此锁让同 session 轮次串行执行（不同 session 并行不受影响）。
+# 注：demo 规模 session 数有限，锁字典不回收可接受；threading.Lock 在事件循环单线程
+# 中空闲时 acquire 立即返回（非阻塞），仅 chat↔stream 同 session 罕见并发时才短暂占用。
+_session_locks: dict[str, threading.Lock] = {}
+_locks_guard = threading.Lock()
+
+
+def _session_lock_for(session_id: str) -> threading.Lock:
+    """同 session 的闭环串行化锁（per-session 复用，跨线程可见）"""
+    with _locks_guard:
+        return _session_locks.setdefault(session_id, threading.Lock())
 
 
 def _resolve_deps(graph, store):
@@ -88,26 +103,27 @@ def chat(text: str, session_id: str = "default", *, graph=None, store=None, reco
     - session_id：会话维度（webapp 层 = 用户名），记忆按此隔离（ADR-0006 / ADR-0007）
     - recorder（评测 trace）：注入时在 recent/final/memory_write 三处记录事件；默认 None 零开销
     """
-    graph, store = _resolve_deps(graph, store)
-    state_in, recent = _prepare_turn(text, session_id, store)
-    if recorder is not None:
-        recorder.record({"type": "recent", "recent": recent})
-    r = graph.invoke(state_in)
-    result = _result_from_state(r)
-    _commit_turn(text, result.answer, session_id, store)
-    if recorder is not None:
-        recorder.record(
-            {
-                "type": "final",
-                "intent": r["intent"],
-                "reason": r["reason"],
-                "answer": result.answer,
-                "plan": r.get("plan"),
-                "stats": r.get("stats"),
-                "history": r.get("history"),
-            }
-        )
-        recorder.record({"type": "memory_write", "user": text, "assistant": result.answer})
+    with _session_lock_for(session_id):
+        graph, store = _resolve_deps(graph, store)
+        state_in, recent = _prepare_turn(text, session_id, store)
+        if recorder is not None:
+            recorder.record({"type": "recent", "recent": recent})
+        r = graph.invoke(state_in)
+        result = _result_from_state(r)
+        _commit_turn(text, result.answer, session_id, store)
+        if recorder is not None:
+            recorder.record(
+                {
+                    "type": "final",
+                    "intent": r["intent"],
+                    "reason": r["reason"],
+                    "answer": result.answer,
+                    "plan": r.get("plan"),
+                    "stats": r.get("stats"),
+                    "history": r.get("history"),
+                }
+            )
+            recorder.record({"type": "memory_write", "user": text, "assistant": result.answer})
     return result
 
 
@@ -126,56 +142,61 @@ async def stream_chat(text: str, session_id: str = "default", *, graph=None, sto
     （name == langgraph_node 过滤嵌套链），chunk 按节点累积还原最终 state。
     记忆写回在流结束、done 之前（与 chat() 语义一致）。
     """
-    graph, store = _resolve_deps(graph, store)
-    state_in, _ = _prepare_turn(text, session_id, store)
-    yield {"type": "stage", "status": "start"}
-    final: dict | None = None
+    lock = _session_lock_for(session_id)
+    lock.acquire()
     try:
-        async for ev in graph.astream_events(state_in, version="v2", stream_mode="values"):
-            node = ev.get("metadata", {}).get("langgraph_node")
-            if not node or ev.get("name") != node:  # 只认节点自身事件（嵌套链 name 不同）
-                continue
-            etype = ev["event"]
-            if etype == "on_chain_start":
-                stage = _stage_event(node, "working")
-                if stage:
-                    yield stage
-            elif etype == "on_chain_end":
-                stage = _stage_event(node, "done")
-                if stage:
-                    yield stage
-                out = ev.get("data", {}).get("output")
-                if isinstance(out, dict):
-                    # 普通函数节点不产生 stream chunk，其写入（如行程 plan）在 output 里
-                    final = {**(final or {}), **out}
-            elif etype == "on_chain_stream":
-                chunk = ev.get("data", {}).get("chunk")
-                if chunk is None:
+        graph, store = _resolve_deps(graph, store)
+        state_in, _ = _prepare_turn(text, session_id, store)
+        yield {"type": "stage", "status": "start"}
+        final: dict | None = None
+        try:
+            async for ev in graph.astream_events(state_in, version="v2", stream_mode="values"):
+                node = ev.get("metadata", {}).get("langgraph_node")
+                if not node or ev.get("name") != node:  # 只认节点自身事件（嵌套链 name 不同）
                     continue
-                final = {**(final or {}), **chunk}  # values 模式 chunk 只含本节点写入，逐节点累积
-                if node == "classify_intent" and chunk.get("intent"):
-                    yield {"type": "stage", "status": "intent", "intent": chunk["intent"]}
-    except Exception as e:  # LLM 熔断/网络异常：降级事件而非整个流崩溃
-        from xiao_wen.stability import logger
+                etype = ev["event"]
+                if etype == "on_chain_start":
+                    stage = _stage_event(node, "working")
+                    if stage:
+                        yield stage
+                elif etype == "on_chain_end":
+                    stage = _stage_event(node, "done")
+                    if stage:
+                        yield stage
+                    out = ev.get("data", {}).get("output")
+                    if isinstance(out, dict):
+                        # 普通函数节点不产生 stream chunk，其写入（如行程 plan）在 output 里
+                        final = {**(final or {}), **out}
+                elif etype == "on_chain_stream":
+                    chunk = ev.get("data", {}).get("chunk")
+                    if chunk is None:
+                        continue
+                    final = {**(final or {}), **chunk}  # values 模式 chunk 只含本节点写入，逐节点累积
+                    if node == "classify_intent" and chunk.get("intent"):
+                        yield {"type": "stage", "status": "intent", "intent": chunk["intent"]}
+        except Exception as e:  # LLM 熔断/网络异常：降级事件而非整个流崩溃
+            from xiao_wen.stability import logger
 
-        logger.error("stream_chat 失败（session=%s）：%s", session_id, e)
-        yield {"type": "error", "message": "⚠️ 服务暂时不可用，请稍后再试。"}
-        return
-    if final is None:  # 防御：图没产出任何 state
-        yield {"type": "error", "message": "⚠️ 服务暂时不可用，请稍后再试。"}
-        return
-    result = _result_from_state(final)
-    _commit_turn(text, result.answer, session_id, store)
-    yield {
-        "type": "done",
-        "answer": result.answer,
-        "intent": result.intent,
-        "reason": result.reason,
-        # SSE 由 json.dumps 手写序列化：plan / stats / history 输出 dict（与 POST /api/chat 响应体一致）
-        "plan": result.plan.model_dump() if result.plan else None,
-        "stats": result.stats.model_dump() if result.stats else None,
-        "history": result.history.model_dump() if result.history else None,
-    }
+            logger.error("stream_chat 失败（session=%s）：%s", session_id, e)
+            yield {"type": "error", "message": "⚠️ 服务暂时不可用，请稍后再试。"}
+            return
+        if final is None:  # 防御：图没产出任何 state
+            yield {"type": "error", "message": "⚠️ 服务暂时不可用，请稍后再试。"}
+            return
+        result = _result_from_state(final)
+        _commit_turn(text, result.answer, session_id, store)
+        yield {
+            "type": "done",
+            "answer": result.answer,
+            "intent": result.intent,
+            "reason": result.reason,
+            # SSE 由 json.dumps 手写序列化：plan / stats / history 输出 dict（与 POST /api/chat 响应体一致）
+            "plan": result.plan.model_dump() if result.plan else None,
+            "stats": result.stats.model_dump() if result.stats else None,
+            "history": result.history.model_dump() if result.history else None,
+        }
+    finally:
+        lock.release()
 
 
 def _stage_event(node: str, status: str) -> dict | None:

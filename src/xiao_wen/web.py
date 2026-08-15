@@ -45,6 +45,7 @@ def _get_json(url, params=None, headers=None, retries=2):
     for _ in range(retries + 1):
         try:
             r = requests.get(url, params=params, headers=headers, timeout=15, proxies=_proxies())
+            r.raise_for_status()  # 非 2xx（404/429/500）立即抛异常进重试，防错误 JSON 被当正常数据
             return r.json()
         except Exception as e:
             last = e

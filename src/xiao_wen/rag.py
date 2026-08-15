@@ -36,6 +36,10 @@ EMB_DIM = int(os.environ.get("DASHSCOPE_EMB_DIM", "1024"))
 BATCH = 10  # 每次 API 调用批量 embedding 条数
 COLLECTION = "travel_docs"
 
+# 检索相似度阈值：低于此值的命中视为语义无关丢弃（防无关文档拼进提示词引发幻觉）。
+# text-embedding-v3 余弦相似度：相关文档通常 >0.4，无关 <0.3；可 .env 用 RAG_MIN_SIM 覆盖。
+MIN_SIM = float(os.environ.get("RAG_MIN_SIM", "0.35"))
+
 # ---- 1. LLM（知识生成，走单一接缝，懒构建）----
 # ---- 2. dashscope embedding（懒校验 + 重试：导入不读 env，首次调用才校验）----
 _EMBED_ENV_VAR = "DASHSCOPE_API_KEY"
@@ -182,13 +186,15 @@ def _split_compound_query(query: str) -> list[str]:
     return parts
 
 
-def search(query: str, col, k: int = 5):
+def search(query: str, col, k: int = 5, min_sim: float | None = None):
     """问题 embedding → chroma 余弦检索 top-k（HNSW 近似最近邻）
 
     复合问句（含和/与/以及/、）拆成子问句多路检索后合并去重：
     每个子主题的命中块都进入候选，按相似度降序取 top-k。
     复合问句按主题均分席位（每子问句取 ceil(k/份数)），避免单一主题霸榜。
+    min_sim：相似度阈值，低于此值的命中丢弃（默认 MIN_SIM，可显式传入用于测试）。
     """
+    threshold = MIN_SIM if min_sim is None else min_sim
     subs = _split_compound_query(query)
     per = max(1, -(-k // len(subs)))  # 每子问句席位：k 按主题数均分向上取整
     out: dict[str, tuple[float, str, str]] = {}
@@ -199,7 +205,7 @@ def search(query: str, col, k: int = 5):
             sim = 1 - dist  # 余弦距离 → 相似度
             out.setdefault(doc, (sim, meta["source"], doc))
     ranked = sorted(out.values(), key=lambda t: t[0], reverse=True)
-    return ranked[:k]
+    return [t for t in ranked if t[0] >= threshold][:k]
 
 
 # ---- 5. 增强 + 生成 ----
