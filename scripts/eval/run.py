@@ -15,6 +15,7 @@ from pathlib import Path
 
 from xiao_wen.eval import metrics
 from xiao_wen.eval.runners import run_intent_set
+from xiao_wen import memory
 from xiao_wen.intent import _intents, classify
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -94,11 +95,31 @@ def _run_judge(args) -> int:
     with samples_path.open("w", encoding="utf-8") as sf:
         for idx, c in enumerate(sample, 1):
             text = c["input"]
-            # 真跑 chat：每条独立 session（隔离记忆），trace 事件链供 judge 截断取段
+            # 真跑 chat：带 recent 的样本先预热 session（黄金集上下文=真实用户场景，
+            # 指代/消歧/续接样本脱离上下文会变成拒答，judge 无法评价）
+            recent = c.get("recent", "")
+            if recent:
+                store = memory
+                for line in recent.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    role, _, content = line.partition(": ")
+                    if role in ("user", "assistant") and content:
+                        store.add_message(role, content, session_id=f"judge_{idx}")
             _, events = run_chat_with_trace(text, session_id=f"judge_{idx}")
             v = j.judge_with_votes(events, n=args.judge_n)
+            # 人工复核需要看到回答原文才能独立打分：final 事件取 answer
+            reply = next((e.get("answer", "") for e in events if e.get("type") == "final"), "")
             verdicts.append(
-                {"id": c.get("id", idx), "input": text, "score": v.score, "verdict": v.verdict, "reasons": v.reasons}
+                {
+                    "id": c.get("id", idx),
+                    "input": text,
+                    "assistant_reply": reply,
+                    "score": v.score,
+                    "verdict": v.verdict,
+                    "reasons": v.reasons,
+                }
             )
             sf.write(json.dumps(verdicts[-1], ensure_ascii=False) + "\n")
             print(f"  [{idx}/{len(sample)}] {text[:24]!r} → {v.score} {v.verdict}")

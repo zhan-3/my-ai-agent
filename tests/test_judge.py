@@ -17,6 +17,15 @@ def test_rubric_has_five_dimensions():
     assert names == ["任务完成", "忠实度", "合规性", "简洁性", "得体性"]
 
 
+def test_rubric_task_completion_has_anchors():
+    """人机一致率实测（严格 0%）后修正：任务完成定义含两个满分锚点——
+    缺项场景正确索取缺项 = 满分；能力外请求说明边界+引导 = 满分"""
+    task = dict(judge.RUBRIC)["任务完成"]
+    assert "先索取" in task  # 缺项场景锚点
+    assert "能力外" in task  # 能力外请求锚点
+    assert "要素已齐全却仍只追问不生成才扣分" in task
+
+
 def _sample_events() -> list[dict]:
     return [
         {"type": "input", "text": "帮我规划10月20日从上海去北京出差4天", "session_id": "j1"},
