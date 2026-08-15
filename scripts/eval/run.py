@@ -100,11 +100,11 @@ def _run_judge(args) -> int:
             recent = c.get("recent", "")
             if recent:
                 store = memory
-                for raw in recent.splitlines():
-                    raw = raw.strip()
-                    if not raw:
+                for raw_line in recent.splitlines():
+                    stripped = raw_line.strip()
+                    if not stripped:
                         continue
-                    role, _, content = raw.partition(": ")
+                    role, _, content = stripped.partition(": ")
                     if role in ("user", "assistant") and content:
                         store.add_message(role, content, session_id=f"judge_{idx}")
             _, events = run_chat_with_trace(text, session_id=f"judge_{idx}")
