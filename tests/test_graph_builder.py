@@ -1,58 +1,37 @@
-"""图工厂（graph_builder）测试：build_supervisor_graph 从注册表 manifest 组装主管/调度图
+"""图工厂（graph_builder）测试：build_supervisor_graph 从注册表 manifest 组装产品图
 
 无 LLM：只断言图结构（节点/路由），不 invoke（invoke 行为由 e2e 集成测试覆盖）。
+产品图 = 单意图单路由 + 多意图 Send fan-out / merge fan-in（输入决定是否并行）。
 """
 
 from xiao_wen import graph_builder as gb
 
 
-def test_single_intent_graph_has_no_parallel_group():
-    """parallel=False：单意图主管图——有分类器与各意图节点，无 p_* / merge"""
-    app = gb.build_supervisor_graph(parallel=False)
+def test_graph_has_agents_and_parallel_group():
+    """产品图：有分类器、各意图节点、p_* 并行组 + merge"""
+    app = gb.build_supervisor_graph()
     nodes = set(app.get_graph().nodes)
     assert "classify_intent" in nodes
     for m in gb.discover():
         assert m["INTENT"] in nodes, f"缺少子 Agent 节点：{m['INTENT']}"
-    assert not any(n.startswith("p_") for n in nodes), "单意图图不应有并行组节点"
-    assert "merge" not in nodes, "单意图图不应有 merge 节点"
-
-
-def test_parallel_graph_has_parallel_group():
-    """parallel=True：调度图——在单意图图基础上增加 p_* 并行组 + merge"""
-    app = gb.build_supervisor_graph(parallel=True)
-    nodes = set(app.get_graph().nodes)
-    assert "classify_intent" in nodes
-    for m in gb.discover():
         assert f"p_{m['INTENT']}" in nodes, f"缺少并行组节点：p_{m['INTENT']}"
-    assert "merge" in nodes, "调度图应有 merge（fan-in）节点"
+    assert "merge" in nodes, "产品图应有 merge（fan-in）节点"
 
 
-def test_parallel_is_superset_of_single():
-    """parallel=True 图包含 parallel=False 图的所有业务节点（并行是增强，不破坏单意图）"""
-    single = set(gb.build_supervisor_graph(parallel=False).get_graph().nodes)
-    parallel = set(gb.build_supervisor_graph(parallel=True).get_graph().nodes)
-    business = single - {"__start__", "__end__"}
-    assert business <= parallel, f"调度图缺失单意图图的业务节点：{business - parallel}"
+def test_graph_has_collect_node():
+    """collect-then-compose：产品图必须有 collect_upstream 节点（图级显式收集）"""
+    nodes = set(gb.build_supervisor_graph().get_graph().nodes)
+    assert "collect_upstream" in nodes
 
 
-def test_both_graphs_have_collect_node():
-    """collect-then-compose：单/并行图都必须有 collect_upstream 节点（图级显式收集）"""
-    for parallel in (False, True):
-        app = gb.build_supervisor_graph(parallel=parallel)
-        nodes = set(app.get_graph().nodes)
-        assert "collect_upstream" in nodes, f"parallel={parallel} 图缺 collect_upstream 节点"
-
-
-def test_route_via_collect_reroutes_trip_planning():
-    """gate 后条件边：含行程规划（主导或 subtasks）→ 先过 collect；否则走原路由不变"""
+def test_router_reroutes_trip_planning_to_collect():
+    """gate 后条件边（未 collect）：含行程规划（主导或 subtasks）→ 先过 collect；否则走原路由"""
+    router = gb._make_router()
     # 单意图行程规划 → 收尾者路径
-    assert (
-        gb._route_via_collect({"intent": "行程规划", "subtasks": [], "recent": "", "user_input": "x"})
-        == "collect_upstream"
-    )
+    assert router({"intent": "行程规划", "subtasks": [], "recent": "", "user_input": "x"}) == "collect_upstream"
     # 多意图含行程规划（subtasks）→ 也先 collect
     assert (
-        gb._route_via_collect(
+        router(
             {
                 "intent": "知识问答",
                 "subtasks": [gb.SubTask(intent="行程规划", text="y")],
@@ -63,9 +42,9 @@ def test_route_via_collect_reroutes_trip_planning():
         == "collect_upstream"
     )
     # 不含行程规划 → 原路由不变（字符串直返）
-    assert gb._route_via_collect({"intent": "知识问答", "subtasks": [], "recent": "", "user_input": "x"}) == "知识问答"
+    assert router({"intent": "知识问答", "subtasks": [], "recent": "", "user_input": "x"}) == "知识问答"
     # 消歧短路优先于 collect（歧义时不需要收集）
-    assert gb._route_via_collect({"intent": "行程规划", "subtasks": [], "clarify": True}) == "__clarify_end__"
+    assert router({"intent": "行程规划", "subtasks": [], "clarify": True}) == "__clarify_end__"
 
 
 def test_dispatch_branches_inherit_upstream():
@@ -116,7 +95,7 @@ def test_invoke_collect_writes_upstream_and_trip_agent_receives(monkeypatch):
     )
     monkeypatch.setattr(gb, "load_agent", lambda name: types.SimpleNamespace(run=fake_run))
 
-    app = gb.build_supervisor_graph(parallel=False)
+    app = gb.build_supervisor_graph()
     out = app.invoke({"user_input": "去北京开会", "recent": "用户: 你好", "messages": [], "subtasks": []})
     assert collected == ["去北京开会"], "collect 节点应执行一次"
     assert seen.get("upstream") == {"policy": "一线城市住宿不超过500", "history_ref": "上次住全季"}
@@ -147,7 +126,7 @@ def test_invoke_without_trip_skips_collect(monkeypatch):
     )
     monkeypatch.setattr(gb, "load_agent", lambda name: types.SimpleNamespace(run=lambda s: {"answer": "标准如下"}))
 
-    app = gb.build_supervisor_graph(parallel=False)
+    app = gb.build_supervisor_graph()
     out = app.invoke({"user_input": "住宿标准是什么", "recent": "用户: 你好", "messages": [], "subtasks": []})
     assert collected == [], "无行程规划不应触发 collect"
     assert out["answer"] == "标准如下"
@@ -181,12 +160,12 @@ def test_merge_without_plan_returns_none():
     assert out["plan"] is None
 
 
-def test_plan_reducer_keeps_first_nonempty():
-    """plan 归约器：第一个非空值胜出（单意图直写 / 并行 merge 双来源安全）"""
+def test_reducer_keeps_first_nonempty():
+    """结构化归约器：第一个非空值胜出（单意图直写 / 并行 merge 双来源安全）"""
     plan = {"summary": "s", "days": [], "reasons": []}
-    assert gb._first_plan(None, None) is None
-    assert gb._first_plan(None, plan) == plan
-    assert gb._first_plan(plan, {"summary": "other"}) == plan, "已有 plan 时后续写入不覆盖（主导优先）"
+    assert gb._first_non_none(None, None) is None
+    assert gb._first_non_none(None, plan) == plan
+    assert gb._first_non_none(plan, {"summary": "other"}) == plan, "已有 plan 时后续写入不覆盖（主导优先）"
 
 
 # ---------------- 指纹缓存（热插拔：manifest 变化自动重建） ----------------
@@ -194,13 +173,9 @@ def test_plan_reducer_keeps_first_nonempty():
 
 def test_same_manifest_returns_cached_graph():
     """manifest 未变：两次 build 返回同一编译图对象（缓存命中，零重建）"""
-    a = gb.build_supervisor_graph(parallel=False)
-    b = gb.build_supervisor_graph(parallel=False)
+    a = gb.build_supervisor_graph()
+    b = gb.build_supervisor_graph()
     assert a is b
-    c = gb.build_supervisor_graph(parallel=True)
-    d = gb.build_supervisor_graph(parallel=True)
-    assert c is d
-    assert a is not c  # parallel 参数不同是不同代
 
 
 def test_new_plugin_rebuilds_graph(monkeypatch, tmp_path):
@@ -211,7 +186,7 @@ def test_new_plugin_rebuilds_graph(monkeypatch, tmp_path):
     import xiao_wen.intent as intent_mod
 
     monkeypatch.setattr(intent_mod, "_current_intents", None)  # 隔离词汇表注入副作用（build→set_intents）
-    before = gb.build_supervisor_graph(parallel=False)
+    before = gb.build_supervisor_graph()
     before_nodes = set(before.get_graph().nodes)
     assert "临时意图" not in before_nodes
 
@@ -220,7 +195,7 @@ def test_new_plugin_rebuilds_graph(monkeypatch, tmp_path):
         'def run(state):\n    return {"answer": "临时插件的回答"}\n',
         encoding="utf-8",
     )
-    after = gb.build_supervisor_graph(parallel=False)
+    after = gb.build_supervisor_graph()
     assert after is not before  # manifest 变化 → 重建（不同图对象）
     after_nodes = set(after.get_graph().nodes)
     assert "临时意图" in after_nodes  # 新意图进入图
@@ -253,7 +228,7 @@ def test_build_reinjects_vocabulary_and_invalidates_intent_model(monkeypatch, tm
     intent_mod._intent_model()  # 预热：缓存一个 prompt（基线词汇表）
     assert intent_mod._intent_model.cache_info().currsize == 1
 
-    gb.build_supervisor_graph(parallel=False)  # 指纹变化 → 重建 → 应重新注入词汇表
+    gb.build_supervisor_graph()  # 指纹变化 → 重建 → 应重新注入词汇表
     assert intent_mod._current_intents is not None, "图工厂重建应重新注入词汇表（set_intents）"
     assert intent_mod._intent_model.cache_info().currsize == 0, "词汇表刷新必须失效模型缓存"
 
@@ -265,7 +240,7 @@ def test_build_refreshes_vocabulary_with_new_plugin(monkeypatch, tmp_path):
 
     monkeypatch.setattr(pr, "PLUGIN_DIR", tmp_path)
     monkeypatch.setattr(intent_mod, "_current_intents", [])  # 重置注入状态，teardown 自动恢复
-    gb.build_supervisor_graph(parallel=False)
+    gb.build_supervisor_graph()
     assert "临时意图" not in {m["INTENT"] for m in intent_mod._current_intents or []}
 
     (tmp_path / "tmp_plugin.py").write_text(
@@ -273,16 +248,15 @@ def test_build_refreshes_vocabulary_with_new_plugin(monkeypatch, tmp_path):
         'def run(state):\n    return {"answer": "临时插件的回答"}\n',
         encoding="utf-8",
     )
-    gb.build_supervisor_graph(parallel=False)
+    gb.build_supervisor_graph()
     assert "临时意图" in {m["INTENT"] for m in intent_mod._current_intents or []}
 
 
 # ---- 轻量消歧：clarify_gate 节点 + 路由 ----
-def test_graphs_have_clarify_gate():
-    """两图都应含 clarify_gate（classify 与路由之间）"""
-    for parallel in (False, True):
-        nodes = set(gb.build_supervisor_graph(parallel=parallel).get_graph().nodes)
-        assert "clarify_gate" in nodes, f"parallel={parallel} 图缺少 clarify_gate 节点"
+def test_graph_has_clarify_gate():
+    """产品图应含 clarify_gate（classify 与路由之间）"""
+    nodes = set(gb.build_supervisor_graph().get_graph().nodes)
+    assert "clarify_gate" in nodes
 
 
 def test_clarify_gate_returns_question_on_ambiguous():
@@ -298,18 +272,13 @@ def test_clarify_gate_passthrough_when_clear():
     assert out == {"clarify": False}
 
 
-def test_route_after_gate_short_circuits():
-    """并行图路由：命中 → __clarify_end__（短路 END）；未命中 → 原 dispatch 结果不变"""
-    assert gb.route_after_gate({"clarify": True}) == "__clarify_end__"
-    assert gb.route_after_gate({"clarify": False, "intent": "知识问答", "subtasks": []}) == "知识问答"
+def test_router_short_circuits():
+    """产品图路由（collect 后）：命中 → __clarify_end__（短路 END）；未命中 → 原 dispatch 结果不变"""
+    router = gb._make_router(after_collect=True)
+    assert router({"clarify": True}) == "__clarify_end__"
+    assert router({"clarify": False, "intent": "知识问答", "subtasks": []}) == "知识问答"
     # 多意图：Send fan-out 不变
     subs = [gb.SubTask(intent="联网查询", text="北京天气")]
     state = {"clarify": False, "intent": "行程规划", "user_input": "帮我规划行程，顺便查北京天气", "subtasks": subs}
-    sends = gb.route_after_gate(state)
+    sends = router(state)
     assert isinstance(sends, list) and all(hasattr(s, "node") for s in sends)
-
-
-def test_route_after_gate_serial_short_circuits():
-    """单意图图路由：命中 → 短路；未命中 → 原字符串路由不变"""
-    assert gb.route_after_gate_serial({"clarify": True}) == "__clarify_end__"
-    assert gb.route_after_gate_serial({"clarify": False, "intent": "行程规划"}) == "行程规划"

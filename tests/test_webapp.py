@@ -53,28 +53,6 @@ class TestRegisterLogin:
 class TestMemoryEndpoint:
     """/api/memory：认证后返回当前用户偏好 + 历史行程（前端记忆侧栏数据源）"""
 
-    def test_chat_degrades_malformed_plan(self, client, monkeypatch):
-        """契约：图产出结构不符的 plan → 响应 plan 为 None，主答案不受影响（文本是回退通道）"""
-
-        class FakeResult:
-            answer = "行程如下（文本）"
-            intent = "行程规划"
-            reason = "r"
-            plan: ClassVar[dict] = {}  # 类型占位：结构不符的 plan 在运行时后置覆盖
-
-        FakeResult.plan = {"summary": "缺 days"}  # 结构不符契约
-        monkeypatch.setattr(webapp, "run_chat", lambda text, session_id: FakeResult())
-        token = client.post("/api/auth/register", json={"username": "zhang", "password": "pass123"}).json()["token"]
-        r = client.post(
-            "/api/chat",
-            json={"user_input": "规划行程"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert r.status_code == 200
-        body = r.json()
-        assert body["plan"] is None
-        assert body["answer"] == "行程如下（文本）"
-
     def test_memory_requires_auth(self, client):
         assert client.get("/api/memory").status_code == 401
 

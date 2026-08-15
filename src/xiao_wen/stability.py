@@ -1,12 +1,11 @@
-"""稳定性模块：工程稳定性六件套
+"""稳定性模块：工程稳定性四件套
 
-重试（指数退避）/ 超时（调用方约定 timeout 参数）/ 熔断（三态）/ 异常兜底 / 日志 / 健康检查
+重试（指数退避）/ 超时（调用方约定 timeout 参数）/ 熔断（三态）/ 日志 / 健康检查
 用法：
-    from xiao_wen.stability import with_retry, CircuitBreaker, safe_call, logger, health_check
+    from xiao_wen.stability import with_retry, CircuitBreaker, logger, health_check
     breaker = CircuitBreaker(failure_threshold=3, recovery_time=5.0)
     @with_retry(retries=2, breaker=breaker)
     def call_llm(...): ...
-    answer = safe_call(call_llm, "⚠️ 服务暂时不可用，请稍后再试")
 """
 
 import functools
@@ -93,15 +92,6 @@ def with_retry(retries: int = 2, base_delay: float = 0.5, breaker: CircuitBreake
         return wrapper
 
     return deco
-
-
-def safe_call(fn, fallback: str = "⚠️ 服务暂时不可用，请稍后再试", *args, **kwargs):
-    """异常兜底：任何异常都不让系统崩，返回友好降级文案"""
-    try:
-        return fn(*args, **kwargs)
-    except Exception as e:
-        logger.error("异常兜底触发：%r 失败：%s", getattr(fn, "__name__", fn), e)
-        return fallback
 
 
 def health_check() -> list[dict]:

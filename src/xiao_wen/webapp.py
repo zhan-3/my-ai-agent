@@ -30,9 +30,6 @@ from xiao_wen.contract import (
     Preference,
     TravelStats,
     TripPlan,
-    history_or_none,
-    plan_or_none,
-    stats_or_none,
 )
 from xiao_wen.session import chat as run_chat  # 会话循环收口（默认 = 图工厂调度图，多意图并行）
 from xiao_wen.session import stream_chat  # 流式会话循环（SSE 阶段事件）
@@ -89,9 +86,9 @@ def chat(req: ChatRequest, authorization: str | None = Header(default=None)) -> 
             answer=r.answer,
             intent=r.intent,
             reason=r.reason,
-            plan=plan_or_none(getattr(r, "plan", None)),
-            stats=stats_or_none(getattr(r, "stats", None)),
-            history=history_or_none(getattr(r, "history", None)),
+            plan=getattr(r, "plan", None),
+            stats=getattr(r, "stats", None),
+            history=getattr(r, "history", None),
         )
     except Exception as e:
         from xiao_wen.stability import logger

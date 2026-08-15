@@ -7,6 +7,7 @@
 
 # ruff: noqa: E501 —— 本模块是 prompt 密集模块：发给 LLM 的提示词内容行
 # （要素示例、约束、reasons 说明）天然超行宽，拆分会改变提示词（换行=内容）。
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
@@ -370,3 +371,48 @@ def needs_info_text(needs: NeedsInfo) -> str:
         + "\n· ".join(needs.missing)
         + "\n（例如：「10月8日从广州去北京开会4天」）"
     )
+
+
+@dataclass
+class TripOutcome:
+    """行程规划的完整产物（compose 阶段输出，供行程 Agent 透传）"""
+
+    answer: str
+    plan: dict | None  # 结构化 plan（含 date_is_vague），缺项时为 None
+
+
+def handle(
+    user_input: str,
+    *,
+    session_id: str = "default",
+    recent: str = "",
+    upstream: dict | None = None,
+) -> TripOutcome:
+    """行程规划完整编排入口（collect-then-compose 的 compose 阶段）：
+
+    提取→补全→缺项→生成→写回（plan），并收口展示拼装——预算块、日期模糊提示、
+    目的地天气提醒。行程 Agent 只做 state → 参数 → handle 的薄适配，不再理解展示细节。
+    """
+    from xiao_wen.web import get_weather
+
+    r = plan(user_input, session_id=session_id, recent=recent, upstream=upstream)
+    if isinstance(r, NeedsInfo):
+        return TripOutcome(answer=needs_info_text(r), plan=None)
+    answer = format_plan(r.plan)
+    req = r.request
+    if req and req.date_is_vague:
+        # 日期模糊（如只说了「下周」）：明示按推断日期安排，给用户确认/调整机会
+        answer += (
+            f"\n\n📅 你只说了出发时间的大致范围，我按 {req.start_date} 开始安排——"
+            "如果实际日期不同，告诉我具体日期，我重新排。"
+        )
+    if req:
+        # 预算块：确定性真实票价/标准价（LLM 不编数字，避免幻觉）
+        with suppress(Exception):
+            answer += f"\n\n{format_budget(req)}"
+    if req and req.to_city not in ("待定", "未知", "") and req.start_date not in ("待定", ""):
+        with suppress(Exception):  # 天气是锦上添花：查不到不影响行程主答案
+            answer += f"\n\n🌤️ 目的地天气提醒：{get_weather.invoke({'city': req.to_city, 'date': req.start_date})}"
+    plan_dict = r.plan.model_dump()
+    plan_dict["date_is_vague"] = bool(req and req.date_is_vague)
+    return TripOutcome(answer=answer, plan=plan_dict)

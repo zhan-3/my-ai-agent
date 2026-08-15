@@ -49,6 +49,6 @@ def run_chat_with_trace(text: str, session_id: str = "default", *, store=None) -
 
     rec = Recorder()
     rec.record({"type": "input", "text": text, "session_id": session_id})
-    graph = build_supervisor_graph(parallel=True, recorder=rec)
+    graph = build_supervisor_graph(recorder=rec)
     result = _session.chat(text, session_id=session_id, graph=graph, store=store, recorder=rec)
     return result, rec.events

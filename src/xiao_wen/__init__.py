@@ -13,13 +13,11 @@ manifest 动态生成）+ 六个内置子 Agent（src/xiao_wen/agents/，可动�
 - intent            意图识别单一来源（词汇表动态生成 + 多意图拆分，C3）
 - trip_planner      行程规划管线（提取→补全→缺项→生成→写回，ADR-0003）
 - agents            内置子 Agent 实体包（INTENT/DESCRIPTION/run，注册表扫描）
-- system            完整系统总装（子 Agent 注册表驱动主管图，主入口）
-- scheduler         调度优化（Send API fan-out/fan-in 并行执行）
 - plugin_registry   子 Agent 注册中心（动态发现 / AST 渐进披露 / 懒加载）
-- stability         稳定性层（重试 / 熔断 / 兜底 / 日志 / 健康检查）
+- stability         稳定性层（重试 / 熔断 / 日志 / 健康检查）
 - session           会话循环收口（读最近对话 → 注入 → invoke → 写回两轮，ADR-0002）
 - webapp            可视化 Web 界面（FastAPI）
-- demos             演示脚本（plugin_demo / stability_demo）
+- demos             演示脚本（plugin_demo / stability_demo / chat_demo）
 """
 
 __version__ = "0.1.0"

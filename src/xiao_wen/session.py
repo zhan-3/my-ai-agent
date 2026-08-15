@@ -1,17 +1,27 @@
 """会话循环模块：一轮完整交互的闭环（ADR-0002，取代 webapp/system/scheduler 三处复制）
 
-- chat(text, session_id) -> ChatResult(answer, intent, reason)
+- chat(text, session_id) -> ChatResult(answer, intent, reason, plan, stats, history)
   读最近对话（短期记忆）→ 注入 → 主管图 invoke → 写回用户与助手两轮
 - 异常向上抛：降级文案是 web 层的职责（webapp 保留 try/except），demo 需要真实异常
-- 依赖可注入：graph 默认调度图（build_supervisor_graph(parallel=True)，多意图并行）；
+- 依赖可注入：graph 默认产品图（build_supervisor_graph()，单意图单路由 + 多意图并行）；
   store 默认 memory 模块（假图/假存储即可测循环）
 - 会话隔离：记忆按 session_id 隔离（ADR-0006），webapp 层升级为用户隔离（ADR-0007）
+- 结构化字段（plan/stats/history）在本层统一校验为契约模型（contract）——图产出 dict
+  只在此处降级一次，webapp / SSE 直接消费模型，不再重复校验
 """
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from xiao_wen import memory
+from xiao_wen.contract import (
+    HistoryResult,
+    TravelStats,
+    TripPlan,
+    history_or_none,
+    plan_or_none,
+    stats_or_none,
+)
 
 
 @dataclass
@@ -19,13 +29,55 @@ class ChatResult:
     answer: str
     intent: str
     reason: str
-    plan: dict | None = None  # 结构化行程（slice 1：行程 Agent 产出；非行程为 None）
-    stats: dict | None = None  # 差旅画像（差旅统计 Agent 产出；非统计为 None）
-    history: dict | None = None  # 历史查询结构化结果（历史查询 Agent 产出；非历史查询为 None）
+    plan: TripPlan | None = None  # 结构化行程（契约模型；图 dict 已在此层校验/降级）
+    stats: TravelStats | None = None  # 差旅画像（契约模型；同上）
+    history: HistoryResult | None = None  # 历史查询结构化结果（契约模型；同上）
 
 
 # 防御：任何 Agent 返回空/缺失 answer 时的兜底文案（LLM 偶发 None/空串）
 _FALLBACK_ANSWER = "（暂无回复，请换个说法再试一次）"
+
+
+def _resolve_deps(graph, store):
+    """图与存储的懒构造/注入：默认调度图 + 默认 memory（chat 与 stream_chat 共用）"""
+    if graph is None:
+        from xiao_wen.graph_builder import build_supervisor_graph
+
+        graph = build_supervisor_graph()
+    if store is None:
+        store = memory
+    return graph, store
+
+
+def _prepare_turn(text: str, session_id: str, store):
+    """读短期记忆 + 组装图输入（chat 与 stream_chat 共用）"""
+    recent = store.format_recent_messages(6, session_id=session_id)
+    state_in = {
+        "messages": [("human", text)],
+        "user_input": text,
+        "recent": recent,
+        "session_id": session_id,
+    }
+    return state_in, recent
+
+
+def _result_from_state(state: dict) -> ChatResult:
+    """图输出 dict → ChatResult：answer 兜底 + 结构化字段契约校验（单一降级点）"""
+    answer = state.get("answer") or _FALLBACK_ANSWER
+    return ChatResult(
+        answer=answer,
+        intent=state.get("intent", ""),
+        reason=state.get("reason", ""),
+        plan=plan_or_none(state.get("plan")),
+        stats=stats_or_none(state.get("stats")),
+        history=history_or_none(state.get("history")),
+    )
+
+
+def _commit_turn(text: str, answer: str, session_id: str, store) -> None:
+    """写回用户与助手两轮（chat 与 stream_chat 共用，顺序一致）"""
+    store.add_message("user", text, session_id=session_id)
+    store.add_message("assistant", answer, session_id=session_id)
 
 
 def chat(text: str, session_id: str = "default", *, graph=None, store=None, recorder=None) -> ChatResult:
@@ -36,49 +88,27 @@ def chat(text: str, session_id: str = "default", *, graph=None, store=None, reco
     - session_id：会话维度（webapp 层 = 用户名），记忆按此隔离（ADR-0006 / ADR-0007）
     - recorder（评测 trace）：注入时在 recent/final/memory_write 三处记录事件；默认 None 零开销
     """
-    if graph is None:
-        from xiao_wen.graph_builder import build_supervisor_graph
-
-        graph = build_supervisor_graph(parallel=True)
-    if store is None:
-        store = memory
-
-    recent = store.format_recent_messages(6, session_id=session_id)
+    graph, store = _resolve_deps(graph, store)
+    state_in, recent = _prepare_turn(text, session_id, store)
     if recorder is not None:
         recorder.record({"type": "recent", "recent": recent})
-    r = graph.invoke(
-        {
-            "messages": [("human", text)],
-            "user_input": text,
-            "recent": recent,
-            "session_id": session_id,
-        }
-    )
-    store.add_message("user", text, session_id=session_id)
-    raw = r.get("answer") if isinstance(r, dict) else getattr(r, "answer", "")
-    answer = raw or _FALLBACK_ANSWER
-    store.add_message("assistant", answer, session_id=session_id)
+    r = graph.invoke(state_in)
+    result = _result_from_state(r)
+    _commit_turn(text, result.answer, session_id, store)
     if recorder is not None:
         recorder.record(
             {
                 "type": "final",
                 "intent": r["intent"],
                 "reason": r["reason"],
-                "answer": answer,
+                "answer": result.answer,
                 "plan": r.get("plan"),
                 "stats": r.get("stats"),
                 "history": r.get("history"),
             }
         )
-        recorder.record({"type": "memory_write", "user": text, "assistant": answer})
-    return ChatResult(
-        answer=answer,
-        intent=r["intent"],
-        reason=r["reason"],
-        plan=r.get("plan"),
-        stats=r.get("stats"),
-        history=r.get("history"),
-    )
+        recorder.record({"type": "memory_write", "user": text, "assistant": result.answer})
+    return result
 
 
 async def stream_chat(text: str, session_id: str = "default", *, graph=None, store=None) -> AsyncIterator[dict]:
@@ -96,20 +126,8 @@ async def stream_chat(text: str, session_id: str = "default", *, graph=None, sto
     （name == langgraph_node 过滤嵌套链），chunk 按节点累积还原最终 state。
     记忆写回在流结束、done 之前（与 chat() 语义一致）。
     """
-    if graph is None:
-        from xiao_wen.graph_builder import build_supervisor_graph
-
-        graph = build_supervisor_graph(parallel=True)
-    if store is None:
-        store = memory
-
-    recent = store.format_recent_messages(6, session_id=session_id)
-    state_in = {
-        "messages": [("human", text)],
-        "user_input": text,
-        "recent": recent,
-        "session_id": session_id,
-    }
+    graph, store = _resolve_deps(graph, store)
+    state_in, _ = _prepare_turn(text, session_id, store)
     yield {"type": "stage", "status": "start"}
     final: dict | None = None
     try:
@@ -146,24 +164,17 @@ async def stream_chat(text: str, session_id: str = "default", *, graph=None, sto
     if final is None:  # 防御：图没产出任何 state
         yield {"type": "error", "message": "⚠️ 服务暂时不可用，请稍后再试。"}
         return
-    from xiao_wen.contract import history_or_none, plan_or_none, stats_or_none
-    from xiao_wen.stability import logger
-
-    store.add_message("user", text, session_id=session_id)
-    answer = final.get("answer") or _FALLBACK_ANSWER
-    store.add_message("assistant", answer, session_id=session_id)
-    plan = plan_or_none(final.get("plan"))
-    stats = stats_or_none(final.get("stats"))
-    history = history_or_none(final.get("history"))
+    result = _result_from_state(final)
+    _commit_turn(text, result.answer, session_id, store)
     yield {
         "type": "done",
-        "answer": answer,
-        "intent": final.get("intent", ""),
-        "reason": final.get("reason", ""),
-        # SSE 由 json.dumps 手写序列化：plan / stats / history 必须输出 dict（与 POST /api/chat 响应体一致）
-        "plan": plan.model_dump() if plan else None,
-        "stats": stats.model_dump() if stats else None,
-        "history": history.model_dump() if history else None,
+        "answer": result.answer,
+        "intent": result.intent,
+        "reason": result.reason,
+        # SSE 由 json.dumps 手写序列化：plan / stats / history 输出 dict（与 POST /api/chat 响应体一致）
+        "plan": result.plan.model_dump() if result.plan else None,
+        "stats": result.stats.model_dump() if result.stats else None,
+        "history": result.history.model_dump() if result.history else None,
     }
 
 

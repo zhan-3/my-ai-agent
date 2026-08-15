@@ -55,7 +55,20 @@ def test_chat_propagates_structured_plan():
             return {"answer": "行程如下", "intent": "行程规划", "reason": "r", "plan": plan}
 
     r = chat("规划行程", graph=PlanGraph())
-    assert r.plan == plan
+    assert r.plan is not None
+    assert r.plan.model_dump() == plan
+
+
+def test_chat_degrades_malformed_plan():
+    """图产出结构不符的 plan → ChatResult.plan 降级为 None（文本是回退通道）"""
+
+    class PlanGraph:
+        def invoke(self, state):
+            return {"answer": "行程如下（文本）", "intent": "行程规划", "reason": "r", "plan": {"summary": "缺 days"}}
+
+    r = chat("规划行程", graph=PlanGraph())
+    assert r.plan is None
+    assert r.answer == "行程如下（文本）"
 
 
 def test_stream_chat_emits_stages_then_done():
@@ -211,8 +224,8 @@ def test_chat_uses_injected_store():
     assert graph.calls[0]["recent"] == "无历史"
 
 
-def test_chat_default_graph_is_parallel_supervisor(monkeypatch):
-    """默认图 = 图工厂的调度图（parallel=True）：产品 hot path 并行能力接线（Q1/Q6a）"""
+def test_chat_default_graph_builds(monkeypatch):
+    """默认图 = 图工厂的产品图（单意图单路由 + 多意图并行）"""
     import xiao_wen.graph_builder as gb
 
     seen = {}
@@ -222,14 +235,14 @@ def test_chat_default_graph_is_parallel_supervisor(monkeypatch):
             seen["state"] = state
             return {"answer": "答", "intent": "其他", "reason": "默认图"}
 
-    def fake_build(parallel=False):
-        seen["parallel"] = parallel
+    def fake_build():
+        seen["built"] = True
         return FakeGraph()
 
     monkeypatch.setattr(gb, "build_supervisor_graph", fake_build)
     r = chat("hi")
     assert r.answer == "答"
-    assert seen["parallel"] is True, "默认图应为调度图（多意图并行）"
+    assert seen["built"] is True
     assert seen["state"]["recent"] is not None
 
 
@@ -414,7 +427,7 @@ def test_itinerary_agent_passes_session_to_trip_planner(monkeypatch):
 
 def test_itinerary_agent_returns_structured_plan(monkeypatch):
     """行程 agent：生成成功 → 返回结构化 plan（slice 1 数据驱动源）；缺项 → plan 为 None"""
-    from xiao_wen import trip_planner
+    from xiao_wen import trip_planner, web
     from xiao_wen.agents import itinerary_agent
 
     req = trip_planner.TripRequest(
@@ -448,7 +461,7 @@ def test_itinerary_agent_returns_structured_plan(monkeypatch):
     monkeypatch.setattr(
         trip_planner, "add_itinerary", lambda facts, summary, *, session_id="default": {"summary": summary}
     )
-    monkeypatch.setattr(itinerary_agent, "get_weather", type("W", (), {"invoke": lambda self, a: "晴"})())
+    monkeypatch.setattr(web, "get_weather", type("W", (), {"invoke": lambda self, a: "晴"})())
 
     out = itinerary_agent.run({"user_input": "10月8日去北京开会4天", "session_id": "会话A"})
     assert out["plan"] == {
@@ -473,7 +486,7 @@ def test_itinerary_agent_returns_structured_plan(monkeypatch):
 
 def test_itinerary_agent_appends_weather_reminder(monkeypatch):
     """行程 agent：生成成功且日期可查 → 答案附加目的地天气提醒（结合行程规划）；天气失败不影响主答案"""
-    from xiao_wen import trip_planner
+    from xiao_wen import trip_planner, web
     from xiao_wen.agents import itinerary_agent
 
     req = trip_planner.TripRequest(
@@ -499,7 +512,7 @@ def test_itinerary_agent_appends_weather_reminder(monkeypatch):
         def invoke(self, args):
             return f"{args['city']} {args['date']} 晴 25°C"
 
-    monkeypatch.setattr(itinerary_agent, "get_weather", FakeWeather())
+    monkeypatch.setattr(web, "get_weather", FakeWeather())
     out = itinerary_agent.run({"user_input": "10月8日去北京开会4天", "session_id": "会话A"})
     assert "北京出差 4 天" in out["answer"]
     assert "目的地天气提醒" in out["answer"] and "晴" in out["answer"]
@@ -508,7 +521,7 @@ def test_itinerary_agent_appends_weather_reminder(monkeypatch):
     def boom(args):
         raise RuntimeError("网络挂了")
 
-    monkeypatch.setattr(itinerary_agent, "get_weather", boom)
+    monkeypatch.setattr(web, "get_weather", boom)
     out2 = itinerary_agent.run({"user_input": "10月8日去北京开会4天", "session_id": "会话A"})
     assert "北京出差 4 天" in out2["answer"]
     assert "目的地天气提醒" not in out2["answer"]
@@ -516,7 +529,7 @@ def test_itinerary_agent_appends_weather_reminder(monkeypatch):
 
 def test_itinerary_agent_confirms_vague_date(monkeypatch):
     """行程 agent：日期表达模糊（如只说了「下周」）→ 生成后明确提示日期是推断的、可调整；具体日期则无提示"""
-    from xiao_wen import trip_planner
+    from xiao_wen import trip_planner, web
     from xiao_wen.agents import itinerary_agent
 
     def run_with(req):
@@ -535,7 +548,7 @@ def test_itinerary_agent_confirms_vague_date(monkeypatch):
         monkeypatch.setattr(
             trip_planner, "add_itinerary", lambda facts, summary, *, session_id="default": {"summary": summary}
         )
-        monkeypatch.setattr(itinerary_agent, "get_weather", type("W", (), {"invoke": lambda self, a: "晴"})())
+        monkeypatch.setattr(web, "get_weather", type("W", (), {"invoke": lambda self, a: "晴"})())
         return itinerary_agent.run({"user_input": "x", "session_id": "会话A"})["answer"]
 
     vague = trip_planner.TripRequest(

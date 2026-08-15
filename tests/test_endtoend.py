@@ -12,7 +12,7 @@ import pytest
 
 from xiao_wen.graph_builder import build_supervisor_graph
 
-_app = build_supervisor_graph(parallel=True)  # 产品默认图（session.chat 同一实例）
+_app = build_supervisor_graph()  # 产品默认图（session.chat 同一实例）
 
 
 def _invoke(user_input: str) -> str:

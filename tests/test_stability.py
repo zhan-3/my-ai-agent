@@ -2,7 +2,7 @@
 
 import time
 
-from xiao_wen.stability import CircuitBreaker, safe_call, with_retry
+from xiao_wen.stability import CircuitBreaker, with_retry
 
 
 def test_breaker_three_states():
@@ -73,19 +73,6 @@ def test_with_retry_respects_breaker_open():
         raise AssertionError("熔断打开时应快速失败")  # 走到这里说明熔断未生效
     except RuntimeError as e:
         assert "熔断已打开" in str(e)
-
-
-def test_safe_call_returns_fallback():
-    def boom():
-        raise RuntimeError("崩了")
-
-    out = safe_call(boom, "⚠️ 服务暂时不可用")
-    assert out == "⚠️ 服务暂时不可用"
-
-    def ok():
-        return "正常"
-
-    assert safe_call(ok, "fallback") == "正常"
 
 
 def test_health_check_memory_backend_ready(monkeypatch):

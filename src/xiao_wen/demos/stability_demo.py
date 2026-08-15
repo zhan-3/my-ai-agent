@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
-from xiao_wen.stability import CircuitBreaker, health_check, safe_call, with_retry
+from xiao_wen.stability import CircuitBreaker, health_check, with_retry
 
 load_dotenv()
 
@@ -76,7 +76,7 @@ if __name__ == "__main__":
     print()
 
     print("=" * 60)
-    print("幕3｜真实系统故障注入：坏 key → 裸调用崩 vs 稳定性层降级")
+    print("幕3｜真实系统故障注入：坏 key → 裸调用崩溃（稳定性层用 with_retry + 熔断在 llm 接缝兜底）")
     from functools import lru_cache
 
     from xiao_wen import graph_builder as base
@@ -102,11 +102,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"    · 抛异常：{type(e).__name__}: {str(e)[:70]}（{(time.time() - t0) * 1000:.0f}ms）")
         print("    · 真实系统里这就是一次崩溃：用户看到 traceback")
-
-    print("  [B] safe_call 包装（稳定性层）——预期：友好降级文案")
-    t0 = time.time()
-    ans = safe_call(base.classify_intent, "⚠️ 服务暂时不可用，请稍后再试", dict(state))
-    print(f"    · 返回：{ans}（{(time.time() - t0) * 1000:.0f}ms，系统未崩）\n")
 
     print("=" * 60)
     print("幕4｜健康检查：系统自检")

@@ -1,6 +1,6 @@
 """内置子 Agent：偏好记录（多 Agent 架构的子 Agent 实体）
 
-偏好提取 prompt/schema 随实现迁入本模块（原 xiao_wen.system），
+偏好提取 prompt/schema 随实现迁入本模块（原总装入口），
 记忆写入收口于深模块 xiao_wen.memory（追加/覆盖 is_update 语义）。
 """
 

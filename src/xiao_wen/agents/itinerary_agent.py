@@ -11,12 +11,6 @@ DESCRIPTION = (
     "负责生成逐日行程（交通/住宿/餐饮/预算）、常驻城市补全与缺项提示，并写回长期记忆。"
 )
 
-from contextlib import suppress  # noqa: E402
-
-from xiao_wen.trip_planner import NeedsInfo, format_budget, format_plan, needs_info_text  # noqa: E402
-from xiao_wen.trip_planner import plan as _trip_plan  # noqa: E402
-from xiao_wen.web import get_weather  # noqa: E402
-
 
 def collect_upstream(user_input: str, session_id: str) -> dict:
     """collect-then-compose 的收集阶段（确定性、零 LLM）：
@@ -47,36 +41,15 @@ def collect_upstream(user_input: str, session_id: str) -> dict:
 
 def run(state) -> dict:
     """收尾者（collect-then-compose 的 compose 阶段）：读图级 collect 节点写入的黑板 upstream，
-    综合生成行程。上游缺失（直接调用/旧路径）→ upstream 空，槽位降级「无」，行为兼容。
-
-    两阶段管线（要素提取→行程生成）收口于 trip_planner.plan（ADR-0003）；
-    生成成功后附加目的地天气提醒。
+    委托深模块 xiao_wen.trip_planner.handle 完成规划 + 展示拼装（预算/天气/日期模糊提示）。
+    上游缺失（直接调用/旧路径）→ upstream 空，槽位降级「无」，行为兼容。
     """
-    upstream = state.get("upstream") or {}
-    r = _trip_plan(
+    from xiao_wen.trip_planner import handle
+
+    out = handle(
         state["user_input"],
         session_id=state.get("session_id", "default"),
         recent=state.get("recent", ""),
-        upstream=upstream,
+        upstream=state.get("upstream") or {},
     )
-    if isinstance(r, NeedsInfo):
-        return {"answer": needs_info_text(r), "plan": None}
-    answer = format_plan(r.plan)
-    req = r.request
-    if req and req.date_is_vague:
-        # 日期模糊（如只说了「下周」）：明示按推断日期安排，给用户确认/调整机会（业界标准：先给方案、可改）
-        answer += (
-            f"\n\n📅 你只说了出发时间的大致范围，我按 {req.start_date} 开始安排——"
-            "如果实际日期不同，告诉我具体日期，我重新排。"
-        )
-    if req:
-        # 预算块：确定性真实票价/标准价（LLM 不编数字，避免幻觉）
-        with suppress(Exception):
-            answer += f"\n\n{format_budget(req)}"
-    if req and req.to_city not in ("待定", "未知", "") and req.start_date not in ("待定", ""):
-        with suppress(Exception):  # 天气是锦上添花：查不到（超 7 天/网络异常）不影响行程主答案
-            answer += f"\n\n🌤️ 目的地天气提醒：{get_weather.invoke({'city': req.to_city, 'date': req.start_date})}"
-    # 结构化 plan（slice 1）：展示层数据驱动。预算/天气刻意留在文本，前端从文本解析附加块
-    plan = r.plan.model_dump()
-    plan["date_is_vague"] = bool(req and req.date_is_vague)
-    return {"answer": answer, "plan": plan}
+    return {"answer": out.answer, "plan": out.plan}
