@@ -242,6 +242,24 @@ def _section_from_text(text: str) -> str | None:
     return match.group(0) if match else None
 
 
+def _chunk_metadata(stem: str, text: str) -> dict[str, str]:
+    """生成与 chunk 一起写入向量库的可追溯元数据。"""
+    expires = re.search(r"(?:有效期至|生效至|截止日期)\s*[:：]?\s*(\d{4}-\d{2}-\d{2})", text)
+    version = re.search(r"(?:版本|v)\s*[:：]?\s*([0-9]+(?:\.[0-9]+)*)", text, re.IGNORECASE)
+    return {
+        "source": stem,
+        "section": _section_from_text(text) or "",
+        "version": version.group(1) if version else "",
+        "effective_to": expires.group(1) if expires else "",
+        "content_hash": hashlib.sha256(text.encode()).hexdigest()[:16],
+    }
+
+
+def _chunks_signature(chunks) -> str:
+    payload = "\n".join(f"{stem}:{_chunk_metadata(stem, text)}:{text}" for stem, text in chunks)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
 def merge_tiny_chunks(chunks, min_len: int = 20):
     merged = []
     i, n = 0, len(chunks)
@@ -272,7 +290,12 @@ def build_index(chunks):
     col = get_collection()
     meta = getattr(col, "metadata", None) or {}
     existing = col.count()
-    if existing == len(chunks) and meta.get("model") == EMB_MODEL:
+    signature = _chunks_signature(chunks)
+    if (
+        existing == len(chunks)
+        and meta.get("model") == EMB_MODEL
+        and meta.get("chunks_signature", signature) == signature
+    ):
         print(f"（复用 chroma 持久化索引，{existing} 条 · {EMB_MODEL}）")
         return col
     if existing:
@@ -286,12 +309,10 @@ def build_index(chunks):
             ids=[f"c{i + j}" for j in range(len(batch))],
             embeddings=vecs,
             documents=[t for _, t in batch],
-            metadatas=[
-                {"source": stem, "section": _section_from_text(text)} for stem, text in batch
-            ],  # 元数据：来源 + 章节
+            metadatas=[_chunk_metadata(stem, text) for stem, text in batch],
         )
         time.sleep(0.2)
-    col.modify(metadata={"model": EMB_MODEL})  # 记录模型版本（不能带 hnsw:space，chromadb 拒绝改距离函数）
+    col.modify(metadata={"model": EMB_MODEL, "chunks_signature": signature})  # 不带 hnsw:space，Chroma 拒绝修改距离函数
     return col
 
 
@@ -363,14 +384,14 @@ def _evidence_id(source: str, text: str) -> str:
 
 
 def retrieve_policy(query: str, k: int = 5) -> PolicyContext:
-    """检索并保留证据身份；异常或无命中明确返回 not_found。
+    """直接从向量索引检索政策，并保留 Chroma 元数据。
 
-    目前复用 search_texts 这个既有检索接缝，确保测试适配器和旧调用仍能注入
-    检索结果；后续 PolicyFact 阶段再把相似度/章节元数据完整接入这里。
+    失败时降级为空上下文；旧的纯文本兼容入口仍由 ``search_texts`` 单独提供。
     """
     try:
-        texts = search_texts(query, k=k)
-        hits = [(0.0, {"source": "legacy-search_texts"}, text) for text in texts]
+        chunks = merge_tiny_chunks(load_chunks())
+        col = build_index(chunks)
+        hits = _search_with_metadata(query, col, k=k)
     except Exception:
         hits = []
     text_context = policy_context_from_texts(query, [(hit[1]["source"], hit[2]) for hit in hits])

@@ -184,7 +184,13 @@ def test_collect_upstream_gathers_and_degrades(monkeypatch):
     monkeypatch.setattr(pa, "_invoke_pref_model", lambda _: pa.PreferenceList(records=[]))
 
     # 正常收集：政策命中 2 段 + 历史最近 2 条
-    monkeypatch.setattr(rag, "search_texts", lambda q, k=5: ["政策段A", "政策段B"])
+    monkeypatch.setattr(rag, "load_chunks", lambda: [("policy", "政策段A"), ("policy", "政策段B")])
+    monkeypatch.setattr(rag, "build_index", lambda chunks: object())
+    monkeypatch.setattr(
+        rag,
+        "_search_with_metadata",
+        lambda q, col, k=5: [(0.9, {"source": "policy"}, "政策段A"), (0.8, {"source": "policy"}, "政策段B")],
+    )
     monkeypatch.setattr(
         ms,
         "get_itineraries",
@@ -204,7 +210,7 @@ def test_collect_upstream_gathers_and_degrades(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("索引不可用")
 
-    monkeypatch.setattr(rag, "search_texts", boom)
+    monkeypatch.setattr(rag, "load_chunks", boom)
     monkeypatch.setattr(ms, "get_itineraries", boom)
     monkeypatch.setattr(pa, "_invoke_pref_model", boom)
     up2 = ia.collect_upstream("去北京出差住哪", "u1")
@@ -222,7 +228,7 @@ def test_collect_upstream_extracts_turn_prefs(monkeypatch):
     from xiao_wen.agents import itinerary_agent as ia
     from xiao_wen.agents import preference_agent as pa
 
-    monkeypatch.setattr(rag, "search_texts", lambda q, k=5: [])
+    monkeypatch.setattr(rag, "load_chunks", lambda: [])
     monkeypatch.setattr(ms, "get_itineraries", lambda *, session_id="default": [])
     monkeypatch.setattr(
         pa,

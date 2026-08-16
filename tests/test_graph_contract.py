@@ -133,7 +133,13 @@ def test_trip_planning_end_to_end_contract(monkeypatch):
         }
     )
     _patch_llm_seam(monkeypatch, fake)
-    monkeypatch.setattr(rag_mod, "search_texts", lambda q, k=5: ["一线城市住宿不超过 500 元/晚"])
+    monkeypatch.setattr(rag_mod, "load_chunks", lambda: [("policy", "一线城市住宿不超过 500 元/晚")])
+    monkeypatch.setattr(rag_mod, "build_index", lambda chunks: object())
+    monkeypatch.setattr(
+        rag_mod,
+        "_search_with_metadata",
+        lambda q, col, k=5: [(0.9, {"source": "policy"}, "一线城市住宿不超过 500 元/晚")],
+    )
     monkeypatch.setattr(web_mod, "get_weather", types.SimpleNamespace(invoke=lambda d: "北京 晴"))
 
     app = gb.build_supervisor_graph()
@@ -183,7 +189,13 @@ def test_multi_intent_fanout_merge_contract(monkeypatch):
         }
     )
     _patch_llm_seam(monkeypatch, fake)
-    monkeypatch.setattr(rag_mod, "search_texts", lambda q, k=5: ["一线城市住宿不超过 500 元/晚"])
+    monkeypatch.setattr(rag_mod, "load_chunks", lambda: [("policy", "一线城市住宿不超过 500 元/晚")])
+    monkeypatch.setattr(rag_mod, "build_index", lambda chunks: object())
+    monkeypatch.setattr(
+        rag_mod,
+        "_search_with_metadata",
+        lambda q, col, k=5: [(0.9, {"source": "policy"}, "一线城市住宿不超过 500 元/晚")],
+    )
     monkeypatch.setattr(web_mod, "get_weather", types.SimpleNamespace(invoke=lambda d: "北京 晴"))
 
     app = gb.build_supervisor_graph()

@@ -164,6 +164,49 @@ def test_build_index_rebuilds_on_model_change(monkeypatch):
     assert fake.upserted, "应重建新索引"
 
 
+def test_retrieve_policy_preserves_vector_metadata(monkeypatch):
+    monkeypatch.setattr(rag, "load_chunks", lambda: [("policy", "一线城市住宿标准不超过500元/晚")])
+    monkeypatch.setattr(rag, "build_index", lambda chunks: object())
+    monkeypatch.setattr(
+        rag,
+        "_search_with_metadata",
+        lambda query, col, k=5: [
+            (
+                0.91,
+                {
+                    "source": "policy",
+                    "section": "三、住宿标准",
+                    "version": "2.0",
+                    "effective_to": "2099-12-31",
+                },
+                "一线城市住宿标准不超过500元/晚",
+            )
+        ],
+    )
+    context = rag.retrieve_policy("住宿标准")
+    assert context.status == "grounded"
+    assert context.evidence[0].similarity == 0.91
+    assert context.evidence[0].section == "三、住宿标准"
+    assert context.evidence[0].version == "2.0"
+    assert context.evidence[0].effective_to == "2099-12-31"
+    assert context.facts[0].evidence_ids == context.evidence_ids
+
+
+def test_retrieve_policy_marks_metadata_expired(monkeypatch):
+    monkeypatch.setattr(rag, "load_chunks", lambda: [("policy", "一线城市住宿标准不超过500元/晚")])
+    monkeypatch.setattr(rag, "build_index", lambda chunks: object())
+    monkeypatch.setattr(
+        rag,
+        "_search_with_metadata",
+        lambda query, col, k=5: [
+            (0.91, {"source": "policy", "effective_to": "2020-01-01"}, "一线城市住宿标准不超过500元/晚")
+        ],
+    )
+    context = rag.retrieve_policy("住宿标准")
+    assert context.status == "stale"
+    assert context.facts == ()
+
+
 def test_search_filters_low_similarity_hits(monkeypatch):
     """低于阈值的命中丢弃：无关文档不拼进上下文（防 LLM 依据无关资料幻觉）"""
 
