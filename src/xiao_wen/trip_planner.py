@@ -7,6 +7,7 @@
 
 # ruff: noqa: E501 —— 本模块是 prompt 密集模块：发给 LLM 的提示词内容行
 # （要素示例、约束、reasons 说明）天然超行宽，拆分会改变提示词（换行=内容）。
+import re
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date
@@ -406,6 +407,21 @@ def format_budget(req: TripRequest) -> str:
     )
 
 
+def _weather_is_usable(note: str) -> bool:
+    """过滤天气工具的失败文案，避免把错误信息伪装成天气提醒。"""
+    unavailable = ("查询天气失败", "不支持查询", "仅支持未来 7 天", "无法识别的日期")
+    return bool(note.strip()) and not any(marker in note for marker in unavailable)
+
+
+def _weather_needs_attention(note: str) -> bool:
+    """对天气工具的可读结果做保守安全提示，不替天气服务编造预警。"""
+    severe_words = ("大雨", "暴雨", "大雪", "暴雪", "雷暴", "冰雹", "大风", "台风", "雾")
+    if any(word in note for word in severe_words):
+        return True
+    match = re.search(r"降水概率\s*(\d+)%", note)
+    return bool(match and int(match.group(1)) >= 60)
+
+
 def format_plan(plan: ItineraryPlan) -> str:
     lines = [f"📋 {plan.summary}", ""]
     if plan.reasons:
@@ -476,13 +492,45 @@ def handle(
         # 预算块：确定性真实票价/标准价（LLM 不编数字，避免幻觉）
         with suppress(Exception):
             answer += f"\n\n{format_budget(req)}"
-    if req and req.to_city not in ("待定", "未知", "") and req.start_date not in ("待定", ""):
-        with suppress(Exception):  # 天气是锦上添花：查不到不影响行程主答案
-            answer += f"\n\n🌤️ 目的地天气提醒：{get_weather.invoke({'city': req.to_city, 'date': req.start_date})}"
+    if req and req.start_date not in ("待定", ""):
+        cities = [req.from_city, req.to_city]
+        weather_notes: list[tuple[str, str]] = []
+        unavailable_cities: list[str] = []
+        seen_cities: set[str] = set()
+        for city in cities:
+            if city in ("待定", "未知", "") or city in seen_cities:
+                continue
+            seen_cities.add(city)
+            try:  # 天气是锦上添花：查不到不影响行程主答案，但要给用户诚实反馈
+                note = get_weather.invoke({"city": city, "date": req.start_date})
+                if _weather_is_usable(note):
+                    weather_notes.append(("出发地" if city == req.from_city else "目的地", note))
+                else:
+                    unavailable_cities.append(city)
+            except Exception:
+                unavailable_cities.append(city)
+        # 无论天气 API 是否可用，都不输出空标题；每个城市都给出可解释状态。
+        weather_lines = [f"· {label}：{note}" for label, note in weather_notes]
+        weather_lines.extend(f"· {city}：暂时无法获取天气，建议临近出发再次查询" for city in unavailable_cities)
+        if weather_lines:
+            answer += "\n\n🌤️ 目的地天气提醒（出行天气，出发日：" + req.start_date + "）：\n" + "\n".join(weather_lines)
+            alerts = [note for _, note in weather_notes if _weather_needs_attention(note)]
+            if alerts:
+                answer += "\n\n⚠️ 异常天气安全提醒：请预留交通缓冲，关注航班/高铁和当地预警；必要时联系主管调整安排。"
     if upstream:
-        sources = tuple(dict.fromkeys(upstream.get("guidance_sources") or ()))
-        if sources:
-            answer += "\n\n📌 出差提示依据：" + "、".join(sources)
+        policy_sources = tuple(
+            dict.fromkeys(
+                item.get("source", "")
+                for item in (upstream.get("sources") or [])
+                if item.get("source", "")
+                in {"01_travel_standards", "02_reimbursement_policy", "03_booking_guide", "04_faq", "06_platform_guide"}
+            )
+        )
+        guidance_sources = tuple(dict.fromkeys(upstream.get("guidance_sources") or ()))
+        if policy_sources:
+            answer += "\n\n📌 政策依据：" + "、".join(policy_sources)
+        if guidance_sources:
+            answer += "\n\n📌 出差提示依据：" + "、".join(guidance_sources)
     plan_dict = r.plan.model_dump()
     plan_dict["date_is_vague"] = bool(req and req.date_is_vague)
     return TripOutcome(answer=answer, plan=plan_dict)

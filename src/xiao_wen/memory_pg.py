@@ -113,12 +113,32 @@ class PostgresBackend:
 
     # ---------- 长期记忆：历史行程 ----------
     def add_itinerary(self, session_id: str, facts: dict, summary: str) -> dict:
+        """写入行程；相同出发日/路线/天数的候选更新原记录，避免重试产生重复档案。
+
+        缺少完整身份字段的旧数据仍追加，保持历史数据和兼容调用语义不变。
+        """
         ts = time.strftime("%Y-%m-%d %H:%M")
+        identity = tuple(facts.get(key) for key in ("start_date", "from_city", "to_city", "duration_days"))
         with self._conn() as conn:
-            conn.execute(
-                "INSERT INTO itineraries (session_id, facts, summary, ts) VALUES (%s, %s, %s, %s)",
-                (session_id, Jsonb(facts), summary, ts),
-            )
+            row = None
+            if all(value not in (None, "", "待定", "未知", 0) for value in identity):
+                row = conn.execute(
+                    "SELECT id FROM itineraries WHERE session_id = %s "
+                    "AND facts->>'start_date' = %s AND facts->>'from_city' = %s "
+                    "AND facts->>'to_city' = %s AND facts->>'duration_days' = %s "
+                    "ORDER BY id DESC LIMIT 1",
+                    (session_id, *(str(value) for value in identity)),
+                ).fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE itineraries SET facts = %s, summary = %s, ts = %s WHERE id = %s",
+                    (Jsonb(facts), summary, ts, row[0]),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO itineraries (session_id, facts, summary, ts) VALUES (%s, %s, %s, %s)",
+                    (session_id, Jsonb(facts), summary, ts),
+                )
         return {**facts, "summary": summary, "ts": ts}
 
     def get_itineraries(self, session_id: str) -> list[dict]:

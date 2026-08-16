@@ -401,7 +401,18 @@ def retrieve_policy(query: str, k: int = 5) -> PolicyContext:
     try:
         chunks = merge_tiny_chunks(load_chunks())
         col = build_index(chunks)
-        hits = _search_with_metadata(query, col, k=k)
+        # 长句和城市名会稀释政策关键词；用稳定的政策主题查询补召回，合并去重。
+        queries = [query]
+        if any(word in query for word in ("住宿", "开会", "出差", "行程", "北京", "上海")):
+            queries.extend(
+                ("公司差旅住宿标准 一线城市 不超过 元/晚", "公司差旅交通标准 高铁 二等座", "公司差旅报销标准 审批")
+            )
+        hit_map = {}
+        for search_query in queries:
+            for hit in _search_with_metadata(search_query, col, k=k):
+                key = (hit[1].get("source"), hit[2])
+                hit_map.setdefault(key, hit)
+        hits = list(hit_map.values())[: max(k, 8)]
     except Exception:
         hits = []
     text_context = policy_context_from_texts(query, [(hit[1]["source"], hit[2]) for hit in hits])
@@ -462,9 +473,9 @@ def retrieve_guidance(city: str) -> dict[str, tuple[Evidence, ...]]:
         chunks = merge_tiny_chunks(load_chunks())
         col = build_index(chunks)
         return {
-            "city_tips": _source_evidence(f"{city} 出差交通住宿注意事项", col, "07_city_specific_tips"),
-            "emergency_tips": _source_evidence("出差紧急情况处理流程 联系方式", col, "05_emergency_procedures"),
-            "green_tips": _source_evidence("差旅绿色出行 高铁 公共交通 环保", col, "08_environmental_initiatives"),
+            "city_tips": _source_evidence(f"{city} 出差交通住宿注意事项", col, "07_city_specific_tips", k=2),
+            "emergency_tips": _source_evidence("出差紧急情况处理流程 联系方式", col, "05_emergency_procedures", k=1),
+            "green_tips": _source_evidence("差旅绿色出行 高铁 公共交通 环保", col, "08_environmental_initiatives", k=1),
         }
     except Exception:
         return {"city_tips": (), "emergency_tips": (), "green_tips": ()}
@@ -485,21 +496,40 @@ def search_texts(query: str, k: int = 5) -> list[str]:
         return []
 
 
-def knowledge_qa(query: str) -> str:
-    """RAG 知识问答：检索 top-5 → 组装上下文 → LLM 生成
-    检索来源写入日志（可追溯），答案不携带技术细节（前端保持干净）"""
+def knowledge_qa_with_sources(query: str) -> tuple[str, tuple[Evidence, ...]]:
+    """知识问答生成，同时返回结构化证据。"""
     chunks = merge_tiny_chunks(load_chunks())
     col = build_index(chunks)
-    hits = search(query, col)
+    hits = _search_with_metadata(query, col, k=5)
     if not hits:
-        return "资料中没有找到相关内容。"
+        return "资料中没有找到相关内容。", ()
     from xiao_wen.stability import logger
 
-    logger.info("RAG 检索 top-%d 来源：%s（问题：%s）", len(hits), [s for _, s, _ in hits], query)
-    context = "\n\n".join(f"--- 来源 {stem} ---\n{text}" for _, stem, text in hits)
-    r = _knowledge_model().invoke({"context": context, "query": query})
-    sources = "、".join(dict.fromkeys(s for _, s, _ in hits))
-    return f"{r.content}\n\n依据：{sources}"
+    logger.info("RAG 检索 top-%d 来源：%s（问题：%s）", len(hits), [m["source"] for _, m, _ in hits], query)
+    context = "\n\n".join(f"--- 来源 {meta['source']} ---\n{text}" for _, meta, text in hits)
+    answer = _knowledge_model().invoke({"context": context, "query": query}).content
+    evidence = tuple(
+        Evidence(
+            _evidence_id(meta["source"], text),
+            meta["source"],
+            text,
+            similarity,
+            section=meta.get("section"),
+            version=meta.get("version"),
+            effective_to=meta.get("effective_to"),
+        )
+        for similarity, meta, text in hits
+    )
+    return answer, evidence
+
+
+def knowledge_qa(query: str) -> str:
+    """兼容旧调用：只返回答案文本。"""
+    answer, sources = knowledge_qa_with_sources(query)
+    if not sources:
+        return answer
+    source_names = "、".join(dict.fromkeys(source.source for source in sources))
+    return f"{answer}\n\n依据：{source_names}"
 
 
 if __name__ == "__main__":

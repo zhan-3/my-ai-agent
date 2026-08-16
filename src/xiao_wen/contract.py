@@ -16,6 +16,16 @@ class TripDay(BaseModel):
     notes: str
 
 
+class KnowledgeSource(BaseModel):
+    """可追溯知识来源；与答案文本分离，供前端渲染来源卡片。"""
+
+    evidence_id: str
+    source: str
+    section: str | None = None
+    similarity: float | None = None
+    text: str = ""
+
+
 class TripPlan(BaseModel):
     """结构化行程（slice 1）：/api/chat → plan；日期模糊标记由行程 Agent 附加"""
 
@@ -37,6 +47,8 @@ class Itinerary(BaseModel):
     from_city: str | None = None
     to_city: str | None = None
     duration_days: int | None = None
+    summary: str | None = None
+    status: str = "历史"
 
 
 class MemorySnapshot(BaseModel):

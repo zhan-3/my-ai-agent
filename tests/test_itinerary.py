@@ -173,6 +173,18 @@ def test_plan_injects_upstream_policy_and_history(monkeypatch):
     assert payload2["history_ref"] == "无"
 
 
+def test_weather_unavailable_is_not_presented_as_weather(monkeypatch):
+    assert not _it._weather_is_usable("查询天气失败（服务可能不稳定，请稍后再试）：ValueError")
+    assert not _it._weather_is_usable("仅支持未来 7 天预报")
+    assert _it._weather_is_usable("北京 2026-10-08 天气：晴，最高 25°C")
+
+
+def test_weather_attention_flags_severe_conditions():
+    assert _it._weather_needs_attention("北京 2026-10-08 天气：雷暴，最高 25°C / 最低 15°C，降水概率 40%")
+    assert _it._weather_needs_attention("上海 2026-10-08 天气：多云，最高 25°C / 最低 15°C，降水概率 60%")
+    assert not _it._weather_needs_attention("杭州 2026-10-08 天气：晴，最高 25°C / 最低 15°C，降水概率 10%")
+
+
 def test_collect_upstream_gathers_and_degrades(monkeypatch):
     """collect-then-compose 收集阶段：知识检索 + 历史参考 + 本轮偏好；任一上游异常 → 降级为空，不阻塞"""
     from xiao_wen import memory as ms
@@ -219,6 +231,31 @@ def test_collect_upstream_gathers_and_degrades(monkeypatch):
     assert up2["policy_evidence_ids"] == ()
     assert up2["history_ref"] == ""
     assert up2["prefs_turn"] == ""
+
+
+def test_collect_upstream_uses_recent_city_for_guidance(monkeypatch):
+    from xiao_wen import memory as ms
+    from xiao_wen import rag
+    from xiao_wen.agents import itinerary_agent as ia
+    from xiao_wen.agents import preference_agent as pa
+
+    monkeypatch.setattr(rag, "retrieve_policy", lambda _: rag.PolicyContext(query="", evidence=(), status="not_found"))
+    monkeypatch.setattr(rag, "search_texts", lambda _: [])
+    monkeypatch.setattr(
+        rag,
+        "retrieve_guidance",
+        lambda city: {
+            "city_tips": (rag.Evidence("city", city + "城市提示", "", 0.9),),
+            "emergency_tips": (),
+            "green_tips": (),
+        },
+    )
+    monkeypatch.setattr(ms, "get_itineraries", lambda *, session_id="default": [])
+    monkeypatch.setattr(pa, "_invoke_pref_model", lambda _: pa.PreferenceList(records=[]))
+
+    up = ia.collect_upstream("4天", "u1", recent="助手：请补充目的城市\n用户：北京")
+    assert "北京城市提示" in up["guidance"]
+    assert up["guidance_sources"] == ("北京城市提示",)
 
 
 def test_collect_upstream_extracts_turn_prefs(monkeypatch):

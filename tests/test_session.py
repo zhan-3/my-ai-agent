@@ -531,7 +531,59 @@ def test_itinerary_agent_appends_weather_reminder(monkeypatch):
     monkeypatch.setattr(web, "get_weather", boom)
     out2 = itinerary_agent.run({"user_input": "10月8日去北京开会4天", "session_id": "会话A"})
     assert "北京出差 4 天" in out2["answer"]
-    assert "目的地天气提醒" not in out2["answer"]
+    assert "天气" in out2["answer"]
+    assert "暂时无法获取天气" in out2["answer"]
+
+
+def test_trip_dialogue_shows_weather_for_both_cities_and_alerts(monkeypatch):
+    """回归：后天从常驻临沂去广州出差 5 天，天气不能只输出空标题。"""
+    from xiao_wen import trip_planner, web
+    from xiao_wen.agents import itinerary_agent
+
+    req = trip_planner.TripRequest(
+        from_city="临沂",
+        to_city="广州",
+        start_date="2026-08-18",
+        duration_days=5,
+        hotel_pref="无",
+        budget_pref="中等",
+    )
+    plan = trip_planner.ItineraryPlan(
+        summary="临沂至广州出差 5 天",
+        days=[],
+        reasons=[],
+    )
+
+    class Chain:
+        def __init__(self, value):
+            self.value = value
+
+        def invoke(self, _):
+            return self.value
+
+    monkeypatch.setattr(trip_planner, "_extract_model", lambda: Chain(req))
+    monkeypatch.setattr(trip_planner, "_plan_model", lambda: Chain(plan))
+    monkeypatch.setattr(
+        trip_planner,
+        "add_itinerary",
+        lambda facts, summary, *, session_id="default": {"summary": summary},
+    )
+
+    def weather(args):
+        return {
+            "临沂": "临沂 2026-08-18 天气：小毛毛雨，最高 31°C / 最低 23°C，降水概率 26%",
+            "广州": "广州 2026-08-18 天气：雷暴，最高 32°C / 最低 25°C，降水概率 96%",
+        }[args["city"]]
+
+    monkeypatch.setattr(web, "get_weather", type("Weather", (), {"invoke": staticmethod(weather)})())
+    out = itinerary_agent.run({"user_input": "后天我要去广州出差5天", "session_id": "会话A"})
+
+    assert "🌤️ 目的地天气提醒" in out["answer"]
+    assert "出发地：临沂" in out["answer"]
+    assert "目的地：广州" in out["answer"]
+    assert "雷暴" in out["answer"]
+    assert "⚠️ 异常天气安全提醒" in out["answer"]
+    assert "目的地天气提醒：\\n\\n" not in out["answer"]
 
 
 def test_itinerary_agent_confirms_vague_date(monkeypatch):

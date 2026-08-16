@@ -1,5 +1,5 @@
 import { request, ApiError } from './client'
-import type { ChatResponse, HistoryResult, TripPlan, TravelStats } from './contract'
+import type { ChatResponse, HistoryResult, KnowledgeSource, TripPlan, TravelStats } from './contract'
 
 export { ApiError }
 export type { ChatResponse }
@@ -20,6 +20,7 @@ export interface StreamEvent {
   plan?: TripPlan | null
   stats?: TravelStats | null
   history?: HistoryResult | null
+  sources?: KnowledgeSource[]
   message?: string
 }
 
@@ -77,6 +78,7 @@ export async function streamChat(
           plan: e.plan ?? null,
           stats: e.stats ?? null,
           history: e.history ?? null,
+          sources: e.sources ?? [],
         }
       } else if (e.type === 'error') {
         throw new Error(e.message || '服务暂时不可用')

@@ -43,6 +43,16 @@ def test_backend_preference_update_overrides_category():
     assert [p["content"] for p in b.get_preferences("A")] == ["北京"]
 
 
+def test_backend_itinerary_same_trip_is_upserted():
+    b = _fresh()
+    facts = {"start_date": "2026-08-18", "from_city": "临沂", "to_city": "广州", "duration_days": 5}
+    b.add_itinerary("A", facts, "第一次生成")
+    b.add_itinerary("A", facts, "重试后生成")
+    its = b.get_itineraries("A")
+    assert len(its) == 1
+    assert its[0]["summary"] == "重试后生成"
+
+
 def test_backend_itinerary_roundtrip():
     b = _fresh()
     rec = b.add_itinerary("A", {"to_city": "北京"}, "北京出差")

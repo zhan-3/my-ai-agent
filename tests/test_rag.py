@@ -164,6 +164,22 @@ def test_build_index_rebuilds_on_model_change(monkeypatch):
     assert fake.upserted, "应重建新索引"
 
 
+def test_retrieve_policy_adds_policy_topic_queries_for_trip_context(monkeypatch):
+    calls = []
+    monkeypatch.setattr(rag, "load_chunks", lambda: [("policy", "政策段")])
+    monkeypatch.setattr(rag, "build_index", lambda chunks: object())
+
+    def search(query, col, k=5):
+        calls.append(query)
+        return [(0.9, {"source": "01_travel_standards"}, "一线城市住宿标准：不超过500元/晚")]
+
+    monkeypatch.setattr(rag, "_search_with_metadata", search)
+    context = rag.retrieve_policy("10月8日去北京开会4天 公司差旅政策")
+    assert context.facts
+    assert any("交通标准" in query for query in calls)
+    assert any("报销标准" in query for query in calls)
+
+
 def test_retrieve_policy_preserves_vector_metadata(monkeypatch):
     monkeypatch.setattr(rag, "load_chunks", lambda: [("policy", "一线城市住宿标准不超过500元/晚")])
     monkeypatch.setattr(rag, "build_index", lambda chunks: object())
@@ -223,6 +239,25 @@ def test_search_filters_low_similarity_hits(monkeypatch):
     hits = rag.search("出差住宿标准", FakeCol(), k=5, min_sim=0.35)
     sims = [sim for sim, _, _ in hits]
     assert sims == [0.6, 0.4], f"低相似度 0.1 应被丢弃，实际相似度 {sims}"
+
+
+def test_retrieve_guidance_limits_each_topic(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(rag, "load_chunks", lambda: [("x", "城市提示")])
+    monkeypatch.setattr(rag, "build_index", lambda chunks: object())
+
+    def fake_search(query, col, k=5):
+        calls.append((query, k))
+        return []
+
+    monkeypatch.setattr(rag, "_search_with_metadata", fake_search)
+    assert rag.retrieve_guidance("北京") == {
+        "city_tips": (),
+        "emergency_tips": (),
+        "green_tips": (),
+    }
+    assert [k for _, k in calls] == [20, 20, 20]
 
 
 def test_policy_facts_cover_deadline_transport_and_approval():

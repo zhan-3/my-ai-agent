@@ -3,7 +3,7 @@ import { sendMessage, streamChat, type ChatResponse, type StreamEvent } from '@/
 import { ApiError } from '@/api/client'
 import { getStoredToken } from '@/lib/storage'
 import type { TripPlan } from '@/lib/trip'
-import type { HistoryResult, TravelStats } from '@/api/contract'
+import type { HistoryResult, KnowledgeSource, TravelStats } from '@/api/contract'
 
 export interface ChatMessage {
   role: 'user' | 'ai'
@@ -12,6 +12,7 @@ export interface ChatMessage {
   plan?: TripPlan | null
   stats?: TravelStats | null
   history?: HistoryResult | null
+  sources?: KnowledgeSource[]
 }
 
 // 实时进度阶段：__start__ 理解中 / __intent__ 已识别意图 / __merge__ 并行汇总 / 其余为子 Agent 意图名
@@ -73,6 +74,7 @@ export function useChat({ onUnauthorized }: { onUnauthorized: () => void }) {
           plan: res.plan ?? null,
           stats: res.stats ?? null,
           history: res.history ?? null,
+          ...(res.sources?.length ? { sources: res.sources } : {}),
         })
         return res
       } catch (e) {
@@ -91,6 +93,7 @@ export function useChat({ onUnauthorized }: { onUnauthorized: () => void }) {
               plan: res.plan ?? null,
               stats: res.stats ?? null,
               history: res.history ?? null,
+              ...(res.sources?.length ? { sources: res.sources } : {}),
             })
             return res
           } catch (e2) {

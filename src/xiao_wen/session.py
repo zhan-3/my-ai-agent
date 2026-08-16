@@ -12,11 +12,12 @@
 
 import threading
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from xiao_wen import memory
 from xiao_wen.contract import (
     HistoryResult,
+    KnowledgeSource,
     TravelStats,
     TripPlan,
     history_or_none,
@@ -33,6 +34,7 @@ class ChatResult:
     plan: TripPlan | None = None  # 结构化行程（契约模型；图 dict 已在此层校验/降级）
     stats: TravelStats | None = None  # 差旅画像（契约模型；同上）
     history: HistoryResult | None = None  # 历史查询结构化结果（契约模型；同上）
+    sources: list[KnowledgeSource] = field(default_factory=list)  # RAG 证据来源
 
 
 # 防御：任何 Agent 返回空/缺失 answer 时的兜底文案（LLM 偶发 None/空串）
@@ -86,6 +88,7 @@ def _result_from_state(state: dict) -> ChatResult:
         plan=plan_or_none(state.get("plan")),
         stats=stats_or_none(state.get("stats")),
         history=history_or_none(state.get("history")),
+        sources=[KnowledgeSource.model_validate(item) for item in (state.get("sources") or [])],
     )
 
 
@@ -194,6 +197,7 @@ async def stream_chat(text: str, session_id: str = "default", *, graph=None, sto
             "plan": result.plan.model_dump() if result.plan else None,
             "stats": result.stats.model_dump() if result.stats else None,
             "history": result.history.model_dump() if result.history else None,
+            "sources": [source.model_dump() for source in result.sources],
         }
     finally:
         lock.release()

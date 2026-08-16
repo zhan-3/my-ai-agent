@@ -55,6 +55,7 @@ class State(TypedDict):
     plan: NotRequired[Annotated[dict | None, _first_non_none]]  # 结构化行程（行程 Agent 产出；非行程为 None）
     stats: NotRequired[Annotated[dict | None, _first_non_none]]  # 差旅画像（差旅统计 Agent 产出；非统计为 None）
     history: NotRequired[Annotated[dict | None, _first_non_none]]  # 历史查询结构化结果（非历史查询为 None）
+    sources: NotRequired[list[dict]]  # RAG 来源（知识问答/行程主动知识）
     clarify: NotRequired[bool]  # 消歧门：命中歧义时 True，answer=反问问题，路由短路到 END
     upstream: NotRequired[Annotated[dict, _first_non_empty]]  # collect-then-compose：collect 节点写入，行程 agent 读取
 
@@ -116,6 +117,9 @@ def _make_node(intent_name: str, recorder=None):
 # 结构化输出键（图 State / 并行收集 / merge / 会话结果提取共用单一来源）
 STRUCTURED_OUTPUT_KEYS = ("plan", "stats", "history")
 
+# 来源是可选扩展字段；仅在 Agent 实际返回时写入，保持旧并行节点输出兼容。
+OPTIONAL_OUTPUT_KEYS = ("sources",)
+
 
 def make_parallel(agent):
     """把原子子 Agent 包成并行节点：读 Send 分支的 current_task，输出 collected（不覆盖 answer）"""
@@ -125,6 +129,9 @@ def make_parallel(agent):
         out = agent({**state, "user_input": sub.text})
         item = {"intent": sub.intent, "text": sub.text, "answer": out["answer"]}
         item.update({k: out.get(k) for k in STRUCTURED_OUTPUT_KEYS})
+        for key in OPTIONAL_OUTPUT_KEYS:
+            if key in out:
+                item[key] = out[key]
         return {"collected": [item]}
 
     return node
@@ -236,7 +243,16 @@ def _make_collect():
     def node(state):
         from xiao_wen.agents import itinerary_agent
 
-        return {"upstream": itinerary_agent.collect_upstream(state["user_input"], state.get("session_id", "default"))}
+        try:
+            upstream = itinerary_agent.collect_upstream(
+                state["user_input"],
+                state.get("session_id", "default"),
+                state.get("recent", ""),
+            )
+        except TypeError:
+            # 兼容旧适配器的二参数收集接缝；正式实现使用 recent 支持多轮城市识别。
+            upstream = itinerary_agent.collect_upstream(state["user_input"], state.get("session_id", "default"))
+        return {"upstream": upstream}
 
     return node
 

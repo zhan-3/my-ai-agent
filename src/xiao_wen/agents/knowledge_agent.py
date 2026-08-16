@@ -10,4 +10,17 @@ from xiao_wen import rag  # noqa: E402  rag.knowledge_qa(query) -> str
 
 
 def run(state) -> dict:
-    return {"answer": rag.knowledge_qa(state["user_input"])}
+    answer, sources = rag.knowledge_qa_with_sources(state["user_input"])
+    return {
+        "answer": answer,
+        "sources": [
+            {
+                "evidence_id": source.evidence_id,
+                "source": source.source,
+                "section": source.section,
+                "similarity": source.similarity,
+                "text": source.text,
+            }
+            for source in sources
+        ],
+    }

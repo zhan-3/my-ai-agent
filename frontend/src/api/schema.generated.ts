@@ -221,6 +221,7 @@ export interface components {
             plan?: components["schemas"]["TripPlan"] | null;
             stats?: components["schemas"]["TravelStats"] | null;
             history?: components["schemas"]["HistoryResult"] | null;
+            sources?: components["schemas"]["KnowledgeSource"][];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -231,6 +232,14 @@ export interface components {
          * HistoryItinerary
          * @description 历史行程明细（结构化卡片；容忍旧数据缺字段）
          */
+        /** KnowledgeSource */
+        KnowledgeSource: {
+            evidence_id: string;
+            source: string;
+            section?: string | null;
+            similarity?: number | null;
+            text: string;
+        };
         HistoryItinerary: {
             /** Start Date */
             start_date?: string | null;
@@ -282,6 +291,10 @@ export interface components {
             to_city?: string | null;
             /** Duration Days */
             duration_days?: number | null;
+            /** Summary */
+            summary?: string | null;
+            /** Status */
+            status?: string;
         };
         /** MemorySnapshot */
         MemorySnapshot: {

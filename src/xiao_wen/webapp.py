@@ -26,6 +26,7 @@ from xiao_wen import auth
 from xiao_wen.contract import (
     HistoryResult,
     Itinerary,
+    KnowledgeSource,
     MemorySnapshot,
     Preference,
     TravelStats,
@@ -53,6 +54,7 @@ class ChatResponse(BaseModel):
     plan: TripPlan | None = None  # 结构化行程（契约 TripPlan，OpenAPI 自动出 schema）；非行程/结构不符为 None
     stats: TravelStats | None = None  # 差旅画像（契约 TravelStats）；非统计/结构不符为 None
     history: HistoryResult | None = None  # 历史查询结构化行程（契约 HistoryResult）；非历史查询为 None
+    sources: list[KnowledgeSource] = []  # RAG 证据来源
 
 
 class AuthResponse(BaseModel):
@@ -89,6 +91,7 @@ def chat(req: ChatRequest, authorization: str | None = Header(default=None)) -> 
             plan=getattr(r, "plan", None),
             stats=getattr(r, "stats", None),
             history=getattr(r, "history", None),
+            sources=getattr(r, "sources", []),
         )
     except Exception as e:
         from xiao_wen.stability import logger
