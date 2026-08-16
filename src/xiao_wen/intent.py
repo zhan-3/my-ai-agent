@@ -53,6 +53,8 @@ _EXAMPLES: dict[str, list[str]] = {
     "联网查询": [
         "北京明天天气怎么样",
         "今天美元兑人民币汇率多少",
+        "帮我查一下2026-08-18从临沂北到广州南的车票",
+        "查一下当前行程的车票",
     ],
     "其他": [
         "杭州有什么好玩的旅游景点",  # 个人休闲 → 其他
@@ -70,6 +72,7 @@ _BOUNDARY_RULES = (
     "  若该句同时是偏好陈述（含常住/喜欢/不吃/习惯等）→ 主导意图仍为行程规划，subtasks 追加偏好记录；\n"
     "  上一轮没有追问行程要素时，「我常住上海」这类纯陈述 → 偏好记录。\n"
     "· 查询类（问政策/问记忆/问实时信息）按内容归类，不因含行动词就归行程规划；\n"
+    "· 明确查询车票/车次/余票，或说「查一下当前行程的车票」→ 联网查询；只生成12306官方查询入口，不把它当成行程规划；\n"
     "· 一句话含多个独立请求 → 拆 subtasks（主导意图取第一个）；\n"
     "· 拿不准且与差旅无关 → 其他（兜底）。\n"
 )
@@ -236,6 +239,12 @@ def classify(recent: str, user_input: str, *, _depth: int = 0) -> IntentResult:
     result = IntentResult(intent=intent, reason=r.reason, subtasks=subtasks)
     # 待补全续接（规则兑底）：LLM 分类不稳时（同场景可能归偏好/其他），
     # 只要 recent 里助手在追问行程要素、本轮是简短补充 → 确定性修正为行程规划。
+    # 明确车票查询是联网能力；规划完成后的「查一下车票」从 recent 继承行程参数。
+    # 规则放在续接修正前，避免上一轮行程追问把票务查询误判为继续补槽。
+    if any(mark in user_input for mark in ("车票", "车次", "余票", "高铁票")) and any(
+        mark in user_input for mark in ("查", "看", "有没有", "查询")
+    ):
+        result = IntentResult(intent="联网查询", reason="明确查询车票/车次，生成官方购票入口", subtasks=[])
     result = _recover_pending(recent, user_input, result)
     # 纯偏好锁定：无追问上下文时，纯偏好陈述（无行程要素/非咨询）→ 偏好记录
     # （防 LLM 把「上次一样，还是住汉庭吧」脑补成行程续接）

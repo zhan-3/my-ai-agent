@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from xiao_wen import llm
 from xiao_wen.memory import add_itinerary, get_home_city, get_preferences
 from xiao_wen.reference_data import HOTEL_RATE, city_tier, train_info
+from xiao_wen.ticket_link import build_ticket_url
 
 # 相对日期解析：给提取器注入「今天」（含周几），让「下周/明天」能推算成具体日期
 _WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
@@ -121,8 +122,9 @@ plan_prompt = ChatPromptTemplate.from_messages(
 - summary 是给用户看的中文总结（不含 JSON）
 
 字段形状必须严格如下（都是简单值，禁止嵌套对象！）：
-- transport：一句话字符串，如 "高铁 G31 次 08:00 北京南→12:30 杭州东"
+- transport：一句话字符串，如 "高铁（具体车次和时间以12306实时查询为准）"
 - hotel：字符串，如 "全季酒店（杭州西湖店）"；最后一天返程写 "无（当晚返程）"
+- 禁止编造车次、发车时间、到达时间、余票或票价；没有实时票务结果时只能写“以12306为准”
 - activities：字符串数组，每项一句，如 "14:00-17:00 公务：拜访客户公司"、"18:30-20:00 用餐：与客户晚餐"
 - notes：字符串，一两句备注
 
@@ -297,6 +299,11 @@ def plan(
         }
     )
     assert isinstance(plan, ItineraryPlan)
+    # 静态参考数据不得伪装成实时票务结果：统一清理模型生成的具体车次/时刻。
+    if req.transport_pref in ("无", "高铁"):
+        for day in plan.days:
+            if any(token in day.transport for token in ("高铁", "动车", "火车")):
+                day.transport = "高铁（具体车次和时间以12306实时查询为准）"
     # 生成后、写回前做确定性验证：日期/天数/政策证据不满足时不污染历史记忆。
     from xiao_wen.validation import validate_trip
 
@@ -352,12 +359,9 @@ def estimate_budget(req: TripRequest) -> dict:
     people = req.people_count if isinstance(req.people_count, int) and req.people_count > 0 else 1
     nights = max(req.duration_days - 1, 0)  # 最后一天返程，住 (天数-1) 晚；一日往返 0 晚
     info = train_info(req.from_city, req.to_city)
-    if info:
-        train_fare = info[4]
-        train_line = f"高铁 {info[0]} 次 {info[1]}→{info[2]}（{info[3]}）"
-    else:
-        train_fare = 650  # 未收录线路：按中等里程二等座参考档
-        train_line = "高铁往返（具体车次以出票为准）"
+    train_fare = info[4] if info else 650  # 未收录线路：按中等里程二等座参考档
+    # reference_data 仅用于预算参考；预算标注为参考价，不代表实时可售车次。
+    train_line = f"高铁 {info[0]} 次 {info[1]}→{info[2]}（参考车次）" if info else "高铁往返（具体车次以出票为准）"
     transport_cost = train_fare * 2 * people  # 往返 × 人数
     tier = city_tier(req.to_city)
     level = BUDGET_LEVELS.get(req.budget_pref, BUDGET_LEVELS[DEFAULT_BUDGET_LEVEL])
@@ -458,6 +462,11 @@ class TripOutcome:
     plan: dict | None  # 结构化 plan（含 date_is_vague），缺项时为 None
 
 
+def _ticket_url(origin: str, destination: str, travel_date: str, return_date: str = "") -> tuple[str, str | None]:
+    """统一生成 12306 官方预填链接。"""
+    return build_ticket_url(origin, destination, travel_date, return_date)
+
+
 def handle(
     user_input: str,
     *,
@@ -517,6 +526,26 @@ def handle(
             alerts = [note for _, note in weather_notes if _weather_needs_attention(note)]
             if alerts:
                 answer += "\n\n⚠️ 异常天气安全提醒：请预留交通缓冲，关注航班/高铁和当地预警；必要时联系主管调整安排。"
+    ticket_url = ""
+    if (
+        req
+        and req.start_date not in ("待定", "")
+        and req.from_city not in ("待定", "")
+        and req.to_city not in ("待定", "")
+    ):
+        ticket_url, ticket_date_error = _ticket_url(req.from_city, req.to_city, req.start_date, req.return_date)
+        answer += f"\n\n🎫 车票查询：\n· {req.from_city} → {req.to_city}\n· 出发日期：{req.start_date}"
+        if req.return_date:
+            answer += f"\n· 返程日期：{req.return_date}"
+        if ticket_date_error:
+            answer += f"\n· 暂未生成链接：{ticket_date_error}"
+        elif ticket_url:
+            answer += (
+                f"\n· 前往铁路12306查询车次：{ticket_url}"
+                "\n车站名称和电报码来自12306官方车站数据；请在12306页面确认实际车次、余票和票价；晓问不代购票。"
+            )
+        else:
+            answer += "\n· 暂未生成链接：无法从12306官方车站数据确认对应车站，请补充具体车站。"
     if upstream:
         policy_sources = tuple(
             dict.fromkeys(

@@ -14,6 +14,8 @@ wheels/
 data/memory.json
 data/embeddings.npy
 data/chroma/
+data/chroma.lock
+data/chroma.corrupt-*/
 delivery/
 
 # pi agent 项目级配置（本机会话偏好，不进仓库）

@@ -12,7 +12,7 @@
 import os
 import time
 from datetime import date as _date
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Annotated
 
@@ -26,6 +26,7 @@ from typing_extensions import TypedDict
 
 from xiao_wen import llm
 from xiao_wen.reference_data import CITY_COORDS
+from xiao_wen.ticket_link import ticket_label
 
 # ---- 网络工具：代理 + 重试（免费 API 不稳定，工程上必须健壮）----
 
@@ -164,6 +165,24 @@ def get_currency_rate(from_currency: str, to_currency: str) -> str:
 
 
 @tool
+def search_train_tickets(origin: str, destination: str, travel_date: str, return_date: str = "") -> str:
+    """生成使用 12306 官方预填参数的车次查询入口；不查询余票、不代购票。"""
+    try:
+        if travel_date == "今天":
+            travel_date = _date.today().isoformat()
+        elif travel_date == "明天":
+            travel_date = (_date.today() + timedelta(days=1)).isoformat()
+        elif travel_date == "后天":
+            travel_date = (_date.today() + timedelta(days=2)).isoformat()
+        datetime.strptime(travel_date, "%Y-%m-%d")
+        if return_date:
+            datetime.strptime(return_date, "%Y-%m-%d")
+    except ValueError:
+        return f"无法识别出发日期：{travel_date}{' / ' + return_date if return_date else ''}（请使用 YYYY-MM-DD）"
+    return ticket_label(origin, destination, travel_date, return_date)
+
+
+@tool
 def get_air_quality(city: str) -> str:
     """查询指定城市的当前空气质量。city：城市名，如「北京」「上海」「杭州」"""
     try:
@@ -189,7 +208,7 @@ def get_air_quality(city: str) -> str:
         return f"查询空气质量失败（服务可能不稳定，请稍后再试）：{type(e).__name__}"
 
 
-tools = [get_weather, get_currency_rate, get_air_quality]
+tools = [get_weather, get_currency_rate, get_air_quality, search_train_tickets]
 # ---- 2. 图：agent(LLM+工具) ⇄ tools(ToolNode) 的 ReAct 循环 ----
 
 
@@ -228,7 +247,8 @@ def _llm_with_tools():
 SYSTEM = SystemMessage(
     content=(
         "你是晓问差旅助手的「联网查询」模块，负责回答需要实时信息的问题。"
-        "涉及天气、汇率等实时数据时，必须调用对应工具获取真实数据，再基于结果回答；"
+        "涉及天气、汇率、空气质量或车票查询入口时，必须调用对应工具获取真实数据，再基于结果回答；"
+        "车票工具只生成铁路12306官方查询入口，不查询余票、不代购票；"
         "与实时信息无关的问题，直接说明这不属于联网查询范围。"
     )
 )

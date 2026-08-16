@@ -7,7 +7,7 @@ C7：get_air_quality 与 get_weather 共用 _geocode（本地 CITY_COORDS 优先
 import pytest
 import requests
 
-from xiao_wen import web
+from xiao_wen import ticket_link, web
 
 
 def test_get_json_raises_on_non_2xx(monkeypatch):
@@ -30,6 +30,58 @@ def test_get_json_raises_on_non_2xx(monkeypatch):
     with pytest.raises(RuntimeError, match="已重试"):
         web._get_json("https://example.com/api")
     assert calls["n"] == 3  # 首次 + 2 次重试
+
+
+def test_search_train_tickets_generates_official_prefill_url(monkeypatch):
+    station_codes = {
+        "临沂北": ("临沂北", "UMK"),
+        "广州南": ("广州南", "IZQ"),
+    }
+
+    def fake_resolve(value):
+        return station_codes.get(value)
+
+    monkeypatch.setattr(ticket_link, "resolve_station", fake_resolve)
+    out = web.search_train_tickets.func("临沂北", "广州南", "2026-08-18")  # type: ignore[attr-defined]
+    assert "铁路12306官方预填查询入口" in out
+    assert "linktypeid=dc" in out
+    assert "fs=%E4%B8%B4%E6%B2%82%E5%8C%97,UMK" in out
+    assert "ts=%E5%B9%BF%E5%B7%9E%E5%8D%97,IZQ" in out
+    assert "date=2026-08-18" in out
+    assert "flag=N,N,Y" in out
+    assert "不代购票" in out
+
+
+def test_search_train_tickets_rejects_unverified_station(monkeypatch):
+    monkeypatch.setattr(ticket_link, "resolve_station", lambda value: None)
+    out = web.search_train_tickets.func("未知", "北京", "2026-08-18")  # type: ignore[attr-defined]
+    assert "无法从12306官方车站数据确认" in out
+
+
+def test_search_train_tickets_prefills_return_date(monkeypatch):
+    station_codes = {"临沂北": ("临沂北", "UMK"), "北京南": ("北京南", "VNP")}
+
+    def fake_resolve(value):
+        return station_codes.get(value)
+
+    monkeypatch.setattr(ticket_link, "resolve_station", fake_resolve)
+    out = web.search_train_tickets.func("临沂北", "北京南", "2026-08-20", "2026-08-23")  # type: ignore[attr-defined]
+    assert "linktypeid=wf" in out
+    assert "date=2026-08-20,2026-08-23" in out
+    assert "返程日期 2026-08-23" in out
+
+
+def test_search_train_tickets_rejects_date_outside_sale_window(monkeypatch):
+    monkeypatch.setattr(
+        web, "ticket_label", lambda origin, destination, travel_date, return_date="": "超出当前可查询范围"
+    )
+    out = web.search_train_tickets.func("临沂北", "北京南", "2026-08-31")  # type: ignore[attr-defined]
+    assert "超出当前可查询范围" in out
+
+
+def test_search_train_tickets_rejects_invalid_date():
+    out = web.search_train_tickets.func("临沂北", "广州南", "下周")  # type: ignore[attr-defined]
+    assert "无法识别出发日期" in out
 
 
 def test_air_quality_known_city_uses_local_coords(monkeypatch):

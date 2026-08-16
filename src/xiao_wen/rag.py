@@ -15,6 +15,7 @@ import hashlib
 import os
 import re
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
@@ -38,6 +39,22 @@ EMB_MODEL = os.environ.get("DASHSCOPE_EMB_MODEL", "text-embedding-v3")
 EMB_DIM = int(os.environ.get("DASHSCOPE_EMB_DIM", "1024"))
 BATCH = 10  # 每次 API 调用批量 embedding 条数
 COLLECTION = "travel_docs"
+CHROMA_LOCK = CHROMA_DIR.parent / "chroma.lock"
+
+
+@contextmanager
+def _chroma_lock():
+    """跨进程串行化 Chroma 访问，避免 Rust HNSW/SQLite 并发访问导致 native 崩溃。"""
+    import fcntl
+
+    CHROMA_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    with CHROMA_LOCK.open("w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
 
 # 检索相似度阈值：低于此值的命中视为语义无关丢弃（防无关文档拼进提示词引发幻觉）。
 # text-embedding-v3 余弦相似度：相关文档通常 >0.4，无关 <0.3；可 .env 用 RAG_MIN_SIM 覆盖。
@@ -293,9 +310,16 @@ def get_collection():
 def build_index(chunks):
     """文档块 → dashscope embedding → 存入 chroma（磁盘持久化）
 
-    索引版本化（防 stale）：块数一致**且** collection 元数据记录的模型名与当前一致才复用；
-    换 embedding 模型（如 v3→v4）后旧向量与新区块不在同一向量空间，即使维度相同也必须
-    清空重建——块数一致复用的旧逻辑防不了换模型，这里补上模型版本检查。
+    整个打开/检查/重建过程持有跨进程锁，避免 Web 进程和 CLI/测试同时触碰
+    Chroma 的 Rust 索引。"""
+    with _chroma_lock():
+        return _build_index_locked(chunks)
+
+
+def _build_index_locked(chunks):
+    """在 `_chroma_lock` 内执行索引检查和构建。
+
+    换 embedding 模型或文档内容后清空并重建索引，避免复用过期向量。
     """
     col = get_collection()
     meta = getattr(col, "metadata", None) or {}
@@ -343,11 +367,13 @@ def _split_compound_query(query: str) -> list[str]:
 def _search_with_metadata(query: str, col, k: int = 5, min_sim: float | None = None):
     """问题 embedding → chroma 余弦检索 top-k（HNSW 近似最近邻）
 
-    复合问句（含和/与/以及/、）拆成子问句多路检索后合并去重：
-    每个子主题的命中块都进入候选，按相似度降序取 top-k。
-    复合问句按主题均分席位（每子问句取 ceil(k/份数)），避免单一主题霸榜。
-    min_sim：相似度阈值，低于此值的命中丢弃（默认 MIN_SIM，可显式传入用于测试）。
-    """
+    查询也必须持有跨进程锁；仅锁建库不能阻止另一个进程同时 query。"""
+    with _chroma_lock():
+        return _search_with_metadata_locked(query, col, k, min_sim)
+
+
+def _search_with_metadata_locked(query: str, col, k: int = 5, min_sim: float | None = None):
+    """在 `_chroma_lock` 内执行查询并按相似度返回 top-k。"""
     threshold = MIN_SIM if min_sim is None else min_sim
     subs = _split_compound_query(query)
     per = max(1, -(-k // len(subs)))  # 每子问句席位：k 按主题数均分向上取整
@@ -407,7 +433,7 @@ def retrieve_policy(query: str, k: int = 5) -> PolicyContext:
             queries.extend(
                 ("公司差旅住宿标准 一线城市 不超过 元/晚", "公司差旅交通标准 高铁 二等座", "公司差旅报销标准 审批")
             )
-        hit_map = {}
+        hit_map: dict[tuple[object, object], tuple[float, dict, str]] = {}
         for search_query in queries:
             for hit in _search_with_metadata(search_query, col, k=k):
                 key = (hit[1].get("source"), hit[2])

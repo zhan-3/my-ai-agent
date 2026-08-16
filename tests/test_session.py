@@ -475,7 +475,7 @@ def test_itinerary_agent_returns_structured_plan(monkeypatch):
         **plan.model_dump(),
         "date_is_vague": False,
     }
-    assert out["plan"]["days"][0]["transport"] == "高铁 G1"
+    assert out["plan"]["days"][0]["transport"] == "高铁（具体车次和时间以12306实时查询为准）"
 
     # 缺项（NeedsInfo）：plan 为 None，前端走文本回退
     vague_req = trip_planner.TripRequest(

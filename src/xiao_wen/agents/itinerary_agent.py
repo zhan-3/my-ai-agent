@@ -58,12 +58,19 @@ def collect_upstream(user_input: str, session_id: str, recent: str = "") -> dict
             )
     # 主动知识：出发/目的城市攻略、紧急流程、绿色出行不再依赖用户另问。
     # 两个城市都取证：出发城市影响机场/车站和天气衔接，目的城市影响住宿、当地交通和安全。
-    guidance = {"city_tips": (), "emergency_tips": (), "green_tips": ()}
+    guidance: dict[str, tuple[rag.Evidence, ...]] = {
+        "city_tips": (),
+        "emergency_tips": (),
+        "green_tips": (),
+    }
     with suppress(Exception):
         cities = _extract_city_hints(user_input, recent)
         if cities:
             results = [rag.retrieve_guidance(city) for city in cities]
-            guidance = {key: tuple(item for result in results for item in result.get(key, ())) for key in guidance}
+            guidance = {
+                key: tuple(item for result in results for item in result.get(key, ()) if isinstance(item, rag.Evidence))
+                for key in guidance
+            }
             # 主动知识是注意事项，不让它挤满生成上下文：城市各取一段，其他类别各取一段。
             guidance["city_tips"] = guidance["city_tips"][:2]
             guidance["emergency_tips"] = guidance["emergency_tips"][:1]
