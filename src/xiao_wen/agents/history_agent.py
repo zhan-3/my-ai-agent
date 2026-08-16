@@ -20,6 +20,7 @@ DESCRIPTION = (
 )
 
 from xiao_wen.memory import get_itineraries, get_preferences  # noqa: E402
+from xiao_wen.reference_data import KNOWN_CITIES  # noqa: E402
 
 # 问题关键词 → 查询方向（无 user_input 时视为综合查询，向后兼容）
 _TRIP_WORDS = ("行程", "出差", "去哪", "路线", "计划", "安排", "游记", "记录", "订单", "消费", "日期", "入住")
@@ -27,23 +28,9 @@ _PREF_WORDS = ("偏好", "习惯", "常住", "记忆", "喜欢", "不吃", "口�
 # 计划向词：问「接下来/安排/什么时候出发」→ 未来规划；其余行程词 → 历史（已发生）
 _PLAN_WORDS = ("计划", "安排", "规划", "接下来", "下次", "什么时候", "出发", "即将", "将要", "准备", "待办")
 
-# 城市词表（与 trip_planner 城市分级一致）：问题提到城市 → 按城市过滤行程
-_CITIES = (
-    "北京",
-    "上海",
-    "广州",
-    "深圳",
-    "杭州",
-    "南京",
-    "成都",
-    "武汉",
-    "西安",
-    "重庆",
-    "天津",
-    "苏州",
-    "长沙",
-    "郑州",
-)
+# 城市词表：单一来源 xiao_wen.reference_data.KNOWN_CITIES（由城市经纬度表派生）
+# 问题提到城市 → 按城市过滤行程
+_CITIES = KNOWN_CITIES
 
 
 def _mentioned_cities(q: str) -> list[str]:

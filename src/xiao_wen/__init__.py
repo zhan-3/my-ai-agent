@@ -7,7 +7,8 @@ manifest 动态生成）+ 六个内置子 Agent（src/xiao_wen/agents/，可动�
 
 模块划分（正式命名）：
 - llm               模型单一接缝（懒构造 + 校验 + 熔断守卫，ADR-0001）
-- memory            两层记忆存储（短期消息 + 长期偏好/行程，JSON 持久化）
+- memory            两层记忆存储（短期消息 + 长期偏好/行程，唯一后端 Postgres）
+- reference_data    领域参考数据单一来源（城市/车次/城市分级/住宿标准）
 - rag               知识问答（dashscope embedding + Chroma 向量检索）
 - web               联网查询（ToolNode ReAct：天气/汇率/空气质量）
 - intent            意图识别单一来源（词汇表动态生成 + 多意图拆分，C3）

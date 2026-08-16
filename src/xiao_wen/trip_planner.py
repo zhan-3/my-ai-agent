@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from xiao_wen import llm
 from xiao_wen.memory import add_itinerary, get_home_city, get_preferences
+from xiao_wen.reference_data import HOTEL_RATE, city_tier, train_info
 
 # 相对日期解析：给提取器注入「今天」（含周几），让「下周/明天」能推算成具体日期
 _WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
@@ -331,29 +332,7 @@ def plan(
 
 # ---- 展示（可读性格式化，测试锁定） ----
 
-# 行程“实感”数据层：主流商务线路真实高铁车次/二等座票价（公开常态价，仅供演示参考）
-# 键：(出发, 到达) → (车次, 出发站, 到达站, 时长, 二等座票价元)
-TRAIN_TABLE: dict[tuple[str, str], tuple[str, str, str, str, int]] = {
-    ("北京", "杭州"): ("G31", "北京南", "杭州东", "4小时31分", 553),
-    ("杭州", "北京"): ("G36", "杭州东", "北京南", "4小时24分", 553),
-    ("北京", "上海"): ("G1", "北京南", "上海虹桥", "4小时18分", 662),
-    ("上海", "北京"): ("G2", "上海虹桥", "北京南", "4小时18分", 662),
-    ("北京", "广州"): ("G79", "北京西", "广州南", "8小时05分", 862),
-    ("广州", "北京"): ("G80", "广州南", "北京西", "7小时59分", 862),
-    ("北京", "成都"): ("G571", "北京西", "成都东", "7小时48分", 778),
-    ("成都", "北京"): ("G572", "成都东", "北京西", "7小时51分", 778),
-    ("北京", "武汉"): ("G525", "北京西", "武汉", "4小时22分", 520),
-    ("武汉", "北京"): ("G526", "武汉", "北京西", "4小时21分", 520),
-    ("北京", "西安"): ("G651", "北京西", "西安北", "4小时45分", 515),
-    ("西安", "北京"): ("G652", "西安北", "北京西", "4小时44分", 515),
-    ("上海", "杭州"): ("G7311", "上海虹桥", "杭州东", "45分钟", 73),
-    ("杭州", "上海"): ("G7302", "杭州东", "上海虹桥", "45分钟", 73),
-}
-
-# 城市分级（与差旅政策知识库一致：一线 500 / 二线 400 / 三线 300 元/晚）
-TIER1_CITIES = {"北京", "上海", "广州", "深圳"}
-TIER2_CITIES = {"杭州", "南京", "成都", "武汉", "西安", "重庆", "天津", "苏州", "长沙", "郑州"}
-HOTEL_RATE = {"一线": 500, "二线": 400, "三线": 300}
+# 行程“实感”数据层：车次表 / 城市分级 / 住宿标准统一来自 xiao_wen.reference_data
 # 预算档位（经济/中等/舒适）→ 住宿系数（在差旅标准价上调整）+ 每日餐饮标准。
 # 「中等」即差旅政策标准价；「经济」下调、「舒适」上调，让用户预算偏好真正参与估算。
 BUDGET_LEVELS = {
@@ -362,20 +341,6 @@ BUDGET_LEVELS = {
     "舒适": {"hotel_factor": 1.5, "meal_per_day": 300},  # 住宿 150%、餐标 150×2
 }
 DEFAULT_BUDGET_LEVEL = "中等"
-
-
-def city_tier(city: str) -> str:
-    """城市分级：一线 / 二线 / 三线（与知识库差旅标准一致）"""
-    if city in TIER1_CITIES:
-        return "一线"
-    if city in TIER2_CITIES:
-        return "二线"
-    return "三线"
-
-
-def train_info(from_city: str, to_city: str) -> tuple[str, str, str, str, int] | None:
-    """查车次表（含反向），查不到返回 None"""
-    return TRAIN_TABLE.get((from_city, to_city)) or TRAIN_TABLE.get((to_city, from_city))
 
 
 def estimate_budget(req: TripRequest) -> dict:

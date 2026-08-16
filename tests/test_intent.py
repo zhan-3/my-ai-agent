@@ -1,7 +1,7 @@
 """意图识别集成测试（真实 LLM，「对意图识别进行验证」）
 
 跑法：uv run pytest -m integration
-单一来源：xiao_wen.intent（system/scheduler 两图共用同一 classify）
+单一来源：xiao_wen.intent（system 与 graph_builder 调度图共用同一 classify）
 """
 
 import pytest

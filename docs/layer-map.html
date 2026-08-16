@@ -59,7 +59,7 @@ flowchart TB
     W7["差旅统计 ★外部<br/>plugins/stats.py"]
     M["两层记忆 memory.py"]
     A["回答"]
-    SCH["scheduler<br/>Send fan-out / fan-in<br/>同一注册表并行"]
+    SCH["graph_builder 调度图<br/>Send fan-out / fan-in<br/>同一注册表并行"]
 
     U --> S --> I --> G
     G --> W1 --> M --> A
@@ -144,7 +144,7 @@ flowchart TB
               <tr class="border-b border-slate-100">
                 <td class="py-3 pr-4">一句话两个请求只能串行排队等</td>
                 <td class="py-3 pr-4"><span class="chip" style="background:#dbeafe;border-color:#1d4ed8;color:#1e40af">层0</span></td>
-                <td class="py-3 pr-4 font-mono text-xs">scheduler.py</td>
+                <td class="py-3 pr-4 font-mono text-xs">graph_builder.py</td>
                 <td class="py-3">意图识别拆 subtasks → Send 并行派发 → merge 汇总（fan-out/fan-in，同一注册表）</td>
               </tr>
               <tr class="border-b border-slate-100">
@@ -203,10 +203,10 @@ flowchart LR
                 <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">system.py</td><td class="py-2">完整系统总装：discover → set_intents → 注册表驱动建节点/路由（加子 Agent 零改动）</td></tr>
                 <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">agents/</td><td class="py-2">六个内置子 Agent 实体（INTENT + DESCRIPTION + run(state)）：itinerary / preference / history / knowledge / web / other</td></tr>
                 <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">trip_planner.py</td><td class="py-2">行程管线：提取 → 补全 → 缺项 → 生成 → 写回（顺序是产品行为）</td></tr>
-                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">memory.py</td><td class="py-2">两层记忆：短期消息 + 长期偏好/历史（JSON 持久化）</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">memory.py</td><td class="py-2">两层记忆：短期消息 + 长期偏好/历史（唯一后端 Postgres）</td></tr>
                 <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">rag.py</td><td class="py-2">知识问答：dashscope embedding + Chroma 向量检索</td></tr>
                 <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">web.py</td><td class="py-2">联网查询：ToolNode ReAct（天气/汇率/空气质量）</td></tr>
-                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">scheduler.py</td><td class="py-2">调度增强：多意图 Send 并行（与 system 同一注册表）</td></tr>
+                <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">reference_data.py</td><td class="py-2">领域参考数据单一来源：城市/车次/城市分级/住宿标准</td></tr>
                 <tr class="border-b border-slate-100"><td class="py-2 pr-3 font-mono text-xs whitespace-nowrap">webapp.py</td><td class="py-2">FastAPI 可视化界面（复用 system 完整系统）</td></tr>
               </tbody>
             </table>

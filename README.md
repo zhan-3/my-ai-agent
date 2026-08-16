@@ -53,7 +53,7 @@
               ▼                                                        ▼
     ┌──────────────────── 记忆层 ─────────────────────┐     ┌──────────────┐
     │ 短期：最近 6 轮对话（每轮注入）                    │     │ 免费公开 API   │
-    │ 长期：偏好/常驻城市/历史行程（JSON 持久化）        │     │ 天气/汇率/空气 │
+    │ 长期：偏好/常驻城市/历史行程（Postgres 持久化）   │     │ 天气/汇率/空气 │
     └─────────────────────────────────────────────────┘     └──────────────┘
 ```
 
@@ -93,7 +93,6 @@ uv run python -m xiao_wen.system
 # 4) 分模块验证各 Agent
 uv run python -m xiao_wen.web            # 联网查询（工具调用）
 uv run python -m xiao_wen.rag            # 知识问答（向量检索 + Chroma）
-uv run python -m xiao_wen.scheduler      # 调度优化：多请求并行执行
 uv run python -m xiao_wen.demos.plugin_demo    # 插件化架构：动态发现/懒加载/热插拔（四幕演示）
 uv run python -m xiao_wen.demos.stability_demo # 工程稳定性：重试/熔断/故障注入/健康检查（四幕演示）
 uv run ruff check              # 代码检查（lint，秒级；--fix 自动修复可修项）
@@ -133,7 +132,7 @@ export POSTGRES_URL=postgresql://postgres:123456@localhost:5432/xiao_wen
 │   └── xiao_wen/                ★ 成品包
 │       ├── __init__.py          # 包元信息
 │       ├── system.py            ★ 完整系统（单意图主管图，图工厂薄壳，主入口）
-│       ├── scheduler.py         ★ 调度优化（并行调度图，图工厂薄壳）
+│       ├── reference_data.py    # 领域参考数据单一来源（城市/车次/分级/住宿标准）
 │       ├── graph_builder.py     ★ 图工厂（主管/调度图组装 + 指纹缓存热插拔）
 │       ├── session.py           ★ 会话循环收口（读记忆→注入→invoke→写回）
 │       ├── intent.py            ★ 意图识别单一来源（动态词汇表 + 多意图拆分）
