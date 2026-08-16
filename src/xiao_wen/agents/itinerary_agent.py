@@ -50,6 +50,20 @@ def collect_upstream(user_input: str, session_id: str) -> dict:
                 status="grounded",
                 snapshot_id="legacy-policy",
             )
+    # 主动知识：目的地城市攻略、紧急流程、绿色出行不再依赖用户另问。
+    # 这里用用户原话检索，城市名会由向量检索从「去北京」等表达中识别；
+    # 行程生成阶段再用提取出的目的地做一次更精确的城市检索目前由同一查询覆盖。
+    guidance = {"city_tips": (), "emergency_tips": (), "green_tips": ()}
+    with suppress(Exception):
+        destination = _extract_destination_hint(user_input)
+        if destination:
+            guidance = rag.retrieve_guidance(destination)
+    guidance_text = "\n\n".join(
+        f"【{label} · {item.source}】\n{item.text}"
+        for label, key in (("城市提示", "city_tips"), ("紧急处理", "emergency_tips"), ("绿色出行", "green_tips"))
+        for item in guidance.get(key, ())
+    )
+    guidance_sources = tuple(dict.fromkeys(item.source for items in guidance.values() for item in items))
     history_ref = ""
     try:
         its = get_itineraries(session_id=session_id)
@@ -67,7 +81,22 @@ def collect_upstream(user_input: str, session_id: str) -> dict:
         "policy_evidence_ids": policy_context.evidence_ids,
         "history_ref": history_ref,
         "prefs_turn": prefs_turn,
+        "guidance": guidance_text,
+        "guidance_sources": guidance_sources,
     }
+
+
+def _extract_destination_hint(user_input: str) -> str:
+    """从行程原话提取一个轻量目的地提示，失败时返回空并交给政策检索兜底。"""
+    from xiao_wen.reference_data import KNOWN_CITIES
+
+    for marker in ("去", "到", "前往"):
+        if marker in user_input:
+            tail = user_input.split(marker, 1)[1]
+            for city in sorted(KNOWN_CITIES, key=len, reverse=True):
+                if tail.startswith(city) or city in tail[:6]:
+                    return city
+    return ""
 
 
 def _extract_turn_prefs(user_input: str) -> str:

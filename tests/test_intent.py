@@ -44,6 +44,14 @@ def test_intent_classification(text, expected):
 # ---- 待补全续接（规则兑底，纯逻辑不依赖 LLM） ----
 
 
+def test_travel_advice_is_knowledge_intent_without_llm():
+    for text in ("北京出差注意什么", "出差遇到紧急情况怎么办"):
+        result = _intent._is_travel_knowledge_consult(text)
+        assert result
+        corrected = _intent.IntentResult(intent="知识问答", reason="", subtasks=[])
+        assert corrected.intent == "知识问答"
+
+
 def test_recover_pending_reroutes_preference_to_plan():
     """recent 里助手在追问行程要素 + 用户偏好陈述 → 修正为行程规划 + 偏好进 subtasks
     （「我现在常住上海」在追问上下文：续接行程的同时记偏好，而不是只记偏好）"""

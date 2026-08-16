@@ -112,11 +112,21 @@ def _extract_policy_facts(evidence: tuple[Evidence, ...]) -> tuple[PolicyFact, .
             ("hotel_rate", r"三线(?:及以下)?城市.*?不超过\s*(\d+)\s*元/晚", "元/晚", {"city_tier": "三线"}),
             ("breakfast_rate", r"早餐.*?不超过\s*(\d+)\s*元/餐", "元/餐", {}),
             ("meal_rate", r"(?:午餐和晚餐|午餐|晚餐).*?每餐不超过\s*(\d+)\s*元", "元/餐", {}),
+            ("application_lead_time", r"出发前至少\s*(\d+)\s*个工作日提交", "工作日", {}),
+            ("approval_sla", r"主管应在\s*(\d+)\s*个工作日内完成审批", "工作日", {}),
+            ("reimbursement_deadline", r"出差结束后.*?在\s*(\d+)\s*个自然日内提交报销", "自然日", {}),
+            ("long_trip_approval_days", r"长期出差（超过\s*(\d+)\s*天）", "天", {}),
+            ("meal_entertainment_approval", r"超过\s*(\d+)\s*元需要部门主管审批", "元", {}),
+            ("train_seat_standard", r"允许预订：([^。\n]+)", "座位等级", {}),
+            ("domestic_flight_cabin", r"国内航班：([^。\n]+)", "舱位", {}),
+            ("taxi_reimbursement_scope", r"允许使用场景：([^。\n]+)", "场景", {}),
         ]
         for key, pattern, unit, scope in patterns:
             match = re.search(pattern, text)
             if match:
-                facts.append(PolicyFact(key, int(match.group(1)), unit, scope, evidence_ids))
+                raw_value = match.group(1).strip()
+                value: int | str = int(raw_value) if raw_value.isdigit() else raw_value
+                facts.append(PolicyFact(key, value, unit, scope, evidence_ids))
     return tuple(facts)
 
 
@@ -420,6 +430,46 @@ def retrieve_policy(query: str, k: int = 5) -> PolicyContext:
     )
 
 
+def _source_evidence(query: str, col, source: str, k: int = 3) -> tuple[Evidence, ...]:
+    """从指定文档来源取证据，用于行程生成的主动知识注入。
+
+    先扩大候选集再按 source 过滤，避免把「城市/应急/环保」三个主题混在一个
+    top-k 里导致某一主题霸榜。该函数仍复用同一向量索引，不另建知识库。
+    """
+    hits = _search_with_metadata(query, col, k=20)
+    selected = [hit for hit in hits if hit[1].get("source") == source][:k]
+    return tuple(
+        Evidence(
+            _evidence_id(source, text),
+            source,
+            text,
+            sim,
+            section=meta.get("section"),
+            version=meta.get("version"),
+            effective_to=meta.get("effective_to"),
+        )
+        for sim, meta, text in selected
+    )
+
+
+def retrieve_guidance(city: str) -> dict[str, tuple[Evidence, ...]]:
+    """主动知识检索：按目的地为行程生成收集城市、应急和绿色出行提示。
+
+    返回证据而非 LLM 文本，调用方可同时把内容注入 prompt 并保留来源。
+    任一 embedding/索引异常均降级为空，不阻塞行程规划。
+    """
+    try:
+        chunks = merge_tiny_chunks(load_chunks())
+        col = build_index(chunks)
+        return {
+            "city_tips": _source_evidence(f"{city} 出差交通住宿注意事项", col, "07_city_specific_tips"),
+            "emergency_tips": _source_evidence("出差紧急情况处理流程 联系方式", col, "05_emergency_procedures"),
+            "green_tips": _source_evidence("差旅绿色出行 高铁 公共交通 环保", col, "08_environmental_initiatives"),
+        }
+    except Exception:
+        return {"city_tips": (), "emergency_tips": (), "green_tips": ()}
+
+
 def search_texts(query: str, k: int = 5) -> list[str]:
     """纯检索（无 LLM）：返回命中文本段列表（空 = 无命中/索引不可用）。
 
@@ -448,7 +498,8 @@ def knowledge_qa(query: str) -> str:
     logger.info("RAG 检索 top-%d 来源：%s（问题：%s）", len(hits), [s for _, s, _ in hits], query)
     context = "\n\n".join(f"--- 来源 {stem} ---\n{text}" for _, stem, text in hits)
     r = _knowledge_model().invoke({"context": context, "query": query})
-    return r.content
+    sources = "、".join(dict.fromkeys(s for _, s, _ in hits))
+    return f"{r.content}\n\n依据：{sources}"
 
 
 if __name__ == "__main__":

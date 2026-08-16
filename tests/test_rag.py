@@ -225,6 +225,25 @@ def test_search_filters_low_similarity_hits(monkeypatch):
     assert sims == [0.6, 0.4], f"低相似度 0.1 应被丢弃，实际相似度 {sims}"
 
 
+def test_policy_facts_cover_deadline_transport_and_approval():
+    context = rag.policy_context_from_texts(
+        "政策",
+        [
+            (
+                "01_travel_standards",
+                "出发前至少3个工作日提交。主管应在1个工作日内完成审批。允许预订：二等座及以下。国内航班：经济舱。",
+            ),
+            ("02_reimbursement_policy", "出差结束后，应在30个自然日内提交报销申请。"),
+        ],
+    )
+    facts = {(fact.key, fact.value, fact.unit) for fact in context.facts}
+    assert ("application_lead_time", 3, "工作日") in facts
+    assert ("approval_sla", 1, "工作日") in facts
+    assert ("train_seat_standard", "二等座及以下", "座位等级") in facts
+    assert ("domestic_flight_cabin", "经济舱", "舱位") in facts
+    assert ("reimbursement_deadline", 30, "自然日") in facts
+
+
 def test_search_all_below_threshold_returns_empty(monkeypatch):
     """全部命中低于阈值 → 返回空（调用方走「资料中没有提到」兜底，不硬答）"""
 

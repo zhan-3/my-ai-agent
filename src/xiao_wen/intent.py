@@ -47,6 +47,8 @@ _EXAMPLES: dict[str, list[str]] = {
     "知识问答": [
         "出差打车能报销吗",
         "一线城市的住宿标准是多少",
+        "北京出差注意什么",
+        "出差遇到紧急情况怎么办",
     ],
     "联网查询": [
         "北京明天天气怎么样",
@@ -111,7 +113,8 @@ def _build_prompt(intents: list[dict]) -> ChatPromptTemplate:
         "边界：本助手只服务企业差旅。个人休闲/旅游规划、非差旅问题一律归「其他」。\n"
         "区分陈述与询问：用户**陈述**偏好事实（如「我喜欢住汉庭」）→ 偏好记录；\n"
         "用户**询问**自己的偏好/常驻地/记忆（如「我常住哪里」「我的住宿偏好是什么」）是查询记忆 → 历史查询。\n"
-        "咨询类（「住哪里比较好」「推荐哪家酒店」「应该注意什么」）不是查记忆也不是陈述，→ 其他。\n"
+        "咨询类（「住哪里比较好」「推荐哪家酒店」）→ 其他；\n"
+        "但涉及出差目的地、差旅安全、报销或交通的「注意什么」→ 知识问答。\n"
         "参考最近对话理解省略/指代（如「那上海呢」指上一轮提到的城市）。\n"
         "指代句（以「那/那呢/然后呢/那…呢/接下来」开头、省略了主体）：**先识别句中的查询对象**——\n"
         "问天气/汇率/实时信息 → 联网查询；问政策/报销 → 知识问答；\n"
@@ -237,6 +240,13 @@ def classify(recent: str, user_input: str, *, _depth: int = 0) -> IntentResult:
     # 纯偏好锁定：无追问上下文时，纯偏好陈述（无行程要素/非咨询）→ 偏好记录
     # （防 LLM 把「上次一样，还是住汉庭吧」脑补成行程续接）
     result = _pref_only_correction(recent, user_input, result)
+    # 差旅知识咨询兜底：城市/出差 +「注意什么」必须进入知识问答，不能被泛咨询规则挡掉。
+    if _is_travel_knowledge_consult(user_input) and result.intent == "其他":
+        result = IntentResult(
+            intent="知识问答",
+            reason="规则兑底：差旅目的地/安全咨询应检索知识库，而非拒绝泛化",
+            subtasks=result.subtasks,
+        )
     # 拆分兜底：主导意图清晰但 LLM 把「顺便/还有X」整句吞掉（subtasks 空）→
     # 在强拆分标记处确定性切句，尾部子句再分类补进 subtasks（防次要请求被静默丢弃）。
     # 仅在 _depth==0（顶层调用）执行：子句分类不再二次拆分（递归深度封顶 1）。
@@ -278,6 +288,14 @@ _PREF_SUBJECT_MARKS = ("我", "俺", "咱", "本人", "老子")
 _TRIP_ELEMENT_MARKS = ("规划", "出差", "行程", "机票", "车次", "会议", "拜访", "培训", "月", "日", "号", "周")
 # 咨询类标记：含其一即非陈述（不触发纯偏好锁定）
 _CONSULT_MARKS = ("哪里", "哪儿", "哪", "怎么", "吗", "啥", "什么", "?", "？")
+_TRAVEL_KNOWLEDGE_MARKS = ("出差", "差旅", "商务", "拜访", "会议")
+_TRAVEL_ADVICE_MARKS = ("注意什么", "有什么要注意", "注意事项", "怎么办", "怎么处理", "能报销吗")
+
+
+def _is_travel_knowledge_consult(q: str) -> bool:
+    """识别应进入知识库的差旅咨询，覆盖城市攻略、紧急处理和绿色出行入口。"""
+    return any(mark in q for mark in _TRAVEL_KNOWLEDGE_MARKS) and any(mark in q for mark in _TRAVEL_ADVICE_MARKS)
+
 
 _PREF_HOTEL_PATTERN = re.compile(r"住[^，。！？\s]{0,6}(酒店|民宿|宾馆|旅店)")
 

@@ -129,7 +129,7 @@ plan_prompt = ChatPromptTemplate.from_messages(
         ),
         (
             "human",
-            "差旅要素：{trip_json}\n用户历史偏好：{prefs}\n公司差旅政策/标准：{policy}\n历史行程参考：{history_ref}\n用户原话：{user_input}",
+            "差旅要素：{trip_json}\n用户历史偏好：{prefs}\n公司差旅政策/标准：{policy}\n历史行程参考：{history_ref}\n目的地/安全/绿色出行提示（仅作注意事项，不得编造）：{guidance}\n用户原话：{user_input}",
         ),
     ]
 )
@@ -291,6 +291,7 @@ def plan(
             "prefs": prefs_text,
             "policy": upstream.get("policy") or "无",
             "history_ref": upstream.get("history_ref") or "无",
+            "guidance": upstream.get("guidance") or "无",
             "user_input": user_input,
         }
     )
@@ -478,6 +479,10 @@ def handle(
     if req and req.to_city not in ("待定", "未知", "") and req.start_date not in ("待定", ""):
         with suppress(Exception):  # 天气是锦上添花：查不到不影响行程主答案
             answer += f"\n\n🌤️ 目的地天气提醒：{get_weather.invoke({'city': req.to_city, 'date': req.start_date})}"
+    if upstream:
+        sources = tuple(dict.fromkeys(upstream.get("guidance_sources") or ()))
+        if sources:
+            answer += "\n\n📌 出差提示依据：" + "、".join(sources)
     plan_dict = r.plan.model_dump()
     plan_dict["date_is_vague"] = bool(req and req.date_is_vague)
     return TripOutcome(answer=answer, plan=plan_dict)
