@@ -9,6 +9,55 @@ from xiao_wen import memory as memory_store
 from xiao_wen.session import ChatResult, chat
 
 
+def _run_two_same_session_streams(result_queue):
+    import asyncio
+
+    from xiao_wen.session import stream_chat
+
+    class FakeStore:
+        def format_recent_messages(self, n, *, session_id="default"):
+            return ""
+
+        def add_message(self, role, content, *, session_id="default"):
+            return None
+
+    async def exercise():
+        first_entered = asyncio.Event()
+        release_first = asyncio.Event()
+
+        class Graph:
+            async def astream_events(self, state, **kwargs):
+                if state["user_input"] == "first":
+                    first_entered.set()
+                    await release_first.wait()
+                node = "其他"
+                yield {
+                    "event": "on_chain_stream",
+                    "name": node,
+                    "metadata": {"langgraph_node": node},
+                    "data": {
+                        "chunk": {
+                            "answer": f"{state['user_input']}-answer",
+                            "intent": "其他",
+                            "reason": "test",
+                        }
+                    },
+                }
+
+        async def consume(text):
+            return [event async for event in stream_chat(text, "same-session", graph=Graph(), store=FakeStore())]
+
+        first = asyncio.create_task(consume("first"))
+        await first_entered.wait()
+        second = asyncio.create_task(consume("second"))
+        await asyncio.sleep(0.05)
+        release_first.set()
+        results = await asyncio.gather(first, second)
+        result_queue.put([events[-1]["answer"] for events in results])
+
+    asyncio.run(exercise())
+
+
 class FakeGraph:
     def __init__(self, answer="答", intent="其他", reason="测试"):
         self.answer = answer
@@ -39,6 +88,28 @@ def test_chat_loop_four_actions():
     msgs = memory_store.get_recent_messages(6)
     assert [m["role"] for m in msgs[-2:]] == ["user", "assistant"]
     assert [m["content"] for m in msgs[-2:]] == ["新问题", "答"]
+
+
+def test_chat_trace_final_records_sources():
+    source = {"evidence_id": "ev-1", "source": "差旅政策", "text": "住宿标准 500 元"}
+
+    class SourceGraph:
+        def invoke(self, state):
+            return {"answer": "标准如下", "intent": "知识问答", "reason": "政策问题", "sources": [source]}
+
+    class Recorder:
+        def __init__(self):
+            self.events = []
+
+        def record(self, event):
+            self.events.append(event)
+
+    recorder = Recorder()
+    result = chat("住宿标准", graph=SourceGraph(), recorder=recorder)
+
+    final = next(event for event in recorder.events if event["type"] == "final")
+    assert result.sources[0].evidence_id == "ev-1"
+    assert final["sources"] == [source | {"section": None, "similarity": None}]
 
 
 def test_chat_propagates_structured_plan():
@@ -198,6 +269,8 @@ def test_stream_chat_error_yields_error_event():
     assert "稍后再试" in out[-1]["message"]
     # 异常时不写回记忆
     assert memory_store.get_recent_messages(6) == []
+    recovered = chat("after-error", graph=FakeGraph(answer="recovered"))
+    assert recovered.answer == "recovered"
 
 
 def test_chat_propagates_exceptions():
@@ -224,6 +297,81 @@ def test_chat_uses_injected_store():
     assert r.answer == "答"
     assert calls == [("user", "hi", "会话A"), ("assistant", "答", "会话A")]
     assert graph.calls[0]["recent"] == "无历史"
+
+
+def test_threads_are_isolated_but_share_user_identity():
+    class Store:
+        def __init__(self):
+            self.messages = {}
+
+        def format_recent_messages(self, n, *, session_id="default"):
+            return "\n".join(item[1] for item in self.messages.get(session_id, [])[-n:]) or "无"
+
+        def add_message(self, role, content, *, session_id="default"):
+            self.messages.setdefault(session_id, []).append((role, content))
+
+    store = Store()
+    graph = FakeGraph()
+    chat("线程一消息", "alice:one", user_id="alice", graph=graph, store=store)
+    chat("线程二消息", "alice:two", user_id="alice", graph=graph, store=store)
+
+    assert graph.calls[0]["user_id"] == graph.calls[1]["user_id"] == "alice"
+    assert graph.calls[1]["recent"] == "无"
+    assert store.messages["alice:one"][0][1] == "线程一消息"
+
+
+def test_independent_turn_retains_active_task_and_completion_clears_it():
+    class Store:
+        def __init__(self):
+            self.messages = []
+            self.task = None
+
+        def format_recent_messages(self, n, *, session_id="default"):
+            return "无"
+
+        def add_message(self, role, content, *, session_id="default"):
+            self.messages.append((role, content, session_id))
+
+        def get_active_task(self, *, thread_id, user_id):
+            return self.task
+
+        def set_active_task(self, task, *, thread_id, user_id):
+            self.task = task
+
+        def clear_active_task(self, *, thread_id, user_id):
+            self.task = None
+
+    class Graph:
+        def invoke(self, state):
+            if state["user_input"] == "规划":
+                return {
+                    "answer": "请补充出发城市",
+                    "intent": "行程规划",
+                    "reason": "缺项",
+                    "task_update": {
+                        "action": "set",
+                        "task": {"intent": "行程规划", "missing": ["出发城市"], "resume_context": "用户: 规划"},
+                    },
+                }
+            if state["user_input"] == "不吃辣":
+                assert state["active_task"]["intent"] == "行程规划"
+                return {"answer": "已记录偏好", "intent": "偏好记录", "reason": "偏好"}
+            return {
+                "answer": "行程完成",
+                "intent": "行程规划",
+                "reason": "续接",
+                "task_update": {"action": "clear"},
+            }
+
+    store = Store()
+    first = chat("规划", "alice:one", user_id="alice", graph=Graph(), store=store)
+    assert first.answer == "请补充出发城市"
+    interrupted = chat("不吃辣", "alice:one", user_id="alice", graph=Graph(), store=store)
+    assert "已记录偏好" in interrupted.answer
+    assert "刚才的行程仍保留" in interrupted.answer
+    assert store.task is not None
+    chat("武汉", "alice:one", user_id="alice", graph=Graph(), store=store)
+    assert store.task is None
 
 
 def test_chat_default_graph_builds(monkeypatch):
@@ -882,12 +1030,299 @@ def test_stream_chat_empty_state_yields_error_not_done():
     assert memory_store.get_recent_messages(6) == []
 
 
-def test_session_lock_per_session_reuse():
-    """per-session 锁：同 session 复用同一把，不同 session 相互独立"""
+def test_stream_chat_domain_failure_has_stable_error_contract():
+    """预期依赖故障使用 error 事件，不伪装成正常 done，也不写回记忆。"""
+    import asyncio
+
+    from xiao_wen.session import stream_chat
+
+    class FailureGraph:
+        async def astream_events(self, state, **kwargs):
+            yield {
+                "event": "on_chain_end",
+                "name": "知识问答",
+                "metadata": {"langgraph_node": "知识问答"},
+                "data": {
+                    "output": {
+                        "answer": "政策服务暂时不可用",
+                        "intent": "知识问答",
+                        "reason": "政策查询",
+                        "policy_status": "unavailable",
+                        "failure": {
+                            "code": "policy_unavailable",
+                            "message": "政策服务暂时不可用",
+                            "retryable": True,
+                        },
+                    }
+                },
+            }
+
+    async def collect():
+        return [event async for event in stream_chat("住宿标准", graph=FailureGraph())]
+
+    events = asyncio.run(collect())
+    assert events[-1] == {
+        "type": "error",
+        "code": "policy_unavailable",
+        "message": "政策服务暂时不可用",
+        "retryable": True,
+        "policy_status": "unavailable",
+    }
+    assert all(event["type"] != "done" for event in events)
+    assert memory_store.get_recent_messages(6) == []
+
+
+def test_session_coordinator_reclaims_completed_session():
+    """协调器不向调用方暴露锁，并在轮次结束后回收空闲 session。"""
     from xiao_wen import session as s
 
-    assert s._session_lock_for("a") is s._session_lock_for("a")
-    assert s._session_lock_for("a") is not s._session_lock_for("b")
+    with s._session_coordinator.turn("reclaim-one"):
+        assert s._session_coordinator.active_session_count == 1
+    assert s._session_coordinator.active_session_count == 0
+
+
+def test_two_same_session_streams_complete_without_blocking_event_loop():
+    """第二个流等待同会话锁时不能阻塞第一个流所在的事件循环。"""
+    import multiprocessing
+
+    context = multiprocessing.get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(target=_run_two_same_session_streams, args=(result_queue,))
+    process.start()
+    process.join(timeout=3)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=1)
+        pytest.fail("两个同 session 流发生死锁：第二个锁等待阻塞了事件循环")
+
+    assert process.exitcode == 0
+    assert result_queue.get(timeout=1) == ["first-answer", "second-answer"]
+
+
+def test_chat_and_stream_same_session_write_turns_in_pairs():
+    """同步 chat 与异步 stream 交错时，共享协调器并保持两轮写回成对有序。"""
+    import asyncio
+    import threading
+
+    from xiao_wen import session as s
+
+    writes = []
+    stream_entered = asyncio.Event()
+    release_stream = asyncio.Event()
+    chat_entered = threading.Event()
+
+    class Store:
+        def format_recent_messages(self, n, *, session_id="default"):
+            return ""
+
+        def add_message(self, role, content, *, session_id="default"):
+            writes.append((role, content))
+
+    class StreamGraph:
+        async def astream_events(self, state, **kwargs):
+            stream_entered.set()
+            await release_stream.wait()
+            node = "其他"
+            yield {
+                "event": "on_chain_stream",
+                "name": node,
+                "metadata": {"langgraph_node": node},
+                "data": {"chunk": {"answer": "stream-answer", "intent": "其他", "reason": "r"}},
+            }
+
+    class ChatGraph:
+        def invoke(self, state):
+            chat_entered.set()
+            return {"answer": "chat-answer", "intent": "其他", "reason": "r"}
+
+    async def consume_stream():
+        return [event async for event in s.stream_chat("stream", "mixed", graph=StreamGraph(), store=Store())]
+
+    async def exercise():
+        stream_task = asyncio.create_task(consume_stream())
+        await stream_entered.wait()
+        chat_task = asyncio.create_task(asyncio.to_thread(s.chat, "chat", "mixed", graph=ChatGraph(), store=Store()))
+        await asyncio.sleep(0.05)
+        assert not chat_entered.is_set()
+        release_stream.set()
+        await asyncio.gather(stream_task, chat_task)
+
+    asyncio.run(exercise())
+    assert writes == [
+        ("user", "stream"),
+        ("assistant", "stream-answer"),
+        ("user", "chat"),
+        ("assistant", "chat-answer"),
+    ]
+
+
+def test_different_sessions_stream_in_parallel():
+    """不同 session 不共享互斥锁，两条流可同时进入图。"""
+    import asyncio
+
+    from xiao_wen import session as s
+
+    class Store:
+        def format_recent_messages(self, n, *, session_id="default"):
+            return ""
+
+        def add_message(self, role, content, *, session_id="default"):
+            return None
+
+    async def exercise():
+        entered = 0
+        both_entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class Graph:
+            async def astream_events(self, state, **kwargs):
+                nonlocal entered
+                entered += 1
+                if entered == 2:
+                    both_entered.set()
+                await release.wait()
+                node = "其他"
+                yield {
+                    "event": "on_chain_stream",
+                    "name": node,
+                    "metadata": {"langgraph_node": node},
+                    "data": {"chunk": {"answer": "done", "intent": "其他", "reason": "r"}},
+                }
+
+        async def consume(session_id):
+            return [event async for event in s.stream_chat("x", session_id, graph=Graph(), store=Store())]
+
+        tasks = [asyncio.create_task(consume("parallel-a")), asyncio.create_task(consume("parallel-b"))]
+        await asyncio.wait_for(both_entered.wait(), timeout=1)
+        release.set()
+        await asyncio.gather(*tasks)
+
+    asyncio.run(exercise())
+
+
+def test_cancelled_stream_releases_session_for_next_turn():
+    """流取消后释放持有状态，下一轮同 session 可立即继续。"""
+    import asyncio
+    from contextlib import suppress
+
+    from xiao_wen import session as s
+
+    class Store:
+        def format_recent_messages(self, n, *, session_id="default"):
+            return ""
+
+        def add_message(self, role, content, *, session_id="default"):
+            return None
+
+    async def exercise():
+        entered = asyncio.Event()
+
+        class BlockingGraph:
+            async def astream_events(self, state, **kwargs):
+                entered.set()
+                await asyncio.Event().wait()
+                yield
+
+        class WorkingGraph:
+            async def astream_events(self, state, **kwargs):
+                node = "其他"
+                yield {
+                    "event": "on_chain_stream",
+                    "name": node,
+                    "metadata": {"langgraph_node": node},
+                    "data": {"chunk": {"answer": "recovered", "intent": "其他", "reason": "r"}},
+                }
+
+        async def consume(graph):
+            return [event async for event in s.stream_chat("x", "cancelled", graph=graph, store=Store())]
+
+        blocked = asyncio.create_task(consume(BlockingGraph()))
+        await entered.wait()
+        blocked.cancel()
+        with suppress(asyncio.CancelledError):
+            await blocked
+        recovered = await asyncio.wait_for(consume(WorkingGraph()), timeout=1)
+        assert recovered[-1]["answer"] == "recovered"
+
+    asyncio.run(exercise())
+    assert s._session_coordinator.active_session_count == 0
+
+
+def test_cancelled_waiting_stream_does_not_acquire_lock_later():
+    """取消正在等待锁的流后，后台线程不能迟到获取并永久占锁。"""
+    import asyncio
+    import threading
+    from contextlib import suppress
+
+    from xiao_wen import session as s
+
+    holder_entered = threading.Event()
+    release_holder = threading.Event()
+
+    class Store:
+        def format_recent_messages(self, n, *, session_id="default"):
+            return ""
+
+        def add_message(self, role, content, *, session_id="default"):
+            return None
+
+    class HoldingGraph:
+        def invoke(self, state):
+            holder_entered.set()
+            release_holder.wait(timeout=2)
+            return {"answer": "holder", "intent": "其他", "reason": "r"}
+
+    class WorkingGraph:
+        async def astream_events(self, state, **kwargs):
+            node = "其他"
+            yield {
+                "event": "on_chain_stream",
+                "name": node,
+                "metadata": {"langgraph_node": node},
+                "data": {"chunk": {"answer": "recovered", "intent": "其他", "reason": "r"}},
+            }
+
+    async def consume():
+        return [event async for event in s.stream_chat("x", "waiting-cancel", graph=WorkingGraph(), store=Store())]
+
+    async def exercise():
+        holder = asyncio.create_task(
+            asyncio.to_thread(s.chat, "holder", "waiting-cancel", graph=HoldingGraph(), store=Store())
+        )
+        assert await asyncio.to_thread(holder_entered.wait, 1)
+        waiter = asyncio.create_task(consume())
+        await asyncio.sleep(0.01)
+        waiter.cancel()
+        with suppress(asyncio.CancelledError):
+            await waiter
+        release_holder.set()
+        await holder
+        recovered = await asyncio.wait_for(consume(), timeout=1)
+        assert recovered[-1]["answer"] == "recovered"
+
+    asyncio.run(exercise())
+    assert s._session_coordinator.active_session_count == 0
+
+
+def test_many_one_shot_sessions_do_not_grow_coordinator_table():
+    """大量一次性 session 完成后不永久保留锁项。"""
+    from xiao_wen import session as s
+
+    class Store:
+        def format_recent_messages(self, n, *, session_id="default"):
+            return ""
+
+        def add_message(self, role, content, *, session_id="default"):
+            return None
+
+    class Graph:
+        def invoke(self, state):
+            return {"answer": "done", "intent": "其他", "reason": "r"}
+
+    for index in range(200):
+        s.chat("x", f"one-shot-{index}", graph=Graph(), store=Store())
+
+    assert s._session_coordinator.active_session_count == 0
 
 
 def test_chat_same_session_serialized():

@@ -151,7 +151,8 @@ def test_trip_planning_end_to_end_contract(monkeypatch):
     assert out["plan"]["date_is_vague"] is False
     # answer 含展示三件套：行程格式 / 预算块 / 目的地天气
     assert "3 天北京出差行程" in out["answer"]
-    assert "费用估算" in out["answer"]
+    assert "规划估算（非报价、非公司政策）" in out["answer"]
+    assert "交通：不提供金额" in out["answer"]
     assert "目的地天气提醒" in out["answer"]
     # collect 上游政策注入生成（plan 工厂收到的 prompt 含政策原文）
     plan_text = next(t for n, t in fake.calls if n == "ItineraryPlan")

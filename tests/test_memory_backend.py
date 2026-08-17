@@ -7,6 +7,8 @@
 """
 
 import os
+import threading
+import time
 
 import pytest
 
@@ -99,15 +101,59 @@ def test_default_session_compat():
     assert memory.get_recent_messages(6, session_id="其他") == []
 
 
+def test_thread_task_is_separate_from_user_long_term_memory():
+    _fresh()
+    task = {"intent": "行程规划", "missing": ["出差天数"]}
+    memory.set_active_task(task, thread_id="alice:one", user_id="alice")
+    memory.add_or_update_preference("餐饮", "不吃辣", session_id="alice")
+
+    assert memory.get_active_task(thread_id="alice:one", user_id="alice") == task
+    assert memory.get_active_task(thread_id="alice:two", user_id="alice") is None
+    assert memory.get_preferences(session_id="alice")[-1]["content"] == "不吃辣"
+
+
 # ---------- S3：后端就绪约束（单后端：必须配 POSTGRES_URL） ----------
 
 
 def test_get_backend_requires_postgres_url(monkeypatch):
-    """未配 POSTGRES_URL → 明确报错（不再静默内存兜底）"""
+    """未配 POSTGRES_URL 时明确报错。"""
     monkeypatch.delenv("POSTGRES_URL", raising=False)
+    monkeypatch.delenv("POSTGRES_TEST_URL", raising=False)
     memory._backend = None
     try:
         with pytest.raises(RuntimeError, match="POSTGRES_URL"):
             memory._get_backend()
     finally:
         memory._backend = None
+
+
+def test_get_backend_initializes_once_under_concurrency(monkeypatch):
+    """并发首屏请求只能构造一次后端，避免两个线程同时执行 schema DDL。"""
+    import xiao_wen.memory_pg as memory_pg
+
+    constructed = []
+
+    class FakeBackend:
+        def __init__(self, url):
+            time.sleep(0.02)
+            constructed.append(url)
+
+    monkeypatch.setattr(memory_pg, "PostgresBackend", FakeBackend)
+    monkeypatch.setenv("POSTGRES_URL", "postgresql://test")
+    monkeypatch.delenv("POSTGRES_TEST_URL", raising=False)
+    memory._backend = None
+    barrier = threading.Barrier(8)
+    results = []
+
+    def get_backend():
+        barrier.wait()
+        results.append(memory._get_backend())
+
+    threads = [threading.Thread(target=get_backend) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert constructed == ["postgresql://test"]
+    assert len({id(result) for result in results}) == 1

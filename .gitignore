@@ -16,6 +16,7 @@ data/embeddings.npy
 data/chroma/
 data/chroma.lock
 data/chroma.corrupt-*/
+data/observability/
 delivery/
 
 # pi agent 项目级配置（本机会话偏好，不进仓库）

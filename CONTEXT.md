@@ -9,8 +9,12 @@
 _Avoid_: 我的 agent、助手（泛指时用）
 
 **主管**:
-意图分类器。读取最近对话（短期记忆）与当前输入，输出意图之一（词汇表 = 注册表 manifest 动态生成）及理由；多意图输入可拆分为子任务。
-_Avoid_: 路由器、orchestrator
+面向用户持续完成目标的主 Agent。目标架构采用有界 Loop：读取 transcript 与运行状态，决定调用哪个子 Agent，观察结果后继续决定、追问或结束。迁移完成前，生产实现仍是一次性 `classify → route → execute → merge` Workflow；文档与评测必须区分“当前实现”和“目标架构”。
+_Avoid_: 把一次性意图分类器称为真正的 Agent
+
+**Agent Loop**:
+主管单次运行内的 `decide → 调用子 Agent → observe → decide → final` 循环。循环持久化 assistant/tool-call/tool-result 轨迹，并受步骤、时间、token 与重复调用限制。它只改变主管控制流，注册中心与子 Agent 继续承担领域执行。
+_Avoid_: 固定条件边、装饰性 while、无限自治
 
 **子 Agent**:
 主管之下执行具体任务的实体模块，声明 INTENT / DESCRIPTION / run(state)（统一接口）。内置六个：行程规划、偏好记录、历史查询、知识问答、联网查询、其他；外部扩展（plugins/）动态并入（如 差旅统计）。由注册中心自动扫描注册、懒加载、渐进式披露。
@@ -25,24 +29,31 @@ _Avoid_: 插件目录（仅指外部扩展时用）
 _Avoid_: 类型、分类
 
 **图工厂**:
-graph_builder：从注册表 manifest 组装主管/调度图的深模块（build_supervisor_graph(parallel)）。
-指纹缓存自动重建——新子 Agent 落盘后下次调用即新图（热插拔语义，无需 reload）。
-_Avoid_: 建图代码（两处实现）、reload 副作用
+当前 Workflow 实现：graph_builder 从注册表 manifest 组装一次性主管/调度图，并用指纹缓存支持子 Agent 热插拔。Agent Loop 接管主管入口后，注册表 manifest 改为 Loop 的可调用子 Agent 清单；图工厂不再拥有整轮控制流。
+_Avoid_: 将 LangGraph 节点拓扑当作长期产品接口
 
 **子任务**:
 一句话里多个独立请求时拆分出的单元（各带自己的意图与原文），由调度优化并行派发；单一请求时为空。
 _Avoid_: 子请求、分支
 
 **会话**:
-一轮完整交互的闭环——读最近对话（短期记忆）→ 注入 → 主管图 invoke → 写回用户与助手两轮。
+一轮完整交互的闭环——读取线程 transcript 与活跃任务 → 主管图 invoke → 持久化任务变化 → 写回用户与助手消息。
 _Avoid_: 聊天、交互（泛指时用）
+
+**对话线程**:
+前端可见的一段连续对话，由 `conversation_id` 标识；Web 层将其与 JWT 用户组合为 `thread_id`。短期记忆、活跃任务和轮次锁按线程隔离。
+_Avoid_: 用户（一个用户可有多个线程）
+
+**活跃任务**:
+线程内尚未完成的行程及其聚焦续接文本、缺失差旅要素。偏好、政策或实时查询可以临时打断它，但不会覆盖；完成或明确取消后清除。
+_Avoid_: 最近六轮文本（文本不是任务状态）
 
 **短期记忆**:
 最近 N 轮对话消息。每轮 invoke 前注入（克制截断）、invoke 后写回用户与助手两轮。对应 LangChain 的 checkpointer+thread 概念。
 _Avoid_: 上下文、最近对话（口语用）
 
 **会话隔离 / 用户隔离**:
-记忆按会话维度划分：内部 API 用 `session_id`（默认 `default`）；webapp 层认证后强制会话维度 = 用户名（JWT 解出，客户端不自填，ADR-0007）。链路贯穿 webapp → chat → 图 State → 子 Agent → 存储后端；存储**唯一后端 Postgres**（psycopg 四表含 users，`POSTGRES_URL` 必配，未配直接报错；持久化 + 隔离）。对应 LangGraph checkpointer 的 thread 维度语义（ADR-0006/0007）。
+短期 transcript 与活跃任务按 `thread_id` 隔离；长期偏好和历史行程按 JWT 解出的 `user_id` 隔离。客户端只能提交 `conversation_id`，不能指定用户。内部 `session.chat()` 省略 `user_id` 时兼容旧调用，将 `session_id` 同时用于两个维度。存储唯一后端为 Postgres，`POSTGRES_URL` 必配（ADR-0006/0007/0009）。
 _Avoid_: 多角色（授权未做，用户维度 ≠ 角色维度）
 
 **长期记忆**:

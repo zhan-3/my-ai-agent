@@ -1,53 +1,32 @@
-# ADR-0006：会话隔离 + Postgres 存储后端
+# ADR-0006：会话隔离与 Postgres 单后端
 
-- 状态：已接受（2026-08）
-- 相关：ADR-0002（会话循环，session_id 预留"暂缓"）、ADR-0005（插件注册表）
+- 状态：已接受（2026-08，收敛更新）
+- 相关：ADR-0002（会话循环）、ADR-0007（JWT 认证）、ADR-0008（部署）
 
 ## 背景
 
-记忆模块（memory.py）一直是**全局单文件**（data/memory.json）：`session.chat` 的
-session_id 参数只占位（ADR-0002 明说"会话隔离暂缓"）。多人/多会话共用一份记忆，
-偏好、历史行程、短期对话互相串写。
+记忆、行程和用户身份必须持久化并按会话隔离。运行时后端、测试数据库和容器版本曾在文档中
+存在多种互相冲突的描述，测试还可能在缺少专用连接串时误用开发库。
 
 ## 决策
 
-1. **会话隔离**：所有记忆按 `session_id` 隔离（默认 `"default"` 向后兼容既有调用点）。
-   session_id 全链路贯穿：webapp → `session.chat` → 图 State → 子 Agent（preference/
-   history 从 State 取，`state.get("session_id", "default")` 兜底）→ memory 函数。
-2. **存储后端协议**：memory.py 定义 `MemoryBackend`（8 个基础读写方法，三个域：
-   消息/偏好/行程），两个实现——
-   - `InMemoryBackend`：进程内存，无 `POSTGRES_URL` 时的演示/测试兜底（重启即失）
-   - `PostgresBackend`（memory_pg.py）：psycopg 直连，三张表（messages/preferences/
-     itineraries）各带 session_id 列 + `WHERE session_id = %s` 过滤，幂等建表
-3. **env 分派**：`_get_backend()` 惰性读 `POSTGRES_URL`——有则 Postgres（产品），无则
-   InMemory（演示）。`set_backend()` 供测试注入（替代旧的 `MEMORY_PATH` monkeypatch）。
-4. **测试策略**：单元测试注入全新 `InMemoryBackend`（零外部依赖）；Postgres 真库测试
-   标 `@pytest.mark.postgres`（本地有容器/原生 PG 且设 `POSTGRES_TEST_URL` 才跑）。
+1. 运行时唯一后端为 Postgres，`POSTGRES_URL` 必填；消息、偏好、行程和用户分别存入四张表。
+2. 短期消息按线程 `session_id` 过滤；偏好与行程按 `user_id` 过滤。活跃任务表同时校验线程和用户。
+3. 当前用 `CREATE TABLE IF NOT EXISTS` 幂等初始化表结构，连接按操作短连接。migration 框架和
+   连接池不在本迭代引入。
+4. Compose、CI 和镜像 smoke 统一使用 PostgreSQL 16。Compose 数据卷挂载到
+   `/var/lib/postgresql/data`。
+5. 测试必须显式设置 `POSTGRES_TEST_URL`，不回退到 `POSTGRES_URL`。运行
+   `scripts/init_test_db.sh` 可幂等创建 `xiao_wen_test`；测试只清理该专用库。
+6. 存活与就绪探针只执行只读 `SELECT 1`，不写入业务表。
 
-## 为什么不选别的
+## 卷兼容性
 
-- **不选 LangGraph checkpointer**：当前无"中断会话随时恢复"需求；checkpointer 是另一
-  套记忆范式（thread 维度自动快照），改造要动图编译与全部 e2e，收益无需求支撑。
-- **不选 PostgresStore（语义搜索）**：记忆层检索全部结构化（category 精确查询、常用
-  目的地统计），无语义搜索需求；语义搜索只在 RAG（Chroma，独立模块）。
-- **不选 MySQL**：LangGraph 生态生产路径是 Postgres；记忆层虽不需要向量，但 JSONB +
-  单库原则 + 官方 checkpointer/store 后路都指向 Postgres。Redis 是缓存角色，当前无
-  明确需求，不引第二个基础设施组件。
+此前由浮动镜像标签创建的卷可能属于更高 major，不能由 PostgreSQL 16 原地读取或
+降级。需要保留数据时，先用原版本容器执行 `pg_dump`，再导入新的 16 卷；开发环境不保留数据
+时可停止服务并删除旧卷。Compose 使用新的 `xw_pg16_data` 名称，避免自动挂载旧卷。
 
-## 后果
+## 后果与后续
 
-- 演示（无 POSTGRES_URL）记忆为进程内存，重启即失（README 注明）。
-- 产品形态一条 env：`POSTGRES_URL=postgresql://...` 即持久化 + 会话隔离。
-- JSON 文件后端删除（load_memory/save_memory/MEMORY_PATH 及损坏兜底测试随删）。
-- 未来产品化若需"随时恢复"或"记忆语义检索"，可平滑加 checkpointer/PostgresStore
-  （同一 Postgres，连接串/表结构兼容演进）。
-
-## 后续变更（2026-08 单后端化）
-
-- **InMemoryBackend 删除**：记忆唯一后端 Postgres（`POSTGRES_URL` 必配，未配直接报错，
-  不再静默内存兜底）。`MemoryBackend` 协议补 `health_check` 契约。
-- **测试策略升级为强制真实 PG**：conftest 每测试清三张表 + users 表并注入全新
-  PostgresBackend；优先 `POSTGRES_TEST_URL`（独立测试库），其次 `POSTGRES_URL`，
-  两者皆无 `pytest.fail`（CI 的 unit/integration 两个 job 均配 postgres:16 服务）。
-- **认证用户存储同源**：`InMemoryUserStore` 同步删除（见 ADR-0007 后续变更）。
-- docker-compose 卷挂载改为 `/var/lib/postgresql`（postgres 18+ 新布局）。
+- 当前部署明确支持单应用实例；进程内会话锁、图缓存和熔断状态不提供跨实例一致性。
+- schema migration、连接池、备份恢复和多实例协调是后续独立工作，不伪装为现有能力。

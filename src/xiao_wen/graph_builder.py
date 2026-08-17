@@ -23,8 +23,8 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send
 
 from xiao_wen import disambiguation, intent
-from xiao_wen.eval.trace import AGENT_OUT_KEYS
 from xiao_wen.intent import SubTask
+from xiao_wen.observability import AGENT_OUT_KEYS
 from xiao_wen.plugin_registry import discover, load_agent
 
 # ---- State（统一：并行字段可空，单意图图不填即不触发并行路径） ----
@@ -52,17 +52,25 @@ class State(TypedDict):
     current_task: NotRequired[SubTask]  # Send 分支内当前子任务
     collected: NotRequired[Annotated[list[dict], operator.add]]  # 并行结果收集（归约器拼接）
     session_id: NotRequired[str]  # 会话维度（记忆隔离；未传时 agent 兑底 "default"）
+    user_id: NotRequired[str]  # 长期记忆所有者；缺省时兼容回退 session_id
+    active_task: NotRequired[dict | None]  # 线程级未完成任务（对话层注入）
     plan: NotRequired[Annotated[dict | None, _first_non_none]]  # 结构化行程（行程 Agent 产出；非行程为 None）
     stats: NotRequired[Annotated[dict | None, _first_non_none]]  # 差旅画像（差旅统计 Agent 产出；非统计为 None）
     history: NotRequired[Annotated[dict | None, _first_non_none]]  # 历史查询结构化结果（非历史查询为 None）
     sources: NotRequired[list[dict]]  # RAG 来源（知识问答/行程主动知识）
+    policy_status: NotRequired[str]  # 政策结果：grounded/not_found/unavailable/stale/ambiguous
+    failure: NotRequired[Annotated[dict | None, _first_non_none]]  # 可映射到 HTTP/SSE 的领域故障
     clarify: NotRequired[bool]  # 消歧门：命中歧义时 True，answer=反问问题，路由短路到 END
     upstream: NotRequired[Annotated[dict, _first_non_empty]]  # collect-then-compose：collect 节点写入，行程 agent 读取
+    task_update: NotRequired[Annotated[dict | None, _first_non_none]]  # 活跃任务 set/clear，由会话层持久化
 
 
 # ---- 分类节点（唯一实现：恒返回 subtasks，由 parallel 参数决定是否使用） ----
 def classify_intent(state):
-    r = intent.classify(state["recent"], state["user_input"])
+    if state.get("active_task") is None:
+        r = intent.classify(state["recent"], state["user_input"])
+    else:
+        r = intent.classify(state["recent"], state["user_input"], active_task=state["active_task"])
     # 兜底：LLM 幻觉意图不在词汇表内 → 归「其他」（避免路由 KeyError）
     return {"intent": r.intent, "reason": r.reason, "subtasks": r.subtasks}
 
@@ -77,7 +85,7 @@ def clarify_gate(state):
 
 
 def _make_classify(recorder=None):
-    """classify_intent 的 trace 包装：评测 recorder 注入时记录 classify 事件（subtasks 序列化）。"""
+    """为显式观察模式记录分类事件；默认路径零记录开销。"""
 
     def node(state):
         out = classify_intent(state)
@@ -118,7 +126,7 @@ def _make_node(intent_name: str, recorder=None):
 STRUCTURED_OUTPUT_KEYS = ("plan", "stats", "history")
 
 # 来源是可选扩展字段；仅在 Agent 实际返回时写入，保持旧并行节点输出兼容。
-OPTIONAL_OUTPUT_KEYS = ("sources",)
+OPTIONAL_OUTPUT_KEYS = ("sources", "policy_status", "failure", "task_update")
 
 
 def make_parallel(agent):
@@ -151,6 +159,8 @@ def dispatch(state):
         ctx = {
             "recent": state.get("recent", ""),
             "session_id": state.get("session_id", "default"),
+            "user_id": state.get("user_id", state.get("session_id", "default")),
+            "active_task": state.get("active_task"),
             "messages": state.get("messages", []),
             "upstream": state.get("upstream", {}),  # collect-then-compose：行程分支读黑板
         }
@@ -201,9 +211,25 @@ def merge(state):
         lines.append(p["answer"])
         lines.append("")
     # 结构化输出：多路结果取第一个非空（主导意图优先，其余分支通常无该字段）
-    result: dict[str, str | None] = {"answer": "\n".join(lines)}
+    result: dict[str, object] = {"answer": "\n".join(lines)}
     for k in STRUCTURED_OUTPUT_KEYS:
         result[k] = next((p.get(k) for p in parts if p.get(k)), None)
+    sources = []
+    seen_evidence_ids = set()
+    for part in parts:
+        for source in part.get("sources") or []:
+            evidence_id = source["evidence_id"]
+            if evidence_id in seen_evidence_ids:
+                continue
+            seen_evidence_ids.add(evidence_id)
+            sources.append(source)
+    result["sources"] = sources
+    result["failure"] = next((p.get("failure") for p in parts if p.get("failure")), None)
+    result["task_update"] = next((p.get("task_update") for p in parts if p.get("task_update")), None)
+    policy_statuses = [p.get("policy_status") for p in parts if p.get("policy_status")]
+    if policy_statuses:
+        priority = {"unavailable": 5, "ambiguous": 4, "stale": 3, "grounded": 2, "not_found": 1}
+        result["policy_status"] = max(policy_statuses, key=lambda status: priority.get(status, 0))
     return result
 
 
@@ -218,7 +244,7 @@ _cache: dict[tuple[tuple[str, ...], int], CompiledStateGraph] = {}
 def build_supervisor_graph(recorder=None) -> CompiledStateGraph:
     """从当前注册表 manifest 组装产品图；指纹缓存保证热插拔运行时生效。
 
-    recorder（评测 trace）：运行时对象，带它时绕过指纹缓存直连组装（不污染生产缓存）。
+    recorder：显式观察模式的事件记录器；带它时绕过缓存组装，避免记录器进入生产缓存。
     """
     manifest = discover()
     fingerprint = tuple(m["INTENT"] for m in manifest)
@@ -242,16 +268,19 @@ def _make_collect():
 
     def node(state):
         from xiao_wen.agents import itinerary_agent
+        from xiao_wen.dialogue import focused_recent
 
+        owner_id = state.get("user_id", state.get("session_id", "default"))
+        recent = focused_recent(state.get("active_task"), state.get("recent", ""))
         try:
             upstream = itinerary_agent.collect_upstream(
                 state["user_input"],
-                state.get("session_id", "default"),
-                state.get("recent", ""),
+                owner_id,
+                recent,
             )
         except TypeError:
             # 兼容旧适配器的二参数收集接缝；正式实现使用 recent 支持多轮城市识别。
-            upstream = itinerary_agent.collect_upstream(state["user_input"], state.get("session_id", "default"))
+            upstream = itinerary_agent.collect_upstream(state["user_input"], owner_id)
         return {"upstream": upstream}
 
     return node

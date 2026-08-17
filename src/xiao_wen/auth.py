@@ -2,22 +2,20 @@
 
 - 决策集（grilling 定案）：JWT（不选 Session Cookie/OAuth）+ bcrypt 密码哈希
   + 用户存储唯一后端 Postgres（memory_pg.PostgresUserStore，POSTGRES_URL 必配）
-- 会话隔离升级（ADR-0007）：认证后 webapp 层把 JWT 解出的用户名作为会话维度
-  （session_id = user_id），客户端不再自填 session_id——「会话隔离」升级为「用户隔离」
-- JWT_SECRET：环境变量注入；未设时用开发默认值（生产必须显式设置，见 README）
+- 用户隔离（ADR-0007/0009）：JWT 用户名决定长期记忆所有者；客户端 conversation_id
+  只能在该用户作用域内派生对话线程，不能自填 user_id
+- JWT_SECRET：由配置模块按调用读取；Web 启动时拒绝空值、短值和公开默认值
 - 依赖懒导入：psycopg 仅在 PostgresUserStore 构造路径触发
 """
 
-import os
 import time
 from typing import Protocol
 
 import bcrypt
 import jwt
 
-# 开发默认密钥（仅演示/本地；生产必须通过 JWT_SECRET 覆盖，见 README）
-# 长度 ≥ 32 字节，满足 RFC 7518 HMAC-SHA256 最小密钥建议，避免测试刷警告
-JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me-in-prod-0123456789abcdef")
+from xiao_wen.config import load_settings
+
 TOKEN_TTL_SECONDS = 7 * 24 * 3600  # 7 天
 
 
@@ -43,12 +41,7 @@ def _get_user_store() -> UserStore:
     """懒构造产品后端：Postgres users 表（唯一后端）。未配 POSTGRES_URL 直接报错。"""
     global _user_store  # noqa: PLW0603
     if _user_store is None:
-        url = os.environ.get("POSTGRES_URL")
-        if not url:
-            raise RuntimeError(
-                "用户存储需要 POSTGRES_URL（唯一后端 Postgres）："
-                "docker compose up -d postgres && export POSTGRES_URL=..."
-            )
+        url = load_settings().require_postgres_url()
         from xiao_wen.memory_pg import PostgresUserStore  # 懒导入：pg 依赖可选
 
         _user_store = PostgresUserStore(url)
@@ -75,7 +68,7 @@ def create_token(username: str, secret: str | None = None) -> str:
     now = int(time.time())
     return jwt.encode(
         {"sub": username, "iat": now, "exp": now + TOKEN_TTL_SECONDS},
-        secret or JWT_SECRET,
+        secret if secret is not None else load_settings().require_jwt_secret(),
         algorithm="HS256",
     )
 
@@ -83,7 +76,8 @@ def create_token(username: str, secret: str | None = None) -> str:
 def decode_token(token: str, secret: str | None = None) -> str | None:
     """解出用户名；无效/过期/伪造一律 None"""
     try:
-        payload = jwt.decode(token, secret or JWT_SECRET, algorithms=["HS256"])
+        key = secret if secret is not None else load_settings().require_jwt_secret()
+        payload = jwt.decode(token, key, algorithms=["HS256"])
         sub = payload.get("sub")
         return sub if isinstance(sub, str) else None
     except jwt.InvalidTokenError:

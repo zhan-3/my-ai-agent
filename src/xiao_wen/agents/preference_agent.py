@@ -94,7 +94,7 @@ def run(state) -> dict:
     if not r.records:
         # 疑问句/非偏好陈述：不写任何记忆（防止垃圾数据污染长期记忆）
         return {"answer": "这是询问而非偏好陈述——如果你告诉我「我常住上海」「我喜欢住汉庭」这类信息，我会帮你记下。"}
-    session_id = state.get("session_id", "default")
+    session_id = state.get("user_id", state.get("session_id", "default"))
     lines: list[str] = []
     for rec in r.records:
         stored = add_or_update_preference(rec.category, rec.content, rec.is_update, session_id=session_id)

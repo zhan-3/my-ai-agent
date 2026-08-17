@@ -24,6 +24,11 @@ export interface StageItem {
 
 const NETWORK_FALLBACK = '⚠️ 网络错误，请确认后端已启动。'
 
+export function newConversationId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return `conversation-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
 // 纯函数：阶段事件 → 阶段列表（start 重置；intent 替换 start；同一意图去重）
 export function applyStage(prev: StageItem[], ev: Pick<StreamEvent, 'status' | 'intent'>): StageItem[] {
   if (ev.status === 'start') return [{ intent: '__start__', status: 'working' }]
@@ -45,6 +50,7 @@ export function applyStage(prev: StageItem[], ev: Pick<StreamEvent, 'status' | '
 // 聊天状态：SSE 流式（阶段进度 + done）为主，旧后端（404）回退 POST；busy 防重；401 登出
 export function useChat({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [conversationId, setConversationId] = useState(newConversationId)
   const [busy, setBusy] = useState(false)
   const [stages, setStages] = useState<StageItem[]>([])
   const busyRef = useRef(false) // ref 同步置位：同轮两次 send 也能拦住（useState 闭包做不到）
@@ -66,7 +72,7 @@ export function useChat({ onUnauthorized }: { onUnauthorized: () => void }) {
       try {
         const res = await streamChat(t, token, (ev) => {
           if (ev.type === 'stage') setStages((prev) => applyStage(prev, ev))
-        })
+        }, conversationId)
         append({
           role: 'ai',
           text: res.answer,
@@ -85,7 +91,7 @@ export function useChat({ onUnauthorized }: { onUnauthorized: () => void }) {
         if (e instanceof ApiError && e.status === 404) {
           // 旧后端没有 /api/chat/stream：回退 POST /api/chat（行为与旧前端一致）
           try {
-            const res = await sendMessage(t, token)
+            const res = await sendMessage(t, token, conversationId)
             append({
               role: 'ai',
               text: res.answer,
@@ -113,8 +119,15 @@ export function useChat({ onUnauthorized }: { onUnauthorized: () => void }) {
         setStages([])
       }
     },
-    [append, onUnauthorized],
+    [append, conversationId, onUnauthorized],
   )
 
-  return { messages, busy, send, stages }
+  const startNewConversation = useCallback(() => {
+    if (busyRef.current) return
+    setConversationId(newConversationId())
+    setMessages([])
+    setStages([])
+  }, [])
+
+  return { messages, busy, send, stages, conversationId, startNewConversation }
 }

@@ -1,0 +1,18 @@
+{"id":"contract-plan-01","input":"帮我规划下周去广州出差三天的行程","expected":"行程规划","basis":"明确要求规划企业差旅行程"}
+{"id":"contract-plan-02","input":"去北京开会，帮我安排住宿和交通","expected":"行程规划","basis":"企业差旅安排，缺项由行程模块追问"}
+{"id":"contract-pref-01","input":"我出差不吃辣，喜欢安静的酒店","expected":"偏好记录","basis":"明确陈述个人差旅偏好"}
+{"id":"contract-pref-02","input":"我现在常住上海","expected":"偏好记录","basis":"明确陈述常驻城市"}
+{"id":"contract-history-01","input":"我上次的行程是什么","expected":"历史查询","basis":"查询自己的历史行程"}
+{"id":"contract-history-02","input":"我的住宿偏好是什么","expected":"历史查询","basis":"查询已保存的个人偏好"}
+{"id":"contract-policy-01","input":"出差住宿标准是多少","expected":"知识问答","basis":"查询公司差旅政策"}
+{"id":"contract-policy-02","input":"出差遇到紧急情况应该怎么处理","expected":"知识问答","basis":"查询差旅知识与处置指引"}
+{"id":"contract-web-01","input":"北京明天天气怎么样","expected":"联网查询","basis":"查询实时天气"}
+{"id":"contract-web-02","input":"查一下明天从临沂北到广州南的车票","expected":"联网查询","basis":"明确铁路查询，只生成12306官方入口"}
+{"id":"contract-stats-01","input":"统计一下我今年出差了几次","expected":"差旅统计","basis":"查询聚合差旅统计"}
+{"id":"contract-stats-02","input":"我最常去哪些城市出差","expected":"差旅统计","basis":"查询聚合目的地统计"}
+{"id":"contract-other-01","input":"帮我写一首诗","expected":"其他","basis":"与企业差旅无关"}
+{"id":"contract-other-02","input":"带家人去三亚度假怎么安排","expected":"其他","basis":"个人休闲旅游不在服务范围"}
+{"id":"contract-multi-01","input":"出差住宿标准是多少，顺便看看北京明天天气","expected":"知识问答","subtasks":["知识问答","联网查询"],"basis":"两个明确且独立的政策与实时查询请求"}
+{"id":"contract-multi-02","input":"我上次的行程是什么，顺便记一下我现在常住深圳","expected":"历史查询","subtasks":["历史查询","偏好记录"],"basis":"两个明确且独立的历史查询与偏好记录请求"}
+{"id":"contract-followup-01","input":"上海","recent":"user: 帮我规划去北京出差的行程\nassistant: 还缺出发城市，请补充","expected":"行程规划","basis":"明确补全上一轮缺失的行程要素"}
+{"id":"contract-followup-02","input":"算了，不去了","recent":"user: 帮我规划去北京出差的行程\nassistant: 还缺出发城市，请补充","expected":"其他","basis":"明确放弃未完成的行程"}

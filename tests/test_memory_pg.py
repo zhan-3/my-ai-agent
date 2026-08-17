@@ -1,6 +1,6 @@
 """Postgres 后端（S3）：真库测试，标 postgres 标记（本地有容器/原生 PG 且 POSTGRES_TEST_URL 才跑）
 
-覆盖：幂等建表、消息/偏好/行程三域读写 + session 隔离、health_check 探活
+覆盖：幂等建表、消息/偏好/行程三域读写 + session 隔离、只读 health_check 探活
 """
 
 import os
@@ -44,6 +44,16 @@ class TestPostgresBackend:
         assert [p["content"] for p in b.get_preferences("A")] == ["北京"]
         assert [p["content"] for p in b.get_preferences("B")] == ["广州"]
 
+    def test_active_task_roundtrip_and_user_guard(self, b):
+        task = {"intent": "行程规划", "missing": ["出发城市"]}
+        b.set_active_task("alice:thread-a", "alice", task)
+        assert b.get_active_task("alice:thread-a", "alice") == task
+        assert b.get_active_task("alice:thread-a", "bob") is None
+        b.clear_active_task("alice:thread-a", "bob")
+        assert b.get_active_task("alice:thread-a", "alice") == task
+        b.clear_active_task("alice:thread-a", "alice")
+        assert b.get_active_task("alice:thread-a", "alice") is None
+
     def test_itineraries_roundtrip_and_isolated(self, b):
         b.add_itinerary("A", {"to_city": "北京"}, "北京出差")
         b.add_itinerary("A", {"to_city": "杭州"}, "杭州出差")
@@ -53,7 +63,9 @@ class TestPostgresBackend:
         assert b.get_itineraries("C") == []
 
     def test_health_check_probe(self, b):
-        b.health_check()  # SELECT 1 + 写读回探活，不炸
+        b.add_message("keep", "user", "untouched")
+        b.health_check()
+        assert b.get_recent_messages("keep", 1)[0]["content"] == "untouched"
 
 
 @needs_pg

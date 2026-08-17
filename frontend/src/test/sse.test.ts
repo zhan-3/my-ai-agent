@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseSSEBuffer } from '@/api/chat'
+import { ApiError } from '@/api/client'
 import { applyStage } from '@/hooks/useChat'
 
 describe('parseSSEBuffer：SSE 缓冲解析（跨 chunk 边界）', () => {
@@ -30,6 +31,19 @@ describe('parseSSEBuffer：SSE 缓冲解析（跨 chunk 边界）', () => {
   it('坏帧忽略，正常帧保留', () => {
     const { events } = parseSSEBuffer('data: not-json\n\ndata: {"type":"done","answer":"答"}\n\n')
     expect(events).toEqual([{ type: 'done', answer: '答' }])
+  })
+})
+
+describe('ApiError：保留结构化服务故障', () => {
+  it('保留 code 与 retryable', () => {
+    const error = new ApiError(503, {
+      message: '政策服务暂时不可用',
+      code: 'policy_unavailable',
+      retryable: true,
+    })
+    expect(error.message).toBe('政策服务暂时不可用')
+    expect(error.code).toBe('policy_unavailable')
+    expect(error.retryable).toBe(true)
   })
 })
 

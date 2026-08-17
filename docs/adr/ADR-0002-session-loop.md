@@ -1,14 +1,21 @@
-# ADR-0002：会话循环收口，会话隔离暂缓
+# ADR-0002：会话循环与结果语义收口
 
-对话循环（读短期记忆 → 注入 → invoke → 写回两轮）此前在 webapp / system.__main__ / scheduler.__main__ / smoke 四处逐字重复。决定：新增 `session.py` 模块，暴露 `chat(text, session_id="default") -> ChatResult(answer, intent, reason)` 收口循环；异常向上抛，web 层保留兜底文案；`chat()` 的 graph 与 memory 可注入以便用假图测循环。**会话隔离明确暂缓**：`session_id` 参数保留但记忆仍是全局单文件（单用户演示语义），真实隔离待存储层改造时再做。
+- 状态：已接受（2026-08，收敛更新）
+- 相关：ADR-0006（Postgres 会话隔离）、ADR-0007（JWT 用户身份）、ADR-0009（对话线程）
 
-## Considered Options
+## 决策
 
-- **归属**：新模块 session.py（选，system.py 保持纯图）—— vs 收进 system.py（否决：图与循环职责混在一个最重的模块里）。
-- **隔离范围**：只收口循环（选）—— vs 顺带做按会话的记忆命名空间（否决：改了记忆存储接口与数据布局，范围显著变大）。
-- **异常语义**：向上抛（选）—— vs 会话层吞异常返回兜底文案（否决：兜底是 web 层的既定职责，demo/smoke 需要看到真实异常）。
+`session.py` 是同步与流式会话的唯一入口，负责读取最近对话、调用图工厂、归一化结果并在成功
+时写回用户与助手消息。图与存储接缝可注入，Agent 和 Web 层不重复会话循环。
 
-## Consequences
+- `chat()` 返回 `ChatResult`，统一答案、意图、证据、政策状态和结构化故障。
+- `chat_stream()` 产生稳定 SSE 事件；系统故障使用 `error`，成功结束使用 `done`。
+- 预期领域故障不写入记忆；未知异常转换为通用可重试服务故障。
+- Web 层从 JWT 提取 `user_id`，并与客户端 `conversation_id` 派生线程 `session_id`。
+- 会话入口加载并持久化线程级活跃任务；独立请求不覆盖未完成行程。
+- 同一会话的同步和异步调用共享协调器；当前只保证单进程内顺序。
 
-- system.py / scheduler.py 的 `__main__` demo 与 scripts/smoke.py 改为调用 `chat()`，循环样板消失。
-- webapp 的 `session_id` 保持装饰性；修复其文档字符串中"内存 dict keyed by session_id"的失实描述。
+## 后果
+
+Web 与内部调用复用同一结果语义。多进程或多副本间的会话顺序不属于当前能力，需要后续
+引入跨实例协调机制。

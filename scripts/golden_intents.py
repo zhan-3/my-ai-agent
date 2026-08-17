@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
-"""黄金测试集回归：真实 LLM 批量意图分类，统计准确率（第三阶段标尺）。
+"""意图分类的按需真实模型检查。
 
-用法：uv run python scripts/golden_intents.py [--verbose] [--threshold 0.95]
-数据：tests/data/intent_golden.jsonl（每条 {input, recent?, expected, subtasks?}）
-不进 pytest（LLM 波动 + 烧 token）：作为手动回归工具与 CI integration 门禁
-（阈值由实测基线留余量得出，不用 100% 避免 flaky 假红）。
+默认运行人工审阅契约；`--set holdout` 运行历史对抗集。两者都不进入日常门禁。
 """
 
 import argparse
@@ -14,16 +11,27 @@ from pathlib import Path
 
 from xiao_wen.intent import classify
 
-DATA = Path(__file__).resolve().parent.parent / "tests" / "data" / "intent_golden.jsonl"
+DATA_DIR = Path(__file__).resolve().parent.parent / "tests" / "data"
+DATASETS = {
+    "contract": DATA_DIR / "intent_contract.jsonl",
+    "holdout": DATA_DIR / "holdout_golden.jsonl",
+}
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--set", choices=DATASETS, default="contract")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--threshold", type=float, default=1.0, help="通过率下限（0-1），低于则退出码 1")
+    ap.add_argument(
+        "--min-intent",
+        type=float,
+        default=0.0,
+        help="任一意图通过率下限（0-1），防整体均值掩盖弱意图",
+    )
     args = ap.parse_args()
 
-    cases = [json.loads(line) for line in DATA.read_text().splitlines() if line.strip()]
+    cases = [json.loads(line) for line in DATASETS[args.set].read_text().splitlines() if line.strip()]
     total = len(cases)
     wrong: list[tuple[dict, str, str]] = []
     by_intent: dict[str, list[int]] = {}
@@ -48,10 +56,14 @@ def main() -> int:
                     f" | subtasks={[s.intent for s in r.subtasks]} | {r.reason[:40]}"
                 )
 
-    print(f"\n黄金测试集：{total} 条 | 通过 {total - len(wrong)} | 失败 {len(wrong)}")
+    print(f"\n意图 {args.set} 集：{total} 条 | 通过 {total - len(wrong)} | 失败 {len(wrong)}")
     print(f"整体准确率：{(total - len(wrong)) / total:.0%}")
-    for intent, (ok, n) in sorted(by_intent.items(), key=lambda x: x[1][1], reverse=True):
-        print(f"  {intent}: {ok}/{n}（{ok / n:.0%}）")
+    weak_intents: list[tuple[str, int, int]] = []
+    for intent, (ok_count, count) in sorted(by_intent.items(), key=lambda x: x[1][1], reverse=True):
+        rate = ok_count / count
+        print(f"  {intent}: {ok_count}/{count}（{rate:.0%}）")
+        if rate < args.min_intent:
+            weak_intents.append((intent, ok_count, count))
     if wrong:
         print("\n失败明细：")
         for c, got, subs in wrong:
@@ -59,9 +71,14 @@ def main() -> int:
                 f"  · {c['input'][:40]} | 期望 {c['expected']} | 实际 {got} | subtasks=[{subs}] | {c.get('note', '')}"
             )
     rate = (total - len(wrong)) / total
-    ok = rate >= args.threshold
-    print(f"通过率 {rate:.0%} vs 阈值 {args.threshold:.0%} → {'PASS' if ok else 'FAIL'}")
-    return 0 if ok else 1
+    overall_ok = rate >= args.threshold
+    intent_ok = not weak_intents
+    if weak_intents:
+        detail = "，".join(f"{intent}={ok_count}/{count}" for intent, ok_count, count in weak_intents)
+        print(f"分意图下限 {args.min_intent:.0%} 未满足：{detail}")
+    passed = overall_ok and intent_ok
+    print(f"整体 {rate:.0%} vs {args.threshold:.0%}，分意图下限 {args.min_intent:.0%} → {'PASS' if passed else 'FAIL'}")
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

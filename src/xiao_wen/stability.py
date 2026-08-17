@@ -10,11 +10,11 @@
 
 import functools
 import logging
-import os
 import threading
 import time
 
 from xiao_wen import ROOT
+from xiao_wen.config import EMBED_ENV_VAR, LLM_ENV_VARS, load_settings
 
 # ---- 日志记录（stdout + data/stability.log 双写） ----
 DATA_DIR = ROOT / "data"
@@ -101,18 +101,14 @@ def with_retry(retries: int = 2, base_delay: float = 0.5, breaker: CircuitBreake
 
 def health_check() -> list[dict]:
     """健康检查：.env 配置 / 知识库索引 / 记忆可写 / 插件目录 / 日志可写"""
-    from dotenv import load_dotenv
-
-    load_dotenv()
     report: list[dict] = []
 
     # ① .env 关键配置（变量名单一来源：llm 接缝 REQUIRED_ENV_VARS + rag embedding）
-    from xiao_wen import llm as llm_seam
-    from xiao_wen.rag import _EMBED_ENV_VAR
-
-    cfg = {v: ("存在" if os.getenv(v) else "缺失") for v in llm_seam.REQUIRED_ENV_VARS}
-    cfg["DEEPSEEK_MODEL"] = os.getenv("DEEPSEEK_MODEL") or "缺失"
-    cfg[_EMBED_ENV_VAR] = "存在" if os.getenv(_EMBED_ENV_VAR) else "缺失"
+    settings = load_settings()
+    llm_values = (settings.deepseek_model, settings.deepseek_base_url, settings.deepseek_api_key)
+    cfg = {name: ("存在" if value else "缺失") for name, value in zip(LLM_ENV_VARS, llm_values, strict=True)}
+    cfg["DEEPSEEK_MODEL"] = settings.deepseek_model or "缺失"
+    cfg[EMBED_ENV_VAR] = "存在" if settings.dashscope_api_key else "缺失"
     report.append({"项": "环境配置", "状态": "✅" if "缺失" not in cfg.values() else "⚠️", "详情": str(cfg)})
 
     # ② 向量知识库索引（chroma 持久化）

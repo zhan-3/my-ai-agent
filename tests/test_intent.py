@@ -1,45 +1,6 @@
-"""意图识别集成测试（真实 LLM，「对意图识别进行验证」）
-
-跑法：uv run pytest -m integration
-单一来源：xiao_wen.intent（system 与 graph_builder 调度图共用同一 classify）
-"""
-
-import pytest
+"""意图识别确定性修正规则测试；真实模型路由由 intent_contract.jsonl 单独评测。"""
 
 from xiao_wen import intent as _intent
-
-# 典型用例：从产品验证用例固化而来（含产品边界：个人休闲 → 其他）
-CASES = [
-    ("10月8日去北京开会4天", "行程规划"),
-    ("我不吃辣，住宿喜欢安静", "偏好记录"),
-    ("我上次的行程是什么", "历史查询"),
-    ("出差住宿标准是什么", "知识问答"),
-    ("北京今天天气怎么样", "联网查询"),
-    ("这个暑假去哪里玩", "其他"),
-    ("我想去三亚度假两周", "其他"),  # 产品边界：个人休闲游 → 其他
-]
-
-# 多意图拆分用例：一句话两个独立请求 → 2 条 subtasks（调度优化并行路径）
-MULTI_CASES = [
-    ("帮我查下出差住宿标准是什么，顺便看看北京今天天气怎么样", ["知识问答", "联网查询"]),
-    ("我上次的行程是什么，还有上海明天天气怎么样", ["历史查询", "联网查询"]),
-]
-
-# 外部扩展子 Agent 用例：差旅统计由注册表动态发现（多 Agent 化核心证据）
-# 默认词汇表 = discover()（六内置 + 外部 stats），无需 set_intents
-EXT_CASES = [
-    ("统计一下我的出差情况", "差旅统计"),
-    ("我今年出差了几次", "差旅统计"),
-]
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize("text,expected", CASES)
-def test_intent_classification(text, expected):
-    r = _intent.classify("", text)
-    assert r.intent == expected, f"{text!r} 期望 {expected}，实际 {r.intent}（{r.reason}）"
-    assert r.subtasks == [], "单意图请求不应拆分出子任务"
-
 
 # ---- 待补全续接（规则兑底，纯逻辑不依赖 LLM） ----
 
@@ -103,6 +64,27 @@ def test_recover_pending_respects_abandon_and_query():
     assert query.intent == "历史查询"
 
 
+def test_structured_pending_preference_interrupts_without_hijacking():
+    active = {"intent": "行程规划", "missing": ["出发城市"]}
+    base = _intent.IntentResult(intent="行程规划", reason="模型受旧文本影响", subtasks=[])
+    result = _intent._recover_pending("请补充出发城市", "我不吃辣", base, active_task=active)
+    assert result.intent == "偏好记录"
+
+
+def test_structured_pending_slot_and_resume_continue_trip():
+    active = {"intent": "行程规划", "missing": ["出发城市", "出差天数"]}
+    other = _intent.IntentResult(intent="其他", reason="短句", subtasks=[])
+    assert _intent._recover_pending("", "武汉", other, active_task=active).intent == "行程规划"
+    assert _intent._recover_pending("", "继续刚才", other, active_task=active).intent == "行程规划"
+
+
+def test_structured_pending_cancel_routes_to_other():
+    active = {"intent": "行程规划", "missing": ["出发城市"]}
+    base = _intent.IntentResult(intent="行程规划", reason="续接", subtasks=[])
+    result = _intent._recover_pending("", "算了，不去了", base, active_task=active)
+    assert result.intent == "其他"
+
+
 def test_recover_pending_noop_without_pending_mark():
     """recent 没有追问标记（正常偏好陈述）→ 不劫持"""
     base = _intent.IntentResult(intent="偏好记录", reason="", subtasks=[])
@@ -128,6 +110,17 @@ def test_pref_only_correction_keeps_plan_with_trip_elements():
         assert r.intent == "行程规划", q
 
 
+def test_pref_only_correction_does_not_treat_arrangement_as_preference():
+    """「帮我安排住宿」中的「我」和「住」不构成主语直接陈述偏好。"""
+    base = _intent.IntentResult(intent="行程规划", reason="安排出差", subtasks=[])
+    query = "去北京开会，帮我安排住宿和交通"
+    assert not _intent._is_pref_statement(query)
+    assert _intent._pref_only_correction("", query, base).intent == "行程规划"
+    mixed = "去北京开会，住全季酒店"
+    assert _intent._is_pref_statement(mixed)
+    assert _intent._pref_only_correction("", mixed, base).intent == "行程规划"
+
+
 def test_pref_only_correction_keeps_consultation():
     """咨询类（含哪里/怎么）→ 不触发：
     「我住哪里比较好」是咨询建议（其他），不是偏好陈述"""
@@ -141,18 +134,3 @@ def test_pref_only_correction_noop_when_already_pref():
     base = _intent.IntentResult(intent="偏好记录", reason="", subtasks=[])
     r = _intent._pref_only_correction("", "还是住汉庭吧", base)
     assert r.intent == "偏好记录"
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize("text,expected", MULTI_CASES)
-def test_intent_splits_subtasks(text, expected):
-    r = _intent.classify("", text)
-    assert [s.intent for s in r.subtasks] == expected, f"{text!r} 拆分：{r.subtasks}"
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize("text,expected", EXT_CASES)
-def test_intent_discovers_external_extension(text, expected):
-    """外部扩展子 Agent（差旅统计）被真实识别：注册表动态词汇表的核心验收"""
-    r = _intent.classify("", text)
-    assert r.intent == expected, f"{text!r} 期望 {expected}，实际 {r.intent}（{r.reason}）"

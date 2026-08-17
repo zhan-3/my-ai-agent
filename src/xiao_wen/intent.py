@@ -66,7 +66,7 @@ _EXAMPLES: dict[str, list[str]] = {
 # 边界情况规则（第二阶段）：模棱两可时的处理优先级，明示给模型
 _BOUNDARY_RULES = (
     "边界情况（模棱两可时按此优先级）：\n"
-    "· 行程相关动作（订票/订酒店/安排/规划出行/查航班/查车次），即使助手无法直接执行 → 行程规划（会追问细节）；\n"
+    "· 行程相关动作（订票/订酒店/安排/规划出行/查航班），即使助手无法直接执行 → 行程规划（会追问细节）；\n"
     "· 待补全续接：**若最近对话中助手在追问行程要素**（回复含「请补充/还缺」），\n"
     "  用户本轮直接补充要素（城市/日期/天数/地点，哪怕只有一个词）→ 行程规划（续接未完成的行程）；\n"
     "  若该句同时是偏好陈述（含常住/喜欢/不吃/习惯等）→ 主导意图仍为行程规划，subtasks 追加偏好记录；\n"
@@ -222,7 +222,13 @@ def _pref_only_correction(recent: str, user_input: str, result: IntentResult) ->
     )
 
 
-def classify(recent: str, user_input: str, *, _depth: int = 0) -> IntentResult:
+def classify(
+    recent: str,
+    user_input: str,
+    *,
+    _depth: int = 0,
+    active_task: dict | None = None,
+) -> IntentResult:
     """意图分类：recent=最近对话（短期记忆，指代消解），user_input=当前输入
 
     返回 intent/reason/subtasks；subtasks 为空数组表示单意图（原路由路径不变）。
@@ -245,7 +251,7 @@ def classify(recent: str, user_input: str, *, _depth: int = 0) -> IntentResult:
         mark in user_input for mark in ("查", "看", "有没有", "查询")
     ):
         result = IntentResult(intent="联网查询", reason="明确查询车票/车次，生成官方购票入口", subtasks=[])
-    result = _recover_pending(recent, user_input, result)
+    result = _recover_pending(recent, user_input, result, active_task=active_task)
     # 纯偏好锁定：无追问上下文时，纯偏好陈述（无行程要素/非咨询）→ 偏好记录
     # （防 LLM 把「上次一样，还是住汉庭吧」脑补成行程续接）
     result = _pref_only_correction(recent, user_input, result)
@@ -261,7 +267,7 @@ def classify(recent: str, user_input: str, *, _depth: int = 0) -> IntentResult:
     # 仅在 _depth==0（顶层调用）执行：子句分类不再二次拆分（递归深度封顶 1）。
     if _depth == 0 and not result.subtasks:
         for chunk in _split_subtasks(user_input):
-            sub = classify(recent, chunk, _depth=1)
+            sub = classify(recent, chunk, _depth=1, active_task=active_task)
             if sub.intent in (result.intent, "其他"):
                 continue  # 子句与主导同意图（已被覆盖）或属闲聊 → 不进并行
             result.subtasks.append(SubTask(intent=sub.intent, text=chunk))
@@ -291,10 +297,24 @@ _QUERY_WORDS = ("上次", "去过", "历史", "统计", "画像", "天气", "汇
 _PREF_STATEMENT_WORDS = ("常住", "喜欢", "不吃", "忌口", "习惯", "口味", "偏好")
 # 纯偏好独立标记词（无需主体即偏好：喜欢/还是/想住…）
 _PREF_VERB_MARKS = ("喜欢", "还是", "想住", "要住", "常住", "习惯", "偏好", "口味", "忌口", "不吃")
-# 偏好主体词：与「住」组合成「我住X/俺住X」
-_PREF_SUBJECT_MARKS = ("我", "俺", "咱", "本人", "老子")
 # 行程要素标记：含其一即非纯偏好（不触发纯偏好锁定）
-_TRIP_ELEMENT_MARKS = ("规划", "出差", "行程", "机票", "车次", "会议", "拜访", "培训", "月", "日", "号", "周")
+_TRIP_ELEMENT_MARKS = (
+    "规划",
+    "安排",
+    "出差",
+    "行程",
+    "机票",
+    "车次",
+    "会议",
+    "开会",
+    "拜访",
+    "培训",
+    "去",
+    "月",
+    "日",
+    "号",
+    "周",
+)
 # 咨询类标记：含其一即非陈述（不触发纯偏好锁定）
 _CONSULT_MARKS = ("哪里", "哪儿", "哪", "怎么", "吗", "啥", "什么", "?", "？")
 _TRAVEL_KNOWLEDGE_MARKS = ("出差", "差旅", "商务", "拜访", "会议")
@@ -307,6 +327,9 @@ def _is_travel_knowledge_consult(q: str) -> bool:
 
 
 _PREF_HOTEL_PATTERN = re.compile(r"住[^，。！？\s]{0,6}(酒店|民宿|宾馆|旅店)")
+_PREF_SUBJECT_STAY_PATTERN = re.compile(
+    r"(?:^|[，,。！？\s])(?:我|俺|咱|本人|老子)(?:(?:出差时?|平时|一般|通常|更|只))?(?:喜欢|习惯|想|要)?住"
+)
 
 
 def _is_pref_statement(q: str) -> bool:
@@ -314,12 +337,34 @@ def _is_pref_statement(q: str) -> bool:
     （裸「住」太宽——「住宿预算」「住宿标准」是行程相关词不是偏好，故不单列）"""
     if any(w in q for w in _PREF_VERB_MARKS):
         return True
-    if any(w in q for w in _PREF_SUBJECT_MARKS) and "住" in q:
+    if _PREF_SUBJECT_STAY_PATTERN.search(q):
         return True
     return bool(_PREF_HOTEL_PATTERN.search(q))
 
 
-def _recover_pending(recent: str, user_input: str, result: IntentResult) -> IntentResult:
+def _fills_pending_slot(user_input: str, missing: list[str]) -> bool:
+    from xiao_wen.reference_data import KNOWN_CITIES
+
+    if any(label in missing for label in ("出发城市", "目的城市")) and any(city in user_input for city in KNOWN_CITIES):
+        return True
+    if "出发日期" in missing and (
+        re.search(r"\d{1,4}[年/-]\d{1,2}|\d{1,2}月\d{1,2}[日号]", user_input)
+        or any(
+            word in user_input
+            for word in ("今天", "明天", "后天", "下周", "周一", "周二", "周三", "周四", "周五", "周六", "周日")
+        )
+    ):
+        return True
+    return "出差天数" in missing and bool(re.search(r"\d+\s*(?:天|日)", user_input))
+
+
+def _recover_pending(
+    recent: str,
+    user_input: str,
+    result: IntentResult,
+    *,
+    active_task: dict | None = None,
+) -> IntentResult:
     """待补全续接规则：助手上一轮在追问行程要素（recent 含「请补充/还缺」），
     本轮输入是简短补充（无放弃词、无强查询词）→ 修正主导意图为行程规划；
     若原意图是偏好记录且句子含偏好词 → subtasks 追加偏好记录（并行记偏好 + 续接）。
@@ -327,10 +372,29 @@ def _recover_pending(recent: str, user_input: str, result: IntentResult) -> Inte
     为什么需要：LLM 分类对「我现在常住上海」在追问上下文的归属不稳定（
     实测同 prompt 两次结果不同：一次行程规划+并行、一次纯偏好记录），
     规则兜底保证续接确定性。"""
-    if not recent or not any(m in recent for m in _PENDING_MARKS):
+    structured_pending = bool(active_task and active_task.get("intent") == "行程规划")
+    if not structured_pending and (not recent or not any(m in recent for m in _PENDING_MARKS)):
         return result
     q = user_input.strip()
-    if not q or any(w in q for w in _ABANDON_WORDS + _QUERY_WORDS):
+    if not q:
+        return result
+    if structured_pending:
+        assert active_task is not None
+        if any(w in q for w in _ABANDON_WORDS):
+            return IntentResult(intent="其他", reason="用户取消未完成的行程", subtasks=[])
+        if any(w in q for w in _QUERY_WORDS):
+            return result
+        missing = [str(item) for item in active_task.get("missing", [])]
+        fills_slot = _fills_pending_slot(q, missing)
+        if _is_pref_statement(q) and not fills_slot:
+            return IntentResult(intent="偏好记录", reason="记录偏好并保留未完成行程", subtasks=[])
+        if not fills_slot and not any(word in q for word in ("继续", "接着", "刚才")):
+            return result
+        subs = list(result.subtasks)
+        if _is_pref_statement(q) and not any(s.intent == "偏好记录" for s in subs):
+            subs.append(SubTask(intent="偏好记录", text=q))
+        return IntentResult(intent="行程规划", reason="补充或继续未完成的行程", subtasks=subs)
+    if any(w in q for w in _ABANDON_WORDS + _QUERY_WORDS):
         return result
     # 主导意图已是行程规划（LLM 直接归对）→ 仍需确保偏好记录进 subtasks：
     # 「追问上下文的偏好陈述」同时是补全+记偏好两件事，不依赖 LLM 原分类

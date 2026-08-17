@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field
 
 from xiao_wen import llm
 from xiao_wen.memory import add_itinerary, get_home_city, get_preferences
-from xiao_wen.reference_data import HOTEL_RATE, city_tier, train_info
 from xiao_wen.ticket_link import build_ticket_url
 
 # 相对日期解析：给提取器注入「今天」（含周几），让「下周/明天」能推算成具体日期
@@ -76,6 +75,7 @@ class PlanResult:
 @dataclass
 class NeedsInfo:
     missing: list[str]  # 缺失要素清单（基础项 E：缺项提示）
+    request: TripRequest | None = None
 
 
 @dataclass
@@ -277,7 +277,7 @@ def plan(
         req.from_city = hc
     miss = _missing(req)
     if miss:
-        return NeedsInfo(missing=miss)
+        return NeedsInfo(missing=miss, request=req)
     prefs = get_preferences(session_id=session_id)
     prefs_text = "；".join(f"{p['category']}:{p['content']}" for p in prefs) or "无"
     upstream = upstream or {}
@@ -288,11 +288,16 @@ def plan(
         prefs_text = (
             f"{prefs_text}\n本轮陈述偏好：{turn_prefs}" if prefs_text != "无" else f"本轮陈述偏好：{turn_prefs}"
         )
+    policy_context = upstream.get("policy_context")
+    policy_status = getattr(policy_context, "status", "not_found")
+    policy_prompt = upstream.get("policy") or "未检索到相关公司政策；不得引用或推断政策金额、限额、标准或审批时限。"
+    if policy_status == "unavailable":
+        policy_prompt = "政策服务当前不可用；不得引用或推断政策金额、限额、标准或审批时限。"
     plan = _plan_model().invoke(
         {
             "trip_json": req.model_dump_json(),
             "prefs": prefs_text,
-            "policy": upstream.get("policy") or "无",
+            "policy": policy_prompt,
             "history_ref": upstream.get("history_ref") or "无",
             "guidance": upstream.get("guidance") or "无",
             "user_input": user_input,
@@ -309,7 +314,6 @@ def plan(
 
     policy_text = upstream.get("policy") or ""
     evidence_ids = tuple(upstream.get("policy_evidence_ids") or ())
-    policy_context = upstream.get("policy_context")
     budget = estimate_budget(req)
     validation = validate_trip(
         req,
@@ -341,41 +345,28 @@ def plan(
 
 # ---- 展示（可读性格式化，测试锁定） ----
 
-# 行程“实感”数据层：车次表 / 城市分级 / 住宿标准统一来自 xiao_wen.reference_data
-# 预算档位（经济/中等/舒适）→ 住宿系数（在差旅标准价上调整）+ 每日餐饮标准。
-# 「中等」即差旅政策标准价；「经济」下调、「舒适」上调，让用户预算偏好真正参与估算。
+# 通用规划估算，不是供应商报价或公司政策。交通价格变化频繁，不做本地数字估算。
 BUDGET_LEVELS = {
-    "经济": {"hotel_factor": 0.7, "meal_per_day": 120},  # 住宿 70%、餐标 60×2
-    "中等": {"hotel_factor": 1.0, "meal_per_day": 200},  # 差旅标准价、餐标 100×2
-    "舒适": {"hotel_factor": 1.5, "meal_per_day": 300},  # 住宿 150%、餐标 150×2
+    "经济": {"hotel_per_night": 300, "meal_per_day": 120},
+    "中等": {"hotel_per_night": 450, "meal_per_day": 200},
+    "舒适": {"hotel_per_night": 700, "meal_per_day": 300},
 }
 DEFAULT_BUDGET_LEVEL = "中等"
 
 
 def estimate_budget(req: TripRequest) -> dict:
-    """确定性预算估算：交通（车次表真实票价×人数，查不到按中等里程档）+ 住宿（城市分级×预算档×房数×晚数）+
-    餐饮（预算档餐标×人数×天数）。全部参考价，不依赖 LLM 编数字（避免幻觉）"""
+    """确定性规划估算：只估住宿与餐饮，交通金额留给官方实时查询结果。"""
     assert isinstance(req.duration_days, int), "缺项检查后 duration 必为 int"
     people = req.people_count if isinstance(req.people_count, int) and req.people_count > 0 else 1
     nights = max(req.duration_days - 1, 0)  # 最后一天返程，住 (天数-1) 晚；一日往返 0 晚
-    info = train_info(req.from_city, req.to_city)
-    train_fare = info[4] if info else 650  # 未收录线路：按中等里程二等座参考档
-    # reference_data 仅用于预算参考；预算标注为参考价，不代表实时可售车次。
-    train_line = f"高铁 {info[0]} 次 {info[1]}→{info[2]}（参考车次）" if info else "高铁往返（具体车次以出票为准）"
-    transport_cost = train_fare * 2 * people  # 往返 × 人数
-    tier = city_tier(req.to_city)
     level = BUDGET_LEVELS.get(req.budget_pref, BUDGET_LEVELS[DEFAULT_BUDGET_LEVEL])
     budget_level = req.budget_pref if req.budget_pref in BUDGET_LEVELS else DEFAULT_BUDGET_LEVEL
-    hotel_per_night = round(HOTEL_RATE[tier] * level["hotel_factor"])
+    hotel_per_night = level["hotel_per_night"]
     rooms = (people + 1) // 2  # 双人标准间，向上取整
     hotel_cost = hotel_per_night * rooms * nights
     meal_per_day = level["meal_per_day"]
     meal_cost = meal_per_day * people * req.duration_days
     return {
-        "train_line": train_line,
-        "train_fare": train_fare,
-        "transport_cost": transport_cost,
-        "tier": tier,
         "budget_level": budget_level,
         "people": people,
         "rooms": rooms,
@@ -384,30 +375,28 @@ def estimate_budget(req: TripRequest) -> dict:
         "hotel_cost": hotel_cost,
         "meal_per_day": meal_per_day,
         "meal_cost": meal_cost,
-        "total": transport_cost + hotel_cost + meal_cost,
+        "total": hotel_cost + meal_cost,
     }
 
 
 def format_budget(req: TripRequest) -> str:
-    """预算块（独立于 format_plan，供展示层拼接）：真实数字锚点 → 行程有“实感”"""
+    """格式化非政策规划估算；交通只引导至官方实时查询。"""
     b = estimate_budget(req)
-    people_suffix = "" if b["people"] == 1 else f"（{b['people']} 人）"
     if b["nights"] == 0:
         hotel_line = "· 住宿：当日往返，无需住宿\n"
     else:
-        label = "按差旅标准" if b["budget_level"] == "中等" else f"{b['budget_level']}档"
         rooms_suffix = "" if b["rooms"] == 1 else f" × {b['rooms']} 间"
         hotel_line = (
-            f"· 住宿：{req.to_city}（{b['tier']}）{label} "
+            f"· 住宿：{b['budget_level']}估算档 "
             f"{b['hotel_per_night']} 元/晚 × {b['nights']} 晚{rooms_suffix} ≈ {b['hotel_cost']} 元\n"
         )
     meal_people = "" if b["people"] == 1 else f" × {b['people']} 人"
     return (
-        "💰 费用估算（参考价，以实际出票为准）：\n"
-        f"· 交通：{b['train_line']}，二等座约 {b['train_fare']} 元/程，往返约 {b['transport_cost']} 元{people_suffix}\n"
+        "💰 规划估算（非报价、非公司政策）：\n"
+        "· 交通：不提供金额，请以 12306 官方页面的实时查询结果为准\n"
         f"{hotel_line}"
         f"· 餐饮：{b['meal_per_day']} 元/天{meal_people} × {req.duration_days} 天 ≈ {b['meal_cost']} 元\n"
-        f"· 合计：约 {b['total']} 元"
+        f"· 住宿与餐饮小计（不含交通）：约 {b['total']} 元"
     )
 
 
@@ -460,6 +449,7 @@ class TripOutcome:
 
     answer: str
     plan: dict | None  # 结构化 plan（含 date_is_vague），缺项时为 None
+    task_update: dict | None = None
 
 
 def _ticket_url(origin: str, destination: str, travel_date: str, return_date: str = "") -> tuple[str, str | None]:
@@ -473,6 +463,7 @@ def handle(
     session_id: str = "default",
     recent: str = "",
     upstream: dict | None = None,
+    task_context: str = "",
 ) -> TripOutcome:
     """行程规划完整编排入口（collect-then-compose 的 compose 阶段）：
 
@@ -483,7 +474,23 @@ def handle(
 
     r = plan(user_input, session_id=session_id, recent=recent, upstream=upstream)
     if isinstance(r, NeedsInfo):
-        return TripOutcome(answer=needs_info_text(r), plan=None)
+        from xiao_wen.dialogue import task_update_set
+
+        answer = needs_info_text(r)
+        resume_context = "\n".join(
+            part
+            for part in (
+                task_context.strip(),
+                f"用户: {user_input}",
+                f"助手: {answer}",
+            )
+            if part
+        )
+        return TripOutcome(
+            answer=answer,
+            plan=None,
+            task_update=task_update_set(resume_context=resume_context, missing=r.missing),
+        )
     if isinstance(r, ValidationFailure):
         return TripOutcome(
             answer="⚠️ 行程候选未通过一致性校验，暂未写入历史记录：\n· " + "\n· ".join(r.issues),
@@ -491,14 +498,18 @@ def handle(
         )
     answer = format_plan(r.plan)
     req = r.request
+    policy_context = (upstream or {}).get("policy_context")
+    policy_status = getattr(policy_context, "status", "not_found")
+    if policy_status == "unavailable":
+        answer += "\n\n⚠️ 公司政策服务暂时不可用；本行程未引用住宿标准、报销额度或审批时限，请在服务恢复后复核。"
     if req and req.date_is_vague:
         # 日期模糊（如只说了「下周」）：明示按推断日期安排，给用户确认/调整机会
         answer += (
             f"\n\n📅 你只说了出发时间的大致范围，我按 {req.start_date} 开始安排——"
             "如果实际日期不同，告诉我具体日期，我重新排。"
         )
-    if req:
-        # 预算块：确定性真实票价/标准价（LLM 不编数字，避免幻觉）
+    if req and policy_status != "unavailable":
+        # 预算块：非政策规划估算；交通金额始终留给 12306 实时结果。
         with suppress(Exception):
             answer += f"\n\n{format_budget(req)}"
     if req and req.start_date not in ("待定", ""):
@@ -562,4 +573,6 @@ def handle(
             answer += "\n\n📌 出差提示依据：" + "、".join(guidance_sources)
     plan_dict = r.plan.model_dump()
     plan_dict["date_is_vague"] = bool(req and req.date_is_vague)
-    return TripOutcome(answer=answer, plan=plan_dict)
+    from xiao_wen.dialogue import task_update_clear
+
+    return TripOutcome(answer=answer, plan=plan_dict, task_update=task_update_clear())

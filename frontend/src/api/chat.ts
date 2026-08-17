@@ -4,8 +4,12 @@ import type { ChatResponse, HistoryResult, KnowledgeSource, TripPlan, TravelStat
 export { ApiError }
 export type { ChatResponse }
 
-export function sendMessage(text: string, token: string): Promise<ChatResponse> {
-  return request<ChatResponse>('/api/chat', { method: 'POST', body: { user_input: text }, token })
+export function sendMessage(text: string, token: string, conversationId = 'default'): Promise<ChatResponse> {
+  return request<ChatResponse>('/api/chat', {
+    method: 'POST',
+    body: { user_input: text, conversation_id: conversationId },
+    token,
+  })
 }
 
 // ---- SSE 流式聊天（POST /api/chat/stream，阶段事件 + done） ----
@@ -21,6 +25,9 @@ export interface StreamEvent {
   stats?: TravelStats | null
   history?: HistoryResult | null
   sources?: KnowledgeSource[]
+  policy_status?: string | null
+  code?: string
+  retryable?: boolean
   message?: string
 }
 
@@ -46,11 +53,12 @@ export async function streamChat(
   text: string,
   token: string,
   onEvent: (e: StreamEvent) => void,
+  conversationId = 'default',
 ): Promise<ChatResponse> {
   const res = await fetch('/api/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ user_input: text }),
+    body: JSON.stringify({ user_input: text, conversation_id: conversationId }),
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
@@ -79,9 +87,14 @@ export async function streamChat(
           stats: e.stats ?? null,
           history: e.history ?? null,
           sources: e.sources ?? [],
+          policy_status: e.policy_status ?? null,
         }
       } else if (e.type === 'error') {
-        throw new Error(e.message || '服务暂时不可用')
+        throw new ApiError(503, {
+          message: e.message || '服务暂时不可用',
+          code: e.code,
+          retryable: e.retryable,
+        })
       }
     }
   }

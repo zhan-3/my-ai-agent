@@ -1,6 +1,6 @@
 # ADR-0001：模型接缝（LLM seam）设计
 
-`ChatOpenAI` 构造散落三处（system/rag/web）且已漂移（重试/超时只在 system.py），稳定性栈（重试/熔断/兜底）在热路径零消费者，且导入期构造导致单元测试与交付自检依赖凭据。决定：新增 `src/xiao_wen/llm.py`，`get_llm(*, override=None, **overrides)` 懒构造——首次调用时校验 3 个 `DEEPSEEK_*` 变量（缺失报齐）并组装默认配置，返回值包一层代理：`invoke` 走共享 `CircuitBreaker`（3 次失败 / 5 秒恢复期），其余方法透传；链（prompt+schema）留在各消费者模块懒构建；`plugin_demo` 走接缝，`stability_demo` 的 `BAD_LLM` 刻意绕过（故障注入演示）。
+`ChatOpenAI` 构造曾散落在图、RAG 和联网模块，重试/超时配置发生漂移，导入期构造还让单元测试与交付自检依赖凭据。决定：由 `src/xiao_wen/llm.py` 提供 `get_llm(*, override=None, **overrides)` 懒构造——首次调用时校验 3 个 `DEEPSEEK_*` 变量（缺失报齐）并组装默认配置，返回值包一层代理：`invoke` 走共享 `CircuitBreaker`（3 次失败 / 5 秒恢复期），其余方法透传；链（prompt+schema）留在各消费者模块懒构建。
 
 ## Considered Options
 
@@ -11,5 +11,5 @@
 ## Consequences
 
 - rag.py / web.py 的 LLM 将获得它们原本没有的 `max_retries=2, timeout=30`（预期内的行为变化）。
-- 导入 `xiao_wen.system` 不再需要凭据：单元测试与交付自检（无 .env 的干净临时目录）脱离环境变量。
-- 熔断状态为进程级全局共享（单用户演示场景可接受）。
+- 导入核心模块不再需要凭据：单元测试与交付自检（无 .env 的干净临时目录）脱离环境变量。
+- 熔断状态为进程级全局共享，符合当前单实例运行边界。

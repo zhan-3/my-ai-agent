@@ -5,13 +5,15 @@
   唯一实现 PostgresBackend（memory_pg.py，psycopg，POSTGRES_URL 必配）
 - 组合函数留在函数层：format_recent_messages / get_home_city / get_common_destinations
   （backend 只管基础读写，组合逻辑不重复）
-- 测试注入：set_backend(PostgresBackend(test_url)) 替代旧的 InMemoryBackend 兜底
-  （conftest 负责起库/清表；本模块不再有任何进程内存后端）
+- 测试注入：set_backend(PostgresBackend(test_url)) 指向专用测试库
+  （conftest 负责清表；本模块不提供进程内存后端）
 """
 
-import os
 from collections import Counter
+from threading import Lock
 from typing import Protocol
+
+from xiao_wen.config import load_settings
 
 
 class MemoryBackend(Protocol):
@@ -20,6 +22,12 @@ class MemoryBackend(Protocol):
     def add_message(self, session_id: str, role: str, content: str) -> dict: ...
 
     def get_recent_messages(self, session_id: str, n: int) -> list[dict]: ...
+
+    def get_active_task(self, thread_id: str, user_id: str) -> dict | None: ...
+
+    def set_active_task(self, thread_id: str, user_id: str, task: dict) -> dict: ...
+
+    def clear_active_task(self, thread_id: str, user_id: str) -> None: ...
 
     def add_or_update_preference(
         self, session_id: str, category: str, content: str, is_update: bool = False
@@ -36,27 +44,26 @@ class MemoryBackend(Protocol):
 
 # ---- 模块级当前后端（测试注入 set_backend；生产懒构造 Postgres） ----
 _backend: MemoryBackend | None = None
+_backend_lock = Lock()
 
 
 def set_backend(backend: MemoryBackend) -> None:
     """注入后端（测试注入 PostgresBackend(test_url) 隔离；生产由 _get_backend 懒构造）"""
     global _backend  # noqa: PLW0603 —— 后端注入是模块级状态的刻意设计
-    _backend = backend
+    with _backend_lock:
+        _backend = backend
 
 
 def _get_backend() -> MemoryBackend:
-    """懒构造产品后端：Postgres（唯一后端）。未配 POSTGRES_URL 直接报错——不再有内存兜底。"""
+    """懒构造唯一产品后端 Postgres；缺少 POSTGRES_URL 时直接报错。"""
     global _backend  # noqa: PLW0603
     if _backend is None:
-        url = os.environ.get("POSTGRES_URL")
-        if not url:
-            raise RuntimeError(
-                "记忆后端需要 POSTGRES_URL（唯一后端 Postgres）："
-                "docker compose up -d postgres && export POSTGRES_URL=..."
-            )
-        from xiao_wen.memory_pg import PostgresBackend  # 懒导入：pg 依赖可选
+        with _backend_lock:
+            if _backend is None:
+                url = load_settings().require_postgres_url()
+                from xiao_wen.memory_pg import PostgresBackend  # 懒导入：pg 依赖可选
 
-        _backend = PostgresBackend(url)
+                _backend = PostgresBackend(url)
     return _backend
 
 
@@ -77,6 +84,19 @@ def format_recent_messages(n: int = 6, *, session_id: str = "default") -> str:
         return "无"
     lines = [f"{'用户' if m['role'] == 'user' else '助手'}: {m['content'][:80]}" for m in msgs]
     return "\n".join(lines)
+
+
+# ---------- 对话状态：线程级活跃任务 ----------
+def get_active_task(*, thread_id: str, user_id: str) -> dict | None:
+    return _get_backend().get_active_task(thread_id, user_id)
+
+
+def set_active_task(task: dict, *, thread_id: str, user_id: str) -> dict:
+    return _get_backend().set_active_task(thread_id, user_id, task)
+
+
+def clear_active_task(*, thread_id: str, user_id: str) -> None:
+    _get_backend().clear_active_task(thread_id, user_id)
 
 
 # ---------- 长期记忆：偏好（追加 / 覆盖） ----------

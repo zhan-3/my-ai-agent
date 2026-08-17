@@ -17,7 +17,7 @@ worker 自动注册、未派发的 worker 不加载、意图识别阶段只加�
 
 - **子 Agent = 实体模块**：六个内置子 Agent 在 `src/xiao_wen/agents/`（itinerary/preference/
   history/knowledge/web/other + 外部扩展 `plugins/`），每个声明 `INTENT / DESCRIPTION / run(state) -> dict`。
-- **注册表驱动主管**：`system.app` / `scheduler.app` 由 `plugin_registry.discover()` 的 manifest
+- **注册表驱动主管**：`graph_builder` 由 `plugin_registry.discover()` 的 manifest
   动态组装（节点 = 懒加载代理，路由 = manifest 意图）；意图词汇表 = `intent.set_intents(manifest)`
   动态生成——新增子 Agent 主管零改动。
 - **优先级**：内置优先；外部扩展仅在意图不与内置冲突时并入（防撞车）。
@@ -29,13 +29,13 @@ worker 自动注册、未派发的 worker 不加载、意图识别阶段只加�
 - **旁路机制（初版决定，撤销）**：机制存在于 plugins/ 目录、产品路径不接线。判定失败：
   "子 Agent 支持动态发现"的主体是 worker 层，旁路机制无法让主管动态认识 worker。
 - **完整接线（选）**：worker 拆子 Agent 实体 + 注册表驱动主管 + 动态词汇表。改动面：
-  system/scheduler 组装、intent 词汇表、六 worker 拆文件；风险：意图识别动态 prompt 质量
-  与路由回归（六意图语义由集成用例保住）。
+  图工厂组装、intent 词汇表和 worker 模块；风险：意图识别动态 prompt 质量与路由回归由
+  集成测试保住。
 
 ## Consequences
 
 - 主管图不再是硬编码六节点：加一个子 Agent（丢文件到 agents/ 或 plugins/）→ 重新发现 →
-  重建图即路由（plugin_demo 第3幕演示运行中热插拔）。
+  重建图即路由。
 - 意图识别 prompt 由 manifest 动态生成（渐进式披露：识别阶段零加载子 Agent 实现）。
 - 未派发的子 Agent 不加载（懒加载：内置 import_module / 外部 exec_module，`_loaded` 缓存）。
 - 分类 Schema 的意图字段从静态 Literal 六词改为 str + 运行时词汇表校验（动态化的固有代价，

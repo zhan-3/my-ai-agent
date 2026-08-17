@@ -26,6 +26,7 @@ const okResponse: chatApi.ChatResponse = {
   plan: okPlan,
   stats: null,
   history: null,
+  sources: [],
 }
 
 /** 流式成功：模拟 SSE 阶段事件回调 + done 返回 */
@@ -61,6 +62,21 @@ describe('useChat SSE 发送流', () => {
     ])
     expect(result.current.busy).toBe(false)
     expect(result.current.stages).toEqual([]) // done 后进度清空
+  })
+
+  it('同一可见对话复用 conversationId，新对话重置消息并更换 ID', async () => {
+    mockStreamOk()
+    const { result } = renderHook(() => useChat({ onUnauthorized: vi.fn() }))
+    const firstId = result.current.conversationId
+
+    await act(async () => {
+      await result.current.send('你好')
+    })
+    expect(vi.mocked(chatApi.streamChat).mock.calls[0][3]).toBe(firstId)
+
+    act(() => result.current.startNewConversation())
+    expect(result.current.conversationId).not.toBe(firstId)
+    expect(result.current.messages).toEqual([])
   })
 
   it('busy 期间防重复提交（同轮两次 send 只发一次）', async () => {

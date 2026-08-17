@@ -115,15 +115,12 @@ def test_health_check_memory_backend_ready(monkeypatch):
 
 
 def test_health_check_memory_backend_missing_url_warns(monkeypatch):
-    """未配 POSTGRES_URL → 记忆存储 = ⚠️（无内存兜底，探活不崩溃）
-    注：health_check 内部 load_dotenv 会从 .env 补回环境变量，这里 patch 掉以测真实缺配场景"""
-    import dotenv
-
+    """未配 POSTGRES_URL 时记忆存储报告警告，探活接口不崩溃。"""
     from xiao_wen import memory as memory_mod
     from xiao_wen import stability as st
 
-    monkeypatch.setattr(dotenv, "load_dotenv", lambda: None)
     monkeypatch.delenv("POSTGRES_URL", raising=False)
+    monkeypatch.delenv("POSTGRES_TEST_URL", raising=False)
     memory_mod._backend = None
     try:
         report = st.health_check()

@@ -73,6 +73,6 @@ def test_validate_trip_blocks_budget_total_mismatch():
     result = validate_trip(
         request(),
         plan(day("2026-03-05"), day("2026-03-06"), day("2026-03-07")),
-        budget={"transport_cost": 100, "hotel_cost": 200, "meal_cost": 300, "total": 999},
+        budget={"hotel_cost": 200, "meal_cost": 300, "total": 999},
     )
     assert any(issue.code == "budget_mismatch" for issue in result.blocking_issues)

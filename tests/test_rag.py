@@ -144,6 +144,7 @@ def test_build_index_rebuilds_on_count_mismatch(monkeypatch):
 
 def test_build_index_reuses_on_count_match(monkeypatch):
     """索引块数与当前一致**且模型版本一致** → 直接复用，不删除不重建"""
+    monkeypatch.setenv("DASHSCOPE_EMB_MODEL", rag.EMB_MODEL)
     fake = FakeCol(count=2, metadata={"model": rag.EMB_MODEL})
     monkeypatch.setattr(rag, "get_collection", lambda: fake)
     monkeypatch.setattr(rag, "embed_texts", _fake_embeddings)
@@ -156,7 +157,7 @@ def test_build_index_rebuilds_on_model_change(monkeypatch):
     fake = FakeCol(count=2, metadata={"model": "text-embedding-v3"})  # 旧索引：v3
     # 显式指定当前模型 ≠ 旧索引模型：不依赖外部配置（CI 无 .env 时 EMB_MODEL
     # 默认也是 v3，等于旧索引 → 曾错误命中复用分支，本地因 .env 设了 v4 才过）
-    monkeypatch.setattr(rag, "EMB_MODEL", "test-emb-v4")
+    monkeypatch.setenv("DASHSCOPE_EMB_MODEL", "test-emb-v4")
     monkeypatch.setattr(rag, "get_collection", lambda: fake)
     monkeypatch.setattr(rag, "embed_texts", _fake_embeddings)
     rag.build_index([("a", "x" * 50)] * 2)
@@ -223,6 +224,70 @@ def test_retrieve_policy_marks_metadata_expired(monkeypatch):
     assert context.facts == ()
 
 
+def test_policy_provider_classifies_index_failure_as_unavailable():
+    def fail_index(chunks):
+        raise RuntimeError("embedding service down")
+
+    provider = rag.PolicyProvider(
+        chunk_loader=lambda: [("policy", "一线城市住宿标准不超过500元/晚")],
+        index_builder=fail_index,
+    )
+    context = provider.retrieve("住宿标准")
+
+    assert context.status == "unavailable"
+    assert context.evidence == ()
+    assert context.failure == rag.PolicyFailure("index_unavailable", retryable=True)
+
+
+def test_policy_provider_distinguishes_no_hits_from_failure():
+    provider = rag.PolicyProvider(
+        chunk_loader=lambda: [("policy", "政策原文")],
+        index_builder=lambda chunks: object(),
+        searcher=lambda query, collection, k=5: [],
+    )
+    context = provider.retrieve("不存在的政策")
+
+    assert context.status == "not_found"
+    assert context.failure is None
+
+
+def test_answer_policy_unavailable_does_not_call_llm(monkeypatch):
+    context = rag.PolicyContext(
+        query="住宿标准",
+        evidence=(),
+        status="unavailable",
+        failure=rag.PolicyFailure("search_unavailable", retryable=True),
+    )
+    monkeypatch.setattr(rag, "retrieve_policy", lambda query, k=5: context)
+    monkeypatch.setattr(rag, "_knowledge_model", lambda: (_ for _ in ()).throw(AssertionError("不应调用 LLM")))
+
+    result = rag.answer_policy("住宿标准")
+
+    assert result.context.status == "unavailable"
+    assert "暂时不可用" in result.answer
+
+
+def test_knowledge_agent_maps_policy_result_to_domain_failure(monkeypatch):
+    from xiao_wen.agents import knowledge_agent
+
+    context = rag.PolicyContext(
+        query="住宿标准",
+        evidence=(),
+        status="unavailable",
+        failure=rag.PolicyFailure("index_unavailable", retryable=True),
+    )
+    monkeypatch.setattr(rag, "answer_policy", lambda query: rag.PolicyAnswer("政策服务暂时不可用", context))
+
+    output = knowledge_agent.run({"user_input": "住宿标准"})
+
+    assert output["policy_status"] == "unavailable"
+    assert output["failure"] == {
+        "code": "policy_unavailable",
+        "message": "政策服务暂时不可用",
+        "retryable": True,
+    }
+
+
 def test_search_filters_low_similarity_hits(monkeypatch):
     """低于阈值的命中丢弃：无关文档不拼进上下文（防 LLM 依据无关资料幻觉）"""
 
@@ -239,6 +304,32 @@ def test_search_filters_low_similarity_hits(monkeypatch):
     hits = rag.search("出差住宿标准", FakeCol(), k=5, min_sim=0.35)
     sims = [sim for sim, _, _ in hits]
     assert sims == [0.6, 0.4], f"低相似度 0.1 应被丢弃，实际相似度 {sims}"
+
+
+def test_search_expands_ann_candidate_pool_before_top_k(monkeypatch):
+    """HNSW 小候选集可能漏掉最佳块；先扩大候选池，再返回最终 top-k。"""
+
+    class ApproximateCol:
+        requested = 0
+
+        def query(self, query_embeddings, n_results):
+            self.requested = n_results
+            documents = ["FAQ 相关块"]
+            metadatas = [{"source": "04_faq"}]
+            distances = [0.35]
+            if n_results > 5:
+                documents.append("住宿标准最佳块")
+                metadatas.append({"source": "01_travel_standards"})
+                distances.append(0.2)
+            return {"documents": [documents], "metadatas": [metadatas], "distances": [distances]}
+
+    collection = ApproximateCol()
+    monkeypatch.setattr(rag, "embed_texts", lambda texts: [[0.1] * 4 for _ in texts])
+
+    hits = rag.search("出差住宿标准", collection, k=5, min_sim=0.35)
+
+    assert collection.requested > 5
+    assert hits[0][1] == "01_travel_standards"
 
 
 def test_retrieve_guidance_limits_each_topic(monkeypatch):

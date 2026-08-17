@@ -12,7 +12,6 @@
 """
 
 import hashlib
-import os
 import re
 import time
 from contextlib import contextmanager
@@ -20,24 +19,24 @@ from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
 from http import HTTPStatus
+from typing import Literal
 
 import chromadb
 import dashscope
-from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
 
 from xiao_wen import ROOT, llm
+from xiao_wen.config import EMBED_ENV_VAR, load_settings
 from xiao_wen.stability import with_retry
-
-load_dotenv()
 
 # 项目根目录（单一来源：xiao_wen.ROOT，C7 收敛）
 DOCS_DIR = ROOT / "docs" / "documents"
 CHROMA_DIR = ROOT / "data" / "chroma"
 # embedding 模型可配置（.env 覆盖；换模型必须重建索引，见 build_index 模型版本检查）
-EMB_MODEL = os.environ.get("DASHSCOPE_EMB_MODEL", "text-embedding-v3")
-EMB_DIM = int(os.environ.get("DASHSCOPE_EMB_DIM", "1024"))
+EMB_MODEL = "text-embedding-v3"
+EMB_DIM = 1024
 BATCH = 10  # 每次 API 调用批量 embedding 条数
+ANN_CANDIDATE_MULTIPLIER = 4  # HNSW 先扩大近似候选池，再按实际距离截取最终 top-k
 COLLECTION = "travel_docs"
 CHROMA_LOCK = CHROMA_DIR.parent / "chroma.lock"
 
@@ -58,7 +57,16 @@ def _chroma_lock():
 
 # 检索相似度阈值：低于此值的命中视为语义无关丢弃（防无关文档拼进提示词引发幻觉）。
 # text-embedding-v3 余弦相似度：相关文档通常 >0.4，无关 <0.3；可 .env 用 RAG_MIN_SIM 覆盖。
-MIN_SIM = float(os.environ.get("RAG_MIN_SIM", "0.35"))
+MIN_SIM = 0.35
+
+
+def _embedding_config() -> tuple[str, int]:
+    settings = load_settings()
+    return settings.dashscope_emb_model or EMB_MODEL, settings.embedding_dimension(EMB_DIM)
+
+
+def _min_similarity() -> float:
+    return load_settings().minimum_similarity(MIN_SIM)
 
 
 @dataclass(frozen=True)
@@ -86,15 +94,19 @@ class PolicyFact:
     evidence_ids: tuple[str, ...]
 
 
+PolicyStatus = Literal["grounded", "not_found", "unavailable", "stale", "ambiguous"]
+
+
 @dataclass(frozen=True)
 class PolicyContext:
     """本轮政策检索快照，供行程生成和运行时验证共同使用。"""
 
     query: str
     evidence: tuple[Evidence, ...]
-    status: str = "not_found"  # grounded / partial / ambiguous / stale / not_found
+    status: PolicyStatus = "not_found"
     facts: tuple[PolicyFact, ...] = ()
     snapshot_id: str = ""
+    failure: "PolicyFailure | None" = None
 
     @property
     def has_stale_evidence(self) -> bool:
@@ -117,8 +129,25 @@ class PolicyContext:
         return "\\n\\n".join(item.text for item in self.evidence)
 
 
+PolicyFailureCode = Literal["documents_unavailable", "index_unavailable", "search_unavailable"]
+
+
+@dataclass(frozen=True)
+class PolicyFailure:
+    """政策依赖故障；调用方只消费稳定代码，不解析 adapter 异常文本。"""
+
+    code: PolicyFailureCode
+    retryable: bool
+
+
+@dataclass(frozen=True)
+class PolicyAnswer:
+    answer: str
+    context: PolicyContext
+
+
 def _extract_policy_facts(evidence: tuple[Evidence, ...]) -> tuple[PolicyFact, ...]:
-    """从已检索原文提取当前 Demo 所需的有限政策事实，不从模型输出提取。"""
+    """从已检索原文提取当前产品所需的有限政策事实，不从模型输出提取。"""
     facts: list[PolicyFact] = []
     evidence_ids = tuple(item.evidence_id for item in evidence)
     for item in evidence:
@@ -169,7 +198,7 @@ def policy_context_from_texts(query: str, texts: list[tuple[str, str]]) -> Polic
         for fact in facts
         if sum(other.key == fact.key and other.scope == fact.scope and other.value != fact.value for other in facts)
     }
-    status = "not_found" if not evidence else ("ambiguous" if conflicting_keys else "grounded")
+    status: PolicyStatus = "not_found" if not evidence else ("ambiguous" if conflicting_keys else "grounded")
     exposed_facts = () if conflicting_keys else facts
     snapshot = hashlib.sha256("\\n".join(item.evidence_id for item in evidence).encode()).hexdigest()[:16]
     if status == "grounded" and any(item.effective_to for item in evidence):
@@ -185,20 +214,18 @@ def policy_context_from_texts(query: str, texts: list[tuple[str, str]]) -> Polic
 
 # ---- 1. LLM（知识生成，走单一接缝，懒构建）----
 # ---- 2. dashscope embedding（懒校验 + 重试：导入不读 env，首次调用才校验）----
-_EMBED_ENV_VAR = "DASHSCOPE_API_KEY"
+_EMBED_ENV_VAR = EMBED_ENV_VAR
 
 
 def _validate_dashscope() -> None:
-    key = os.environ.get(_EMBED_ENV_VAR)
-    if not key:
-        raise RuntimeError(f"缺少 embedding 必需环境变量：{_EMBED_ENV_VAR}（请在 .env 中配置）")
-    dashscope.api_key = key
+    dashscope.api_key = load_settings().require_embedding_key()
 
 
 @with_retry(retries=2, base_delay=0.5)
 def _embed_batch(batch: list[str]):
     """单批 embedding（指数退避重试，容忍免费 API 抖动）"""
-    resp = dashscope.TextEmbedding.call(model=EMB_MODEL, input=batch, dimension=EMB_DIM)
+    model, dimension = _embedding_config()
+    resp = dashscope.TextEmbedding.call(model=model, input=batch, dimension=dimension)
     if resp.status_code != HTTPStatus.OK:
         raise RuntimeError(f"embedding 失败: {resp.code} {resp.message}")
     return resp
@@ -325,17 +352,14 @@ def _build_index_locked(chunks):
     meta = getattr(col, "metadata", None) or {}
     existing = col.count()
     signature = _chunks_signature(chunks)
-    if (
-        existing == len(chunks)
-        and meta.get("model") == EMB_MODEL
-        and meta.get("chunks_signature", signature) == signature
-    ):
-        print(f"（复用 chroma 持久化索引，{existing} 条 · {EMB_MODEL}）")
+    model, _ = _embedding_config()
+    if existing == len(chunks) and meta.get("model") == model and meta.get("chunks_signature", signature) == signature:
+        print(f"（复用 chroma 持久化索引，{existing} 条 · {model}）")
         return col
     if existing:
-        print(f"（索引过期：现有 {existing} 条 / 模型 {meta.get('model')} ≠ {EMB_MODEL}，清空重建…）")
+        print(f"（索引过期：现有 {existing} 条 / 模型 {meta.get('model')} ≠ {model}，清空重建…）")
         col.delete(ids=col.get()["ids"])
-    print(f"（构建 chroma 索引：{len(chunks)} 块 × {EMB_MODEL}，首次 1-2 分钟…）")
+    print(f"（构建 chroma 索引：{len(chunks)} 块 × {model}，首次 1-2 分钟…）")
     for i in range(0, len(chunks), BATCH):
         batch = chunks[i : i + BATCH]
         vecs = embed_texts([t for _, t in batch])
@@ -346,7 +370,7 @@ def _build_index_locked(chunks):
             metadatas=[_chunk_metadata(stem, text) for stem, text in batch],
         )
         time.sleep(0.2)
-    col.modify(metadata={"model": EMB_MODEL, "chunks_signature": signature})  # 不带 hnsw:space，Chroma 拒绝修改距离函数
+    col.modify(metadata={"model": model, "chunks_signature": signature})  # 不带 hnsw:space，Chroma 拒绝修改距离函数
     return col
 
 
@@ -374,13 +398,14 @@ def _search_with_metadata(query: str, col, k: int = 5, min_sim: float | None = N
 
 def _search_with_metadata_locked(query: str, col, k: int = 5, min_sim: float | None = None):
     """在 `_chroma_lock` 内执行查询并按相似度返回 top-k。"""
-    threshold = MIN_SIM if min_sim is None else min_sim
+    threshold = _min_similarity() if min_sim is None else min_sim
     subs = _split_compound_query(query)
     per = max(1, -(-k // len(subs)))  # 每子问句席位：k 按主题数均分向上取整
+    candidates = per * ANN_CANDIDATE_MULTIPLIER
     out: dict[str, tuple[float, dict, str]] = {}
     for sub in subs:
         qv = embed_texts([sub])[0]
-        res = col.query(query_embeddings=[qv], n_results=per)
+        res = col.query(query_embeddings=[qv], n_results=candidates)
         for doc, meta, dist in zip(res["documents"][0], res["metadatas"][0], res["distances"][0], strict=True):
             sim = 1 - dist  # 余弦距离 → 相似度
             out.setdefault(doc, (sim, meta, doc))
@@ -419,52 +444,80 @@ def _evidence_id(source: str, text: str) -> str:
     return f"ev-{digest}"
 
 
-def retrieve_policy(query: str, k: int = 5) -> PolicyContext:
-    """直接从向量索引检索政策，并保留 Chroma 元数据。
+class PolicyProvider:
+    """政策检索深模块：分类 adapter 故障并只返回稳定的领域结果。"""
 
-    失败时降级为空上下文；旧的纯文本兼容入口仍由 ``search_texts`` 单独提供。
-    """
-    try:
-        chunks = merge_tiny_chunks(load_chunks())
-        col = build_index(chunks)
-        # 长句和城市名会稀释政策关键词；用稳定的政策主题查询补召回，合并去重。
+    def __init__(self, *, chunk_loader=None, index_builder=None, searcher=None) -> None:
+        self._chunk_loader = chunk_loader
+        self._index_builder = index_builder
+        self._searcher = searcher
+
+    @staticmethod
+    def _unavailable(query: str, code: PolicyFailureCode, *, retryable: bool) -> PolicyContext:
+        return PolicyContext(
+            query=query,
+            evidence=(),
+            status="unavailable",
+            failure=PolicyFailure(code=code, retryable=retryable),
+        )
+
+    def retrieve(self, query: str, k: int = 5) -> PolicyContext:
+        try:
+            chunks = self._chunk_loader() if self._chunk_loader is not None else merge_tiny_chunks(load_chunks())
+        except Exception:
+            return self._unavailable(query, "documents_unavailable", retryable=False)
+        if not chunks:
+            return self._unavailable(query, "documents_unavailable", retryable=False)
+        try:
+            col = self._index_builder(chunks) if self._index_builder is not None else build_index(chunks)
+        except Exception:
+            return self._unavailable(query, "index_unavailable", retryable=True)
+
         queries = [query]
         if any(word in query for word in ("住宿", "开会", "出差", "行程", "北京", "上海")):
             queries.extend(
                 ("公司差旅住宿标准 一线城市 不超过 元/晚", "公司差旅交通标准 高铁 二等座", "公司差旅报销标准 审批")
             )
-        hit_map: dict[tuple[object, object], tuple[float, dict, str]] = {}
-        for search_query in queries:
-            for hit in _search_with_metadata(search_query, col, k=k):
-                key = (hit[1].get("source"), hit[2])
-                hit_map.setdefault(key, hit)
-        hits = list(hit_map.values())[: max(k, 8)]
-    except Exception:
-        hits = []
-    text_context = policy_context_from_texts(query, [(hit[1]["source"], hit[2]) for hit in hits])
-    evidence = tuple(
-        Evidence(
-            item.evidence_id,
-            item.source,
-            item.text,
-            hit[0],
-            section=hit[1].get("section"),
-            version=hit[1].get("version"),
-            effective_from=hit[1].get("effective_from"),
-            effective_to=hit[1].get("effective_to"),
+        try:
+            hit_map: dict[tuple[object, object], tuple[float, dict, str]] = {}
+            for search_query in queries:
+                search = self._searcher or _search_with_metadata
+                for hit in search(search_query, col, k=k):
+                    key = (hit[1].get("source"), hit[2])
+                    hit_map.setdefault(key, hit)
+            hits = list(hit_map.values())[: max(k, 8)]
+        except Exception:
+            return self._unavailable(query, "search_unavailable", retryable=True)
+
+        text_context = policy_context_from_texts(query, [(hit[1]["source"], hit[2]) for hit in hits])
+        evidence = tuple(
+            Evidence(
+                item.evidence_id,
+                item.source,
+                item.text,
+                hit[0],
+                section=hit[1].get("section"),
+                version=hit[1].get("version"),
+                effective_from=hit[1].get("effective_from"),
+                effective_to=hit[1].get("effective_to"),
+            )
+            for item, hit in zip(text_context.evidence, hits, strict=True)
         )
-        for item, hit in zip(text_context.evidence, hits, strict=True)
-    )
-    status = text_context.status
-    if status == "grounded" and PolicyContext(query, evidence).has_stale_evidence:
-        status = "stale"
-    return PolicyContext(
-        query=text_context.query,
-        evidence=evidence,
-        facts=_extract_policy_facts(evidence) if status == "grounded" else (),
-        status=status,
-        snapshot_id=text_context.snapshot_id,
-    )
+        status = text_context.status
+        if status == "grounded" and PolicyContext(query, evidence).has_stale_evidence:
+            status = "stale"
+        return PolicyContext(
+            query=text_context.query,
+            evidence=evidence,
+            facts=_extract_policy_facts(evidence) if status == "grounded" else (),
+            status=status,
+            snapshot_id=text_context.snapshot_id,
+        )
+
+
+def retrieve_policy(query: str, k: int = 5) -> PolicyContext:
+    """兼容入口：政策检索统一委托 ``PolicyProvider``。"""
+    return PolicyProvider().retrieve(query, k=k)
 
 
 def _source_evidence(query: str, col, source: str, k: int = 3) -> tuple[Evidence, ...]:
@@ -522,31 +575,34 @@ def search_texts(query: str, k: int = 5) -> list[str]:
         return []
 
 
-def knowledge_qa_with_sources(query: str) -> tuple[str, tuple[Evidence, ...]]:
-    """知识问答生成，同时返回结构化证据。"""
-    chunks = merge_tiny_chunks(load_chunks())
-    col = build_index(chunks)
-    hits = _search_with_metadata(query, col, k=5)
-    if not hits:
-        return "资料中没有找到相关内容。", ()
+def answer_policy(query: str) -> PolicyAnswer:
+    """知识问答领域结果：检索状态与答案、证据保持同一个快照。"""
+    context = retrieve_policy(query, k=5)
+    if context.status == "unavailable":
+        return PolicyAnswer("⚠️ 政策服务暂时不可用，请稍后重试。", context)
+    if context.status == "not_found":
+        return PolicyAnswer("资料中没有找到相关内容。", context)
+    if context.status == "ambiguous":
+        return PolicyAnswer("检索到的政策资料存在冲突，暂不能给出确定结论，请联系差旅管理员确认。", context)
+    if context.status == "stale":
+        return PolicyAnswer("检索到的政策资料已过有效期，暂不能作为当前标准，请联系差旅管理员确认。", context)
     from xiao_wen.stability import logger
 
-    logger.info("RAG 检索 top-%d 来源：%s（问题：%s）", len(hits), [m["source"] for _, m, _ in hits], query)
-    context = "\n\n".join(f"--- 来源 {meta['source']} ---\n{text}" for _, meta, text in hits)
-    answer = _knowledge_model().invoke({"context": context, "query": query}).content
-    evidence = tuple(
-        Evidence(
-            _evidence_id(meta["source"], text),
-            meta["source"],
-            text,
-            similarity,
-            section=meta.get("section"),
-            version=meta.get("version"),
-            effective_to=meta.get("effective_to"),
-        )
-        for similarity, meta, text in hits
+    logger.info(
+        "RAG 检索 top-%d 来源：%s（问题：%s）",
+        len(context.evidence),
+        [e.source for e in context.evidence],
+        query,
     )
-    return answer, evidence
+    prompt_context = "\n\n".join(f"--- 来源 {item.source} ---\n{item.text}" for item in context.evidence)
+    answer = _knowledge_model().invoke({"context": prompt_context, "query": query}).content
+    return PolicyAnswer(answer, context)
+
+
+def knowledge_qa_with_sources(query: str) -> tuple[str, tuple[Evidence, ...]]:
+    """兼容旧调用：新 Agent 应消费 ``answer_policy`` 的状态。"""
+    result = answer_policy(query)
+    return result.answer, result.context.evidence
 
 
 def knowledge_qa(query: str) -> str:

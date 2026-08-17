@@ -1,6 +1,8 @@
 # 构建上下文排除（镜像只装运行时）
 .git
 .github
+.agents
+.codex
 .venv
 .mypy_cache
 .pytest_cache
@@ -9,11 +11,18 @@
 .scratch
 .vscode
 .env
+.env.*
 delivery
-docs
+docs/*
+!docs/documents
+!docs/documents/**
 scripts
 tests
 data
+frontend/node_modules
+frontend/dist
+frontend/.vite
+frontend/*.tsbuildinfo
 *.log
 __pycache__
 *.pyc

@@ -8,6 +8,10 @@ DESCRIPTION = "以上都不像（个人休闲/旅游规划、非差旅问题）�
 
 
 def run(state) -> dict:
+    from xiao_wen.dialogue import task_update_clear
+
+    if state.get("active_task") and any(word in state.get("user_input", "") for word in ("算了", "取消", "不要了")):
+        return {"answer": "好的，已取消刚才未完成的行程。", "task_update": task_update_clear()}
     return {
         "answer": "抱歉，这不在企业差旅助手的服务范围内（如个人休闲旅游、非差旅问题）。"
         "当前仅支持：行程规划、偏好、历史行程、差旅政策、实时信息。"

@@ -26,7 +26,7 @@ DESCRIPTION = (
 
 def run(state: dict) -> dict:
     """统一子 Agent 接口：概要文本 + 结构化 stats（聊天里渲染画像卡片）"""
-    s = compute(state.get("session_id", "default"))
+    s = compute(state.get("user_id", state.get("session_id", "default")))
     if not s["has_data"]:
         return {"answer": "📭 暂无历史行程记录", "stats": s}
     lines = [f"📊 差旅画像：共 {s['trips']} 次行程"]

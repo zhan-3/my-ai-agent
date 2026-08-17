@@ -2,16 +2,18 @@
 
 - chat(text, session_id) -> ChatResult(answer, intent, reason, plan, stats, history)
   读最近对话（短期记忆）→ 注入 → 主管图 invoke → 写回用户与助手两轮
-- 异常向上抛：降级文案是 web 层的职责（webapp 保留 try/except），demo 需要真实异常
+- 异常向上抛：降级文案是 Web 层的职责（webapp 保留 try/except）
 - 依赖可注入：graph 默认产品图（build_supervisor_graph()，单意图单路由 + 多意图并行）；
   store 默认 memory 模块（假图/假存储即可测循环）
-- 会话隔离：记忆按 session_id 隔离（ADR-0006），webapp 层升级为用户隔离（ADR-0007）
+- 对话隔离：线程 transcript/活跃任务按 session_id，长期记忆按 user_id（ADR-0009）
 - 结构化字段（plan/stats/history）在本层统一校验为契约模型（contract）——图产出 dict
   只在此处降级一次，webapp / SSE 直接消费模型，不再重复校验
 """
 
+import asyncio
 import threading
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 
 from xiao_wen import memory
@@ -35,52 +37,127 @@ class ChatResult:
     stats: TravelStats | None = None  # 差旅画像（契约模型；同上）
     history: HistoryResult | None = None  # 历史查询结构化结果（契约模型；同上）
     sources: list[KnowledgeSource] = field(default_factory=list)  # RAG 证据来源
+    policy_status: str | None = None
+    failure: "ServiceFailure | None" = None
+
+
+@dataclass(frozen=True)
+class ServiceFailure:
+    code: str
+    message: str
+    retryable: bool = True
 
 
 # 防御：任何 Agent 返回空/缺失 answer 时的兜底文案（LLM 偶发 None/空串）
 _FALLBACK_ANSWER = "（暂无回复，请换个说法再试一次）"
 
-# per-session 串行化锁：一轮闭环「读 recent → LLM 生成 → 写回两轮」非原子，同 session
-# 并发（webapp 多线程 POST / 同用户 chat+stream 交错）会读到一致旧快照后交错写回，
-# 短期记忆顺序错乱。此锁让同 session 轮次串行执行（不同 session 并行不受影响）。
-# 注：demo 规模 session 数有限，锁字典不回收可接受；threading.Lock 在事件循环单线程
-# 中空闲时 acquire 立即返回（非阻塞），仅 chat↔stream 同 session 罕见并发时才短暂占用。
-_session_locks: dict[str, threading.Lock] = {}
-_locks_guard = threading.Lock()
+
+@dataclass
+class _SessionEntry:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    users: int = 0
 
 
-def _session_lock_for(session_id: str) -> threading.Lock:
-    """同 session 的闭环串行化锁（per-session 复用，跨线程可见）"""
-    with _locks_guard:
-        return _session_locks.setdefault(session_id, threading.Lock())
+class _SessionCoordinator:
+    """单进程会话协调：同步与异步轮次共享锁，等待不阻塞事件循环，空闲项自动回收。"""
+
+    def __init__(self) -> None:
+        self._entries: dict[str, _SessionEntry] = {}
+        self._guard = threading.Lock()
+
+    def _reserve(self, session_id: str) -> _SessionEntry:
+        with self._guard:
+            entry = self._entries.setdefault(session_id, _SessionEntry())
+            entry.users += 1
+            return entry
+
+    def _forget(self, session_id: str, entry: _SessionEntry) -> None:
+        with self._guard:
+            entry.users -= 1
+            if entry.users == 0 and self._entries.get(session_id) is entry:
+                del self._entries[session_id]
+
+    @contextmanager
+    def turn(self, session_id: str):
+        entry = self._reserve(session_id)
+        acquired = False
+        try:
+            entry.lock.acquire()
+            acquired = True
+            yield
+        finally:
+            if acquired:
+                entry.lock.release()
+            self._forget(session_id, entry)
+
+    async def _acquire_async(self, lock: threading.Lock) -> None:
+        while True:
+            attempt = asyncio.create_task(asyncio.to_thread(lock.acquire, timeout=0.05))
+            try:
+                acquired = await asyncio.shield(attempt)
+            except asyncio.CancelledError:
+                acquired = await asyncio.shield(attempt)
+                if acquired:
+                    lock.release()
+                raise
+            if acquired:
+                return
+
+    @asynccontextmanager
+    async def turn_async(self, session_id: str):
+        entry = self._reserve(session_id)
+        acquired = False
+        try:
+            await self._acquire_async(entry.lock)
+            acquired = True
+            yield
+        finally:
+            if acquired:
+                entry.lock.release()
+            self._forget(session_id, entry)
+
+    @property
+    def active_session_count(self) -> int:
+        with self._guard:
+            return len(self._entries)
 
 
-def _resolve_deps(graph, store):
+_session_coordinator = _SessionCoordinator()
+
+
+def _resolve_deps(graph, store, recorder=None):
     """图与存储的懒构造/注入：默认调度图 + 默认 memory（chat 与 stream_chat 共用）"""
     if graph is None:
         from xiao_wen.graph_builder import build_supervisor_graph
 
-        graph = build_supervisor_graph()
+        graph = build_supervisor_graph() if recorder is None else build_supervisor_graph(recorder=recorder)
     if store is None:
         store = memory
     return graph, store
 
 
-def _prepare_turn(text: str, session_id: str, store):
+def _prepare_turn(text: str, session_id: str, user_id: str, store):
     """读短期记忆 + 组装图输入（chat 与 stream_chat 共用）"""
+    from xiao_wen.dialogue import load_active_task
+
     recent = store.format_recent_messages(6, session_id=session_id)
+    active_task = load_active_task(store, session_id, user_id)
     state_in = {
         "messages": [("human", text)],
         "user_input": text,
         "recent": recent,
         "session_id": session_id,
+        "user_id": user_id,
+        "active_task": active_task,
     }
-    return state_in, recent
+    return state_in, recent, active_task
 
 
 def _result_from_state(state: dict) -> ChatResult:
     """图输出 dict → ChatResult：answer 兜底 + 结构化字段契约校验（单一降级点）"""
     answer = state.get("answer") or _FALLBACK_ANSWER
+    failure_data = state.get("failure")
+    failure = ServiceFailure(**failure_data) if isinstance(failure_data, dict) else None
     return ChatResult(
         answer=answer,
         intent=state.get("intent", ""),
@@ -89,7 +166,23 @@ def _result_from_state(state: dict) -> ChatResult:
         stats=stats_or_none(state.get("stats")),
         history=history_or_none(state.get("history")),
         sources=[KnowledgeSource.model_validate(item) for item in (state.get("sources") or [])],
+        policy_status=state.get("policy_status"),
+        failure=failure,
     )
+
+
+def service_error_event(failure: ServiceFailure | None = None) -> dict:
+    failure = failure or ServiceFailure(
+        code="service_unavailable",
+        message="⚠️ 服务暂时不可用，请稍后再试。",
+    )
+    return {
+        "type": "error",
+        "code": failure.code,
+        "message": failure.message,
+        "retryable": failure.retryable,
+        "policy_status": "unavailable" if failure.code == "policy_unavailable" else None,
+    }
 
 
 def _commit_turn(text: str, answer: str, session_id: str, store) -> None:
@@ -98,39 +191,76 @@ def _commit_turn(text: str, answer: str, session_id: str, store) -> None:
     store.add_message("assistant", answer, session_id=session_id)
 
 
-def chat(text: str, session_id: str = "default", *, graph=None, store=None, recorder=None) -> ChatResult:
+def _record_final(recorder, state: dict, result: ChatResult) -> None:
+    if recorder is None:
+        return
+    recorder.record(
+        {
+            "type": "final",
+            "intent": state.get("intent", ""),
+            "reason": state.get("reason", ""),
+            "answer": result.answer,
+            "plan": state.get("plan"),
+            "stats": state.get("stats"),
+            "history": state.get("history"),
+            "sources": [source.model_dump() for source in result.sources],
+            "policy_status": result.policy_status,
+            "failure": result.failure.__dict__ if result.failure else None,
+        }
+    )
+
+
+def chat(
+    text: str,
+    session_id: str = "default",
+    *,
+    user_id: str | None = None,
+    graph=None,
+    store=None,
+    recorder=None,
+) -> ChatResult:
     """一轮对话闭环。
 
     - graph：默认调度图（懒导入 graph_builder，走指纹缓存；多意图并行走 Send fan-out）
     - store：默认 xiao_wen.memory（读 recent / 写回两轮）；可注入假存储
-    - session_id：会话维度（webapp 层 = 用户名），记忆按此隔离（ADR-0006 / ADR-0007）
-    - recorder（评测 trace）：注入时在 recent/final/memory_write 三处记录事件；默认 None 零开销
+    - session_id：短期 transcript 与活跃任务的线程维度
+    - user_id：长期偏好/历史所有者；省略时兼容使用 session_id
+    - recorder：显式观察模式在 recent/final/memory_write 三处记录事件；默认 None 零开销
     """
-    with _session_lock_for(session_id):
-        graph, store = _resolve_deps(graph, store)
-        state_in, recent = _prepare_turn(text, session_id, store)
+    user_id = user_id or session_id
+    with _session_coordinator.turn(session_id):
+        graph, store = _resolve_deps(graph, store, recorder)
+        state_in, recent, active_task = _prepare_turn(text, session_id, user_id, store)
         if recorder is not None:
             recorder.record({"type": "recent", "recent": recent})
         r = graph.invoke(state_in)
+        from xiao_wen.dialogue import apply_task_update
+
+        r = apply_task_update(
+            r,
+            active_before=active_task,
+            thread_id=session_id,
+            user_id=user_id,
+            store=store,
+        )
         result = _result_from_state(r)
-        _commit_turn(text, result.answer, session_id, store)
-        if recorder is not None:
-            recorder.record(
-                {
-                    "type": "final",
-                    "intent": r["intent"],
-                    "reason": r["reason"],
-                    "answer": result.answer,
-                    "plan": r.get("plan"),
-                    "stats": r.get("stats"),
-                    "history": r.get("history"),
-                }
-            )
+        if result.failure is None:
+            _commit_turn(text, result.answer, session_id, store)
+        _record_final(recorder, r, result)
+        if recorder is not None and result.failure is None:
             recorder.record({"type": "memory_write", "user": text, "assistant": result.answer})
     return result
 
 
-async def stream_chat(text: str, session_id: str = "default", *, graph=None, store=None) -> AsyncIterator[dict]:
+async def stream_chat(
+    text: str,
+    session_id: str = "default",
+    *,
+    user_id: str | None = None,
+    graph=None,
+    store=None,
+    recorder=None,
+) -> AsyncIterator[dict]:
     """流式会话循环（SSE 阶段事件）：与 chat() 同一条图、同一记忆闭环，但逐个产出事件：
 
     - {"type": "stage", "status": "start"}                           请求已受理
@@ -145,11 +275,12 @@ async def stream_chat(text: str, session_id: str = "default", *, graph=None, sto
     （name == langgraph_node 过滤嵌套链），chunk 按节点累积还原最终 state。
     记忆写回在流结束、done 之前（与 chat() 语义一致）。
     """
-    lock = _session_lock_for(session_id)
-    lock.acquire()
-    try:
-        graph, store = _resolve_deps(graph, store)
-        state_in, _ = _prepare_turn(text, session_id, store)
+    user_id = user_id or session_id
+    async with _session_coordinator.turn_async(session_id):
+        graph, store = _resolve_deps(graph, store, recorder)
+        state_in, recent, active_task = _prepare_turn(text, session_id, user_id, store)
+        if recorder is not None:
+            recorder.record({"type": "recent", "recent": recent})
         yield {"type": "stage", "status": "start"}
         final: dict | None = None
         try:
@@ -181,13 +312,32 @@ async def stream_chat(text: str, session_id: str = "default", *, graph=None, sto
             from xiao_wen.stability import logger
 
             logger.error("stream_chat 失败（session=%s）：%s", session_id, e)
-            yield {"type": "error", "message": "⚠️ 服务暂时不可用，请稍后再试。"}
+            if recorder is not None:
+                recorder.record({"type": "error", "code": "service_unavailable", "message": str(e)})
+            yield service_error_event()
             return
         if final is None:  # 防御：图没产出任何 state
-            yield {"type": "error", "message": "⚠️ 服务暂时不可用，请稍后再试。"}
+            if recorder is not None:
+                recorder.record({"type": "error", "code": "empty_state"})
+            yield service_error_event()
             return
+        from xiao_wen.dialogue import apply_task_update
+
+        final = apply_task_update(
+            final,
+            active_before=active_task,
+            thread_id=session_id,
+            user_id=user_id,
+            store=store,
+        )
         result = _result_from_state(final)
+        _record_final(recorder, final, result)
+        if result.failure is not None:
+            yield service_error_event(result.failure)
+            return
         _commit_turn(text, result.answer, session_id, store)
+        if recorder is not None:
+            recorder.record({"type": "memory_write", "user": text, "assistant": result.answer})
         yield {
             "type": "done",
             "answer": result.answer,
@@ -198,9 +348,8 @@ async def stream_chat(text: str, session_id: str = "default", *, graph=None, sto
             "stats": result.stats.model_dump() if result.stats else None,
             "history": result.history.model_dump() if result.history else None,
             "sources": [source.model_dump() for source in result.sources],
+            "policy_status": result.policy_status,
         }
-    finally:
-        lock.release()
 
 
 def _stage_event(node: str, status: str) -> dict | None:

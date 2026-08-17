@@ -10,9 +10,11 @@ from xiao_wen import rag  # noqa: E402  rag.knowledge_qa(query) -> str
 
 
 def run(state) -> dict:
-    answer, sources = rag.knowledge_qa_with_sources(state["user_input"])
-    return {
-        "answer": answer,
+    result = rag.answer_policy(state["user_input"])
+    context = result.context
+    out: dict[str, object] = {
+        "answer": result.answer,
+        "policy_status": context.status,
         "sources": [
             {
                 "evidence_id": source.evidence_id,
@@ -21,6 +23,14 @@ def run(state) -> dict:
                 "similarity": source.similarity,
                 "text": source.text,
             }
-            for source in sources
+            for source in context.evidence
         ],
     }
+    if context.status == "unavailable":
+        failure = context.failure or rag.PolicyFailure("search_unavailable", True)
+        out["failure"] = {
+            "code": "policy_unavailable",
+            "message": result.answer,
+            "retryable": failure.retryable,
+        }
+    return out

@@ -16,8 +16,15 @@ from xiao_wen import auth, webapp
 def client():
     # 隔离：用户存储走真实 Postgres（conftest autouse 已清 users 表 + 统一注入测试库 URL）
     auth._user_store = None
-    yield TestClient(webapp.app)
+    with TestClient(webapp.app) as test_client:
+        yield test_client
     auth._user_store = None
+
+
+def test_startup_rejects_unsafe_jwt(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "short")
+    with pytest.raises(RuntimeError, match="JWT_SECRET 长度不足"), TestClient(webapp.app):
+        pass
 
 
 class TestRegisterLogin:
@@ -26,7 +33,7 @@ class TestRegisterLogin:
         assert r.status_code == 200
         data = r.json()
         assert data["username"] == "zhang"
-        assert auth.decode_token(data["token"], auth.JWT_SECRET) == "zhang"
+        assert auth.decode_token(data["token"]) == "zhang"
 
     def test_register_duplicate_409(self, client):
         assert client.post("/api/auth/register", json={"username": "zhang", "password": "a"}).status_code == 200
@@ -155,6 +162,137 @@ class TestChatAuthEnforced:
         assert r.status_code == 401
 
 
+def test_chat_scopes_conversation_inside_authenticated_user(client, monkeypatch):
+    calls = []
+
+    class Result:
+        answer = "答"
+        intent = "其他"
+        reason = "测试"
+        failure = None
+
+    def fake_run_chat(text, session_id, **kwargs):
+        calls.append((text, session_id, kwargs))
+        return Result()
+
+    monkeypatch.setattr(webapp, "run_chat", fake_run_chat)
+    token = client.post("/api/auth/register", json={"username": "alice", "password": "pass"}).json()["token"]
+    response = client.post(
+        "/api/chat",
+        json={"user_input": "你好", "conversation_id": "thread-1"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+    text, thread_id, kwargs = calls[0]
+    assert (text, thread_id, kwargs["user_id"]) == ("你好", "alice:thread-1", "alice")
+
+
+def test_chat_rejects_invalid_conversation_id(client):
+    token = client.post("/api/auth/register", json={"username": "alice", "password": "pass"}).json()["token"]
+    response = client.post(
+        "/api/chat",
+        json={"user_input": "你好", "conversation_id": "../other-user"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 400
+
+
+def test_chat_not_found_is_normal_result_but_dependency_failure_is_503(client, monkeypatch):
+    from xiao_wen.session import ServiceFailure
+
+    class NotFoundResult:
+        answer = "资料中没有找到相关内容。"
+        intent = "知识问答"
+        reason = "政策问题"
+        policy_status = "not_found"
+        failure = None
+
+    monkeypatch.setattr(webapp, "run_chat", lambda text, session_id, **kwargs: NotFoundResult())
+    token = client.post("/api/auth/register", json={"username": "policy-user", "password": "pass123"}).json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    normal = client.post("/api/chat", json={"user_input": "不存在的政策"}, headers=headers)
+    assert normal.status_code == 200
+    assert normal.json()["policy_status"] == "not_found"
+
+    class FailedResult(NotFoundResult):
+        policy_status = "unavailable"
+        failure = ServiceFailure("policy_unavailable", "政策服务暂时不可用", True)
+
+    monkeypatch.setattr(webapp, "run_chat", lambda text, session_id, **kwargs: FailedResult())
+    failed = client.post("/api/chat", json={"user_input": "住宿标准"}, headers=headers)
+    assert failed.status_code == 503
+    assert failed.json()["detail"] == {
+        "code": "policy_unavailable",
+        "message": "政策服务暂时不可用",
+        "retryable": True,
+    }
+
+
+def test_livez_has_no_dependency_calls_and_readyz_maps_report(client, monkeypatch):
+    from xiao_wen import readiness
+
+    monkeypatch.setattr(
+        readiness,
+        "check_readiness",
+        lambda: (_ for _ in ()).throw(AssertionError("livez 不应调用 readiness")),
+    )
+    live = client.get("/livez")
+    assert live.status_code == 200 and live.json() == {"status": "alive"}
+
+    report = readiness.ReadinessReport((readiness.ReadinessItem("postgres", False, "down"),))
+    monkeypatch.setattr(readiness, "check_readiness", lambda: report)
+    ready = client.get("/readyz")
+    assert ready.status_code == 503
+    assert ready.json()["status"] == "unready"
+    health = client.get("/healthz")
+    assert health.status_code == 503 and health.json() == ready.json()
+
+
+def test_chat_and_stream_return_same_sources(client, monkeypatch):
+    import json
+
+    source = {
+        "evidence_id": "ev-1",
+        "source": "差旅政策",
+        "section": "住宿标准",
+        "similarity": 0.91,
+        "text": "一线城市住宿标准 500 元",
+    }
+
+    class Result:
+        answer = "标准如下"
+        intent = "知识问答"
+        reason = "政策问题"
+        sources: ClassVar[list[dict]] = [source]
+
+    async def fake_stream(text, session_id, **kwargs):
+        yield {
+            "type": "done",
+            "answer": "标准如下",
+            "intent": "知识问答",
+            "reason": "政策问题",
+            "plan": None,
+            "stats": None,
+            "history": None,
+            "sources": [source],
+        }
+
+    monkeypatch.setattr(webapp, "run_chat", lambda text, session_id, **kwargs: Result())
+    monkeypatch.setattr(webapp, "stream_chat", fake_stream)
+    token = client.post("/api/auth/register", json={"username": "source-user", "password": "pass123"}).json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    sync_sources = client.post("/api/chat", json={"user_input": "住宿标准"}, headers=headers).json()["sources"]
+    stream_body = client.post("/api/chat/stream", json={"user_input": "住宿标准"}, headers=headers).text
+    data_lines = (line for line in stream_body.splitlines() if line.startswith("data: "))
+    done = next(json.loads(line.removeprefix("data: ")) for line in data_lines)
+
+    assert sync_sources == done["sources"] == [source]
+
+
 def test_chat_returns_structured_history(client, monkeypatch):
     """历史查询产出 history → /api/chat 响应带 history；非历史查询 → None"""
     history = {
@@ -179,7 +317,7 @@ def test_chat_returns_structured_history(client, monkeypatch):
         history: ClassVar[dict] = {}
 
     HistResult.history = history
-    monkeypatch.setattr(webapp, "run_chat", lambda text, session_id: HistResult())
+    monkeypatch.setattr(webapp, "run_chat", lambda text, session_id, **kwargs: HistResult())
     token = client.post("/api/auth/register", json={"username": "li", "password": "pass123"}).json()["token"]
     r = client.post(
         "/api/chat",
@@ -196,7 +334,7 @@ def test_chat_returns_structured_history(client, monkeypatch):
         intent = "知识问答"
         reason = "r"
 
-    monkeypatch.setattr(webapp, "run_chat", lambda text, session_id: PlainResult())
+    monkeypatch.setattr(webapp, "run_chat", lambda text, session_id, **kwargs: PlainResult())
     r2 = client.post(
         "/api/chat",
         json={"user_input": "住宿标准是什么"},
@@ -208,7 +346,7 @@ def test_chat_returns_structured_history(client, monkeypatch):
     def test_chat_stream_returns_sse_events(self, client, monkeypatch):
         """SSE：POST /api/chat/stream → text/event-stream，data 行含阶段事件 + done"""
 
-        async def fake_stream(text, session_id):
+        async def fake_stream(text, session_id, **kwargs):
             yield {"type": "stage", "status": "start"}
             yield {"type": "stage", "status": "working", "intent": "行程规划"}
             yield {"type": "stage", "status": "done", "intent": "行程规划"}
@@ -238,8 +376,8 @@ def test_chat_returns_structured_history(client, monkeypatch):
             intent = "其他"
             reason = "r"
 
-        def fake_run_chat(text, session_id):
-            calls.append((text, session_id))
+        def fake_run_chat(text, session_id, **kwargs):
+            calls.append((text, session_id, kwargs))
             return FakeResult()
 
         monkeypatch.setattr(webapp, "run_chat", fake_run_chat)
@@ -251,7 +389,7 @@ def test_chat_returns_structured_history(client, monkeypatch):
             headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 200
-        assert calls == [("你好", "zhang")]  # 客户端自填被忽略
+        assert calls == [("你好", "zhang:default", {"user_id": "zhang"})]
 
     def test_chat_returns_structured_plan(self, client, monkeypatch):
         """slice 1：run_chat 产出 plan → /api/chat 响应带 plan；无 plan → None（非行程）"""
@@ -264,7 +402,7 @@ def test_chat_returns_structured_history(client, monkeypatch):
             plan: ClassVar[dict] = {}  # 类型占位：真实 plan 后置覆盖（类体里查不到外层局部变量）
 
         FakeResult.plan = plan
-        monkeypatch.setattr(webapp, "run_chat", lambda text, session_id: FakeResult())
+        monkeypatch.setattr(webapp, "run_chat", lambda text, session_id, **kwargs: FakeResult())
         token = client.post("/api/auth/register", json={"username": "zhang", "password": "pass123"}).json()["token"]
         r = client.post(
             "/api/chat",
@@ -279,7 +417,7 @@ def test_chat_returns_structured_history(client, monkeypatch):
             intent = "知识问答"
             reason = "r"
 
-        monkeypatch.setattr(webapp, "run_chat", lambda text, session_id: PlainResult())
+        monkeypatch.setattr(webapp, "run_chat", lambda text, session_id, **kwargs: PlainResult())
         r2 = client.post(
             "/api/chat",
             json={"user_input": "差旅标准"},
@@ -296,7 +434,7 @@ def test_chat_returns_structured_history(client, monkeypatch):
             intent = "其他"
             reason = "r"
 
-        def fake_run_chat(text, session_id):
+        def fake_run_chat(text, session_id, **kwargs):
             seen.setdefault(session_id, 0)
             seen[session_id] += 1
             return FakeResult()

@@ -51,6 +51,12 @@ class TestToken:
         token = jwt.encode({"sub": "张三", "exp": 0}, "test-secret", algorithm="HS256")
         assert auth.decode_token(token, "test-secret") is None
 
+    def test_configured_secret_is_not_frozen_at_import(self, monkeypatch):
+        monkeypatch.setenv("JWT_SECRET", "a" * 32)
+        token = auth.create_token("张三")
+        monkeypatch.setenv("JWT_SECRET", "b" * 32)
+        assert auth.decode_token(token) is None
+
 
 class TestRegisterLogin:
     def test_register_creates_user_and_returns_token(self):
@@ -60,7 +66,7 @@ class TestRegisterLogin:
             token = auth.register("zhang", "pass123")
             assert token is not None
             # token 解出用户名
-            assert auth.decode_token(token, auth.JWT_SECRET) == "zhang"
+            assert auth.decode_token(token) == "zhang"
             # 存储的是哈希不是明文
             rec = store.get_user("zhang")
             assert rec is not None and rec["password_hash"] != "pass123"
@@ -102,8 +108,9 @@ class TestRegisterLogin:
 
 class TestUserStoreConstraints:
     def test_get_user_store_requires_postgres_url(self, monkeypatch):
-        """未配 POSTGRES_URL → 明确报错（无内存兜底）"""
+        """未配 POSTGRES_URL 时明确报错。"""
         monkeypatch.delenv("POSTGRES_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_TEST_URL", raising=False)
         auth._user_store = None
         try:
             with pytest.raises(RuntimeError, match="POSTGRES_URL"):

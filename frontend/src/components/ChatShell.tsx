@@ -28,7 +28,7 @@ export default function ChatShell({
   username: string | null
   onLogout: () => void
 }) {
-  const { messages, busy, send, stages } = useChat({ onUnauthorized: onLogout })
+  const { messages, busy, send, stages, startNewConversation } = useChat({ onUnauthorized: onLogout })
   const [input, setInput] = useState('')
   const [memTick, setMemTick] = useState(0) // 回复成功后 +1，触发记忆侧栏刷新
 
@@ -53,6 +53,9 @@ export default function ChatShell({
           </div>
           {username && (
             <div className="flex items-center gap-1">
+              <Button variant="ghost" size="sm" disabled={busy} onClick={startNewConversation}>
+                新对话
+              </Button>
               <ThemeToggle />
               <Button variant="ghost" size="sm" onClick={onLogout}>
                 {username} ｜ 退出

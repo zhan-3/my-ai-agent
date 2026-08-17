@@ -30,32 +30,8 @@ def collect_upstream(user_input: str, session_id: str, recent: str = "") -> dict
         if cities
         else f"{user_input} 公司差旅政策 住宿标准 交通标准 报销标准 审批要求"
     )
-    policy_context = rag.PolicyContext(query=policy_query, evidence=(), status="not_found")
-    with suppress(Exception):
-        policy_context = rag.retrieve_policy(policy_query)
+    policy_context = rag.retrieve_policy(policy_query)
     policy = policy_context.text
-    # 兼容旧的纯文本收集接缝：测试/旧适配器可只提供 search_texts；正式路径优先保留证据。
-    if not policy:
-        try:
-            legacy_texts = rag.search_texts(policy_query)
-        except Exception:
-            legacy_texts = []
-        if legacy_texts:
-            policy = "\n\n".join(legacy_texts)
-            policy_context = rag.PolicyContext(
-                query=policy_query,
-                evidence=tuple(
-                    rag.Evidence(
-                        evidence_id=f"legacy-policy-{i}",
-                        source="legacy-search_texts",
-                        text=text,
-                        similarity=0.0,
-                    )
-                    for i, text in enumerate(legacy_texts)
-                ),
-                status="grounded",
-                snapshot_id="legacy-policy",
-            )
     # 主动知识：出发/目的城市攻略、紧急流程、绿色出行不再依赖用户另问。
     # 两个城市都取证：出发城市影响机场/车站和天气衔接，目的城市影响住宿、当地交通和安全。
     guidance: dict[str, tuple[rag.Evidence, ...]] = {
@@ -99,6 +75,7 @@ def collect_upstream(user_input: str, session_id: str, recent: str = "") -> dict
     return {
         "policy": policy,
         "policy_context": policy_context,
+        "policy_status": policy_context.status,
         "policy_evidence_ids": policy_context.evidence_ids,
         "history_ref": history_ref,
         "prefs_turn": prefs_turn,
@@ -166,16 +143,22 @@ def run(state) -> dict:
     委托深模块 xiao_wen.trip_planner.handle 完成规划 + 展示拼装（预算/天气/日期模糊提示）。
     上游缺失（直接调用/旧路径）→ upstream 空，槽位降级「无」，行为兼容。
     """
+    from xiao_wen.dialogue import focused_recent
     from xiao_wen.trip_planner import handle
 
+    active_task = state.get("active_task")
+    recent = focused_recent(active_task, state.get("recent", ""))
     out = handle(
         state["user_input"],
-        session_id=state.get("session_id", "default"),
-        recent=state.get("recent", ""),
+        session_id=state.get("user_id", state.get("session_id", "default")),
+        recent=recent,
         upstream=state.get("upstream") or {},
+        task_context=(active_task or {}).get("resume_context", ""),
     )
     return {
         "answer": out.answer,
         "plan": out.plan,
+        "task_update": out.task_update,
+        "policy_status": state.get("upstream", {}).get("policy_status"),
         "sources": state.get("upstream", {}).get("sources", []),
     }

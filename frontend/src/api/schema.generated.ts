@@ -15,7 +15,7 @@ export interface paths {
         put?: never;
         /**
          * Chat
-         * @description 聊天接口：完整走一遍主管图（含两层记忆闭环）；会话维度 = 登录用户（Q4 强制）
+         * @description 聊天接口：JWT 决定用户，conversation_id 决定该用户内的可见线程。
          */
         post: operations["chat_api_chat_post"];
         delete?: never;
@@ -167,6 +167,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/livez": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Livez
+         * @description 进程存活探针：不访问 LLM、Embedding、数据库或磁盘运行时状态。
+         */
+        get: operations["livez_livez_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/readyz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Readyz
+         * @description 只读就绪探针：配置、Postgres、RAG 语料和前端静态资产。
+         */
+        get: operations["readyz_readyz_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -176,7 +216,7 @@ export interface paths {
         };
         /**
          * Healthz
-         * @description 健康检查接口（配合稳定性自检）
+         * @description 兼容旧部署入口；语义与 readiness 一致，不再无条件返回 200。
          */
         get: operations["healthz_healthz_get"];
         put?: never;
@@ -209,6 +249,11 @@ export interface components {
         ChatRequest: {
             /** User Input */
             user_input: string;
+            /**
+             * Conversation Id
+             * @default default
+             */
+            conversation_id: string;
         };
         /** ChatResponse */
         ChatResponse: {
@@ -221,7 +266,13 @@ export interface components {
             plan?: components["schemas"]["TripPlan"] | null;
             stats?: components["schemas"]["TravelStats"] | null;
             history?: components["schemas"]["HistoryResult"] | null;
-            sources?: components["schemas"]["KnowledgeSource"][];
+            /**
+             * Sources
+             * @default []
+             */
+            sources: components["schemas"]["KnowledgeSource"][];
+            /** Policy Status */
+            policy_status?: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -232,14 +283,6 @@ export interface components {
          * HistoryItinerary
          * @description 历史行程明细（结构化卡片；容忍旧数据缺字段）
          */
-        /** KnowledgeSource */
-        KnowledgeSource: {
-            evidence_id: string;
-            source: string;
-            section?: string | null;
-            similarity?: number | null;
-            text: string;
-        };
         HistoryItinerary: {
             /** Start Date */
             start_date?: string | null;
@@ -293,8 +336,30 @@ export interface components {
             duration_days?: number | null;
             /** Summary */
             summary?: string | null;
-            /** Status */
-            status?: string;
+            /**
+             * Status
+             * @default 历史
+             */
+            status: string;
+        };
+        /**
+         * KnowledgeSource
+         * @description 可追溯知识来源；与答案文本分离，供前端渲染来源卡片。
+         */
+        KnowledgeSource: {
+            /** Evidence Id */
+            evidence_id: string;
+            /** Source */
+            source: string;
+            /** Section */
+            section?: string | null;
+            /** Similarity */
+            similarity?: number | null;
+            /**
+             * Text
+             * @default
+             */
+            text: string;
         };
         /** MemorySnapshot */
         MemorySnapshot: {
@@ -639,7 +704,7 @@ export interface operations {
             };
         };
     };
-    healthz_healthz_get: {
+    livez_livez_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -657,6 +722,46 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    readyz_readyz_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    healthz_healthz_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

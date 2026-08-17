@@ -53,7 +53,7 @@ def run(state) -> dict:
     - 提到城市 → 行程按城市过滤，未命中给带城市名的引导空态
     - 行程/偏好关键词都没命中 → 综合查询（两者都答），绝不返回空串
     """
-    sid = state.get("session_id", "default")
+    sid = state.get("user_id", state.get("session_id", "default"))
     q = (state.get("user_input") or "").strip()
     prefs = get_preferences(session_id=sid)
     its = get_itineraries(session_id=sid)

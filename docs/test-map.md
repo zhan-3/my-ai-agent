@@ -1,33 +1,82 @@
-# 测试地图（答辩速查）
+# 测试与门禁
 
-分层测试共 210 个：**单元层 190**（无 LLM，秒级，`uv run pytest -m "not integration"`）+ **集成层 20**（真实模型，`uv run pytest -m integration`，push 时 CI 跑）。
+测试的目标是保护领域不变量和稳定接口，而不是冻结当前 Workflow 的节点拓扑。Agent Loop 接管主管
+入口后，应以 Loop 接口测试替换旧编排实现测试；替换完成前不提前删除仍在保护生产路径的用例。
 
-**记忆 = Postgres 唯一后端**：所有测试（含单元层）都连真实 Postgres——conftest 每测试清空记忆三表 + users 表并注入全新 PostgresBackend，优先 `POSTGRES_TEST_URL`（独立测试库），其次 `POSTGRES_URL`，两者皆无则 `pytest.fail`（CI 两个 job 都已配 postgres:16 服务 + `POSTGRES_TEST_URL`）。
+## 提交前门禁
 
-| 测试文件 | 测什么 | 被问时一句话 |
-|---|---|---|
-| `conftest.py` | 每测试注入全新 PostgresBackend 并清四张表 | 「测试全部落到真实 Postgres，用例互不污染」 |
-| `test_intent.py` | 意图识别 7 用例含边界（集成） | 「验证主管把自然语言正确分类到意图，边界请求正确拒绝」 |
-| `test_llm.py` | 模型单例 + 熔断守卫代理 | 「验证模型只构造一次，坏了走熔断不裸崩」 |
-| `test_memory.py` | 记忆追加/覆盖/常驻城市/历史 | 「验证偏好可新增、同类别覆盖不重复，常驻城市能补出发地」 |
-| `test_memory_backend.py` | 后端协议：Postgres 直测 + 会话隔离矩阵 + 缺 URL 报错 | 「验证唯一后端 Postgres 的读写语义与用户隔离，缺配置明确报错」 |
-| `test_memory_pg.py` | Postgres 真库读写 + 用户隔离 | 「验证落库持久化和按用户隔离」 |
-| `test_auth.py` | bcrypt 密码哈希 / JWT 签验 / 注册登录（真实 users 表） | 「验证密码不落明文、令牌能签能验、用户存 Postgres」 |
-| `test_webapp.py` | 注册/登录/me 端点 + 聊天用户隔离 | 「验证登录后只能读写自己的会话数据」 |
-| `test_itinerary.py` | 行程要素缺失检查 + 结果格式 | 「验证要素不全时先向用户索取，不硬编行程」 |
-| `test_plugin.py` | 注册中心：发现/懒加载/内置优先/热插拔 | 「验证新子 Agent 丢个文件就被自动发现，未用模块不加载」 |
-| `test_rag.py` | RAG 分块（单元）+ 向量检索（集成） | 「验证知识库切片和相似度检索命中」 |
-| `test_stability.py` | 熔断三态/重试/兜底 | 「验证 LLM 失败自动重试、熔断后优雅降级」 |
-| `test_graph_builder.py` | 图工厂：图结构/指纹缓存/热插拔 | 「验证图按注册表动态组装，子 Agent 变了自动重建」 |
-| `test_scheduler.py` | 并行调度组件（fan-out/fan-in） | 「验证多意图拆开后并行执行、结果归并」 |
-| `test_session.py` | 会话循环：读记忆→注入→invoke→写回 | 「验证每轮对话的完整闭环」 |
-| `test_web.py` | 联网查询（天气/汇率/空气质量工具调用） | 「验证工具调用链路、未来 7 天预报日期解析和降级文案」 |
-| `test_endtoend.py` | 两层记忆闭环 + 外部扩展派发 + 多意图并行（集成） | 「验证从输入到结果整条链路端到端」 |
-| `test_intent_split.py` | 子任务拆分兜底 + 归一化（stub 模型，确定性） | 「验证一句话多个请求能拆成主导+次要，不吞「顺便X」」 |
-| `test_eval_metrics.py` | 评测指标：混淆矩阵/精确率召回率 F1/汇总 | 「验证评测系统纯函数指标正确」 |
+测试只接受专用 PostgreSQL 测试库，不回退开发库：
 
-## 答辩时的三句话
+```bash
+scripts/init_test_db.sh
+export POSTGRES_TEST_URL=postgresql://postgres:123456@localhost:5432/xiao_wen_test
+scripts/gate.sh
+```
 
-1. **为什么分两层**：单元层不碰真实 LLM，秒级、可离线自检，保证提交前自检快；集成层只有配了模型 Key 才跑（CI 里用 secrets 控制，fork PR 自动跳过防泄露）。记忆不是 mock——单后端化后单元层也打真实 Postgres（CI 自带 postgres 服务，本地 `docker-compose up -d postgres` 即可）。
-2. **怎么保证质量**：提交前跑 4 条门禁——`ruff check`（lint）→ `ruff format --check`（格式）→ `pytest -m "not integration"`（单元）→ `mypy`（类型），全绿才打包；CI 每次 push 自动跑同样的门禁 + 真 LLM 集成层 + 黄金意图回归（阈值 0.95）+ Docker 镜像构建。
-3. **测试覆盖了什么**：从底向上覆盖记忆（Postgres 协议 + 隔离）、认证、注册中心、稳定性、图工厂、会话、联网、RAG、评测指标，再往上 20 个集成用例打通意图识别、外部扩展派发、多意图并行的端到端链路。
+`scripts/gate.sh` 只执行四项确定性后端检查：
+
+1. Ruff lint
+2. Ruff format check
+3. 非 integration pytest
+4. mypy
+
+前端 lint/test/build 由 CI 独立执行，避免每次后端迭代都重复构建前端。OpenAPI 漂移只在 HTTP
+契约变化时按需检查；镜像 smoke 只在主分支或手动 CI 中运行。
+
+## 按需验证
+
+这些命令不是日常提交门禁，只有对应行为发生变化时才运行：
+
+```bash
+# 前端改动
+pnpm --dir frontend lint
+pnpm --dir frontend test
+pnpm --dir frontend build
+
+# HTTP 契约改动
+pnpm --dir frontend gen:api
+git diff --exit-code -- frontend/src/api/schema.generated.ts
+
+# 真实模型或 Embedding 接缝改动
+uv run pytest -q -m "integration and not external_live"
+
+# 意图分类行为改动
+uv run python scripts/golden_intents.py --set holdout
+
+# 人工审阅的明确意图契约
+uv run python scripts/golden_intents.py --threshold 0.90 --min-intent 0.75
+
+# 发布镜像
+scripts/smoke_image.sh xiao-wen:ci
+```
+
+真实模型与第三方实时检查只用于诊断。它们的波动、成本或供应商故障不得伪装成确定性门禁
+失败，也不得被报告成产品发布成绩。评测数据可信边界见 [`tests/data/EVAL.md`](../tests/data/EVAL.md)。
+
+## 长期保留的安全网
+
+以下测试保护领域事实和安全约束，架构迁移时继续保留：
+
+- 12306 官方链接、日期范围和车站歧义
+- 政策结论必须携带本轮 RAG 证据
+- 天气失败显式呈现
+- 行程缺项、日期、天数和写回前验证
+- JWT 用户隔离、对话线程隔离和长期记忆所有权
+- PostgreSQL 持久化语义
+- 配置、密钥和 readiness 语义
+- 子 Agent 注册、懒加载和统一执行契约
+
+## Agent Loop 的目标测试面
+
+主管 Loop 落地时，优先通过其小接口验证：
+
+- 模型可直接结束，也可调用一个或多个子 Agent
+- 子 Agent 结果以 observation 回到下一次决策
+- 工具失败后可重试、降级、追问或明确失败
+- 步数、时间、token 和重复调用都有界
+- transcript 持久化 `assistant/tool_call/tool_result`
+- 请求取消会停止运行且不提交不完整结果
+- 最终策略门不能把无证据政策、天气失败或票务猜测改写成成功
+
+新接口覆盖同一行为后，删除只断言 LangGraph 节点名、固定路由、内部 State 字段和 SSE 内部阶段名的
+旧测试。遵循“替换，不叠加”：不在新 Loop 测试之上继续维护一套等价的 Workflow 实现测试。

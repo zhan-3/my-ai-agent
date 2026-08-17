@@ -3,11 +3,15 @@
 
 export class ApiError extends Error {
   readonly status: number
+  readonly code?: string
+  readonly retryable?: boolean
 
-  constructor(status: number, detail?: string) {
-    super(detail || `请求失败（${status}）`)
+  constructor(status: number, detail?: string | { message?: string; code?: string; retryable?: boolean }) {
+    super(typeof detail === 'string' ? detail : detail?.message || `请求失败（${status}）`)
     this.name = 'ApiError'
     this.status = status
+    this.code = typeof detail === 'object' ? detail.code : undefined
+    this.retryable = typeof detail === 'object' ? detail.retryable : undefined
   }
 }
 

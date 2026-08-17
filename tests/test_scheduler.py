@@ -92,6 +92,35 @@ def test_merge_summarizes_all_parts():
     assert "答A" in out["answer"] and "答B" in out["answer"]
 
 
+def test_merge_sources_empty_when_branches_have_none():
+    out = gb.merge({"collected": [{"intent": "联网查询", "text": "天气", "answer": "晴"}]})
+    assert out["sources"] == []
+
+
+def test_merge_sources_preserves_single_branch_order():
+    sources = [
+        {"evidence_id": "ev-1", "source": "政策A", "text": "片段A"},
+        {"evidence_id": "ev-2", "source": "政策B", "text": "片段B"},
+    ]
+    out = gb.merge({"collected": [{"intent": "知识问答", "text": "标准", "answer": "答", "sources": sources}]})
+    assert out["sources"] == sources
+
+
+def test_merge_sources_deduplicates_by_evidence_id_in_branch_order():
+    first = {"evidence_id": "ev-1", "source": "政策A", "text": "首个版本"}
+    duplicate = {"evidence_id": "ev-1", "source": "政策A", "text": "重复版本"}
+    second = {"evidence_id": "ev-2", "source": "政策B", "text": "片段B"}
+    out = gb.merge(
+        {
+            "collected": [
+                {"intent": "知识问答", "text": "标准", "answer": "答A", "sources": [first]},
+                {"intent": "联网查询", "text": "天气", "answer": "答B", "sources": [duplicate, second]},
+            ]
+        }
+    )
+    assert out["sources"] == [first, second]
+
+
 # ---------------- 迷你图：fan-out → fan-in 端到端（无 LLM） ----------------
 
 
@@ -142,3 +171,37 @@ def test_mini_graph_fanout_merge():
     assert "2 个请求" in out["answer"]
     assert "政策问题" in out["answer"] and "天气问题" in out["answer"]
     assert "答[政策问题]" in out["answer"] and "答[天气问题]" in out["answer"]
+
+
+def test_product_graph_preserves_sources_across_knowledge_and_web_branches(monkeypatch):
+    import types
+
+    from xiao_wen.intent import IntentResult
+
+    source = {"evidence_id": "ev-policy", "source": "差旅政策", "text": "住宿标准 500 元"}
+
+    def fake_classify(recent, user_input):
+        return IntentResult(
+            intent="知识问答",
+            reason="政策与天气",
+            subtasks=[
+                SubTask(intent="知识问答", text="住宿标准是多少"),
+                SubTask(intent="联网查询", text="北京天气如何"),
+            ],
+        )
+
+    def fake_load_agent(name):
+        def run(state):
+            if name == "知识问答":
+                return {"answer": "住宿标准 500 元", "sources": [source]}
+            return {"answer": "北京晴"}
+
+        return types.SimpleNamespace(run=run)
+
+    monkeypatch.setattr(gb.intent, "classify", fake_classify)
+    monkeypatch.setattr(gb, "load_agent", fake_load_agent)
+    app = gb.build_supervisor_graph(recorder=types.SimpleNamespace(record=lambda event: None))
+
+    out = app.invoke({"user_input": "住宿标准是多少，并查北京天气", "recent": "", "messages": []})
+
+    assert out["sources"] == [source]

@@ -1,4 +1,4 @@
-"""Web 界面模块：FastAPI 后端 + 原生 HTML/JS 前端（零构建、离线可用）
+"""Web 界面模块：FastAPI 后端 + React 构建产物。
 跑法：
     uv run python -m xiao_wen.webapp
     浏览器打开 http://127.0.0.1:8000
@@ -9,20 +9,22 @@
 - 复用图工厂（graph_builder）调度图（子 Agent 注册表驱动主管架构，多意图并行），不重写任何 Agent 逻辑
 - 记忆闭环收口于 xiao_wen.session.chat（读 recent → 注入 → invoke → 写回两轮）
 - 异常兜底在 web 层（session 层向上抛）：任何异常给友好降级文案
-- 认证（ADR-0007）：JWT 无状态认证；会话维度 = 用户身份——/api/chat 从
-  Authorization Bearer 解出用户名作为 session_id，客户端不再自填（用户隔离）
+- 认证与线程（ADR-0007/0009）：JWT 用户名决定长期记忆所有者；客户端 conversation_id
+  只决定该用户作用域内的可见对话线程
 """
 
 import json
 import os
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from xiao_wen import auth
+from xiao_wen.config import load_settings
 from xiao_wen.contract import (
     HistoryResult,
     Itinerary,
@@ -33,9 +35,16 @@ from xiao_wen.contract import (
     TripPlan,
 )
 from xiao_wen.session import chat as run_chat  # 会话循环收口（默认 = 图工厂调度图，多意图并行）
-from xiao_wen.session import stream_chat  # 流式会话循环（SSE 阶段事件）
+from xiao_wen.session import service_error_event, stream_chat  # 流式会话循环（SSE 阶段事件）
 
-app = FastAPI(title="晓问 · 差旅出行助手", description="多 Agent 差旅助手 Web 界面")
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    load_settings().validate_web()
+    yield
+
+
+app = FastAPI(title="晓问 · 差旅出行助手", description="多 Agent 差旅助手 Web 界面", lifespan=_lifespan)
 
 
 class AuthRequest(BaseModel):
@@ -45,6 +54,7 @@ class AuthRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     user_input: str
+    conversation_id: str = "default"
 
 
 class ChatResponse(BaseModel):
@@ -55,6 +65,7 @@ class ChatResponse(BaseModel):
     stats: TravelStats | None = None  # 差旅画像（契约 TravelStats）；非统计/结构不符为 None
     history: HistoryResult | None = None  # 历史查询结构化行程（契约 HistoryResult）；非历史查询为 None
     sources: list[KnowledgeSource] = []  # RAG 证据来源
+    policy_status: str | None = None
 
 
 class AuthResponse(BaseModel):
@@ -62,8 +73,53 @@ class AuthResponse(BaseModel):
     username: str
 
 
+def _observed_chat(text: str, user: str, thread_id: str):
+    from xiao_wen.observability import start_turn
+
+    observer = start_turn(text, thread_id)
+    if observer is None:
+        return run_chat(text, thread_id, user_id=user)
+    from xiao_wen.graph_builder import build_supervisor_graph
+
+    try:
+        graph = build_supervisor_graph(recorder=observer.recorder)
+        return run_chat(text, thread_id, user_id=user, graph=graph, recorder=observer.recorder)
+    except Exception as error:
+        observer.recorder.record({"type": "error", "code": "unhandled", "message": str(error)})
+        raise
+    finally:
+        observer.finish()
+
+
+async def _observed_stream(text: str, user: str, thread_id: str):
+    from xiao_wen.observability import start_turn
+
+    observer = start_turn(text, thread_id)
+    if observer is None:
+        async for event in stream_chat(text, thread_id, user_id=user):
+            yield event
+        return
+    from xiao_wen.graph_builder import build_supervisor_graph
+
+    try:
+        graph = build_supervisor_graph(recorder=observer.recorder)
+        async for event in stream_chat(
+            text,
+            thread_id,
+            user_id=user,
+            graph=graph,
+            recorder=observer.recorder,
+        ):
+            yield event
+    except Exception as error:
+        observer.recorder.record({"type": "error", "code": "unhandled", "message": str(error)})
+        raise
+    finally:
+        observer.finish()
+
+
 def _current_user(authorization: str | None = None) -> str:
-    """从 Authorization: Bearer <token> 解出用户名（会话维度 = 用户身份，Q4 定案）
+    """从 Authorization: Bearer <token> 解出长期记忆所有者。
 
     FastAPI 依赖注入没法依赖 Header 条件参数，这里直接手动解析（统一 401 语义）。
     """
@@ -77,27 +133,40 @@ def _current_user(authorization: str | None = None) -> str:
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, authorization: str | None = Header(default=None)) -> ChatResponse:
-    """聊天接口：完整走一遍主管图（含两层记忆闭环）；会话维度 = 登录用户（Q4 强制）"""
+    """聊天接口：JWT 决定用户，conversation_id 决定该用户内的可见线程。"""
     user = _current_user(authorization)
+    from xiao_wen.dialogue import make_thread_id
+
+    try:
+        thread_id = make_thread_id(user, req.conversation_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     text = req.user_input.strip()
     if not text:
         raise HTTPException(status_code=400, detail="输入不能为空")
     try:
-        r = run_chat(text, user)
-        return ChatResponse(
-            answer=r.answer,
-            intent=r.intent,
-            reason=r.reason,
-            plan=getattr(r, "plan", None),
-            stats=getattr(r, "stats", None),
-            history=getattr(r, "history", None),
-            sources=getattr(r, "sources", []),
-        )
+        r = _observed_chat(text, user, thread_id)
     except Exception as e:
         from xiao_wen.stability import logger
 
         logger.error("chat 失败（user=%s）：%s", user, e)
-        return ChatResponse(answer="⚠️ 服务暂时不可用，请稍后再试。", intent="error", reason=str(e)[:120])
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "service_unavailable", "message": "⚠️ 服务暂时不可用，请稍后再试。", "retryable": True},
+        ) from e
+    failure = getattr(r, "failure", None)
+    if failure is not None:
+        raise HTTPException(status_code=503, detail=failure.__dict__)
+    return ChatResponse(
+        answer=r.answer,
+        intent=r.intent,
+        reason=r.reason,
+        plan=getattr(r, "plan", None),
+        stats=getattr(r, "stats", None),
+        history=getattr(r, "history", None),
+        sources=getattr(r, "sources", []),
+        policy_status=getattr(r, "policy_status", None),
+    )
 
 
 def _sse(event: dict) -> str:
@@ -111,19 +180,25 @@ def chat_stream(req: ChatRequest, authorization: str | None = Header(default=Non
     旧前端 / 旧契约走 /api/chat 不受影响；阶段事件让长 LLM 等待有实时进度反馈。
     """
     user = _current_user(authorization)
+    from xiao_wen.dialogue import make_thread_id
+
+    try:
+        thread_id = make_thread_id(user, req.conversation_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     text = req.user_input.strip()
     if not text:
         raise HTTPException(status_code=400, detail="输入不能为空")
 
     async def gen():
         try:
-            async for ev in stream_chat(text, user):
+            async for ev in _observed_stream(text, user, thread_id):
                 yield _sse(ev)
         except Exception as e:  # 防御：任何未消化异常也转成 error 事件，客户端永不悬挂
             from xiao_wen.stability import logger
 
             logger.error("chat/stream 失败（user=%s）：%s", user, e)
-            yield _sse({"type": "error", "message": "⚠️ 服务暂时不可用，请稍后再试。"})
+            yield _sse(service_error_event())
 
     return StreamingResponse(
         gen(),
@@ -202,12 +277,25 @@ def index() -> str:
     return _FRONTEND_HINT
 
 
-@app.get("/healthz")
-def healthz() -> dict:
-    """健康检查接口（配合稳定性自检）"""
-    from xiao_wen.stability import health_check
+@app.get("/livez")
+def livez() -> dict:
+    """进程存活探针：不访问 LLM、Embedding、数据库或磁盘运行时状态。"""
+    return {"status": "alive"}
 
-    return {"checks": health_check()}
+
+@app.get("/readyz")
+def readyz() -> JSONResponse:
+    """只读就绪探针：配置、Postgres、RAG 语料和前端静态资产。"""
+    from xiao_wen.readiness import check_readiness
+
+    report = check_readiness()
+    return JSONResponse(status_code=200 if report.ready else 503, content=report.as_dict())
+
+
+@app.get("/healthz")
+def healthz() -> JSONResponse:
+    """兼容旧部署入口；语义与 readiness 一致，不再无条件返回 200。"""
+    return readyz()
 
 
 if os.path.isdir(DIST):

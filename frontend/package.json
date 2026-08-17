@@ -3,14 +3,16 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "packageManager": "pnpm@11.21.0",
   "scripts": {
     "dev": "concurrently -k -n backend,ui -c yellow,cyan \"cd .. && uv run python -m xiao_wen.webapp\" \"vite\"",
     "dev:ui": "vite",
     "dev:kill": "pkill -f \"[v]ite\" ; pkill -f \"[x]iao_wen.webapp\" ; echo 已清理 5173/8000 端口占用（如仍在用请勿执行）",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test": "vitest run",
     "preview": "vite preview",
-    "gen:api": "openapi-typescript http://127.0.0.1:8000/openapi.json -o src/api/schema.generated.ts"
+    "gen:api": "cd .. && uv run --no-sync python scripts/generate_openapi.py"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

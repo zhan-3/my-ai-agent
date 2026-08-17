@@ -1,4 +1,4 @@
-"""Postgres 记忆后端（产品持久化 + 会话隔离）：psycopg 直连，三张表按 session 过滤
+"""Postgres 记忆后端：线程消息、活跃任务与用户长期记忆持久化
 
 - 惰性短连接（每操作 connect；演示级规模足够，避免连接池复杂度——需要并发再上池）
 - 幂等建表 CREATE TABLE IF NOT EXISTS；ts 保持字符串格式（数据形状与协议约定一致）
@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS itineraries (
     ts TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_itineraries_session ON itineraries(session_id);
+CREATE TABLE IF NOT EXISTS active_tasks (
+    thread_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    task JSONB NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_active_tasks_user ON active_tasks(user_id);
 CREATE TABLE IF NOT EXISTS users (
     id BIGSERIAL PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
@@ -45,7 +52,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 
 class PostgresBackend:
-    """Postgres 后端：messages/preferences/itineraries 三表 + session_id 列"""
+    """Postgres 后端：线程消息/任务 + 用户偏好/行程。"""
 
     def __init__(self, url: str) -> None:
         self._url = url
@@ -61,9 +68,9 @@ class PostgresBackend:
             conn.commit()
 
     def clear_all(self) -> None:
-        """清空三表（测试专用：保证每个用例干净起点）"""
+        """清空业务表（测试专用：保证每个用例干净起点）"""
         with self._conn() as conn:
-            for t in ("messages", "preferences", "itineraries"):
+            for t in ("messages", "preferences", "itineraries", "active_tasks"):
                 conn.execute(f"DELETE FROM {t}")
             conn.commit()
 
@@ -84,6 +91,33 @@ class PostgresBackend:
                 (session_id, n),
             ).fetchall()
         return [{"role": r[0], "content": r[1], "ts": r[2]} for r in reversed(rows)]
+
+    # ---------- 对话状态：每个 thread 最多一个活跃任务 ----------
+    def get_active_task(self, thread_id: str, user_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT task FROM active_tasks WHERE thread_id = %s AND user_id = %s",
+                (thread_id, user_id),
+            ).fetchone()
+        return row[0] if row else None
+
+    def set_active_task(self, thread_id: str, user_id: str, task: dict) -> dict:
+        updated_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO active_tasks (thread_id, user_id, task, updated_at) VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (thread_id) DO UPDATE SET user_id = EXCLUDED.user_id, "
+                "task = EXCLUDED.task, updated_at = EXCLUDED.updated_at",
+                (thread_id, user_id, Jsonb(task), updated_at),
+            )
+        return task
+
+    def clear_active_task(self, thread_id: str, user_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "DELETE FROM active_tasks WHERE thread_id = %s AND user_id = %s",
+                (thread_id, user_id),
+            )
 
     # ---------- 长期记忆：偏好（追加 / 覆盖） ----------
     def add_or_update_preference(self, session_id: str, category: str, content: str, is_update: bool = False) -> dict:
@@ -149,16 +183,11 @@ class PostgresBackend:
             ).fetchall()
         return [{**r[0], "summary": r[1], "ts": r[2]} for r in rows]
 
-    # ---------- 探活（stability 健康检查用） ----------
+    # ---------- 只读探活（stability 健康检查用） ----------
     def health_check(self) -> None:
-        """SELECT 1 + 写读回探活（health 专用 session，用后即清）"""
+        """用 SELECT 1 验证连接，不写入业务表。"""
         with self._conn() as conn:
             conn.execute("SELECT 1")
-        self.add_message("__health__", "user", "ping")
-        got = self.get_recent_messages("__health__", 1)
-        assert got and got[-1]["content"] == "ping"
-        with self._conn() as conn:
-            conn.execute("DELETE FROM messages WHERE session_id = %s", ("__health__",))
 
 
 class PostgresUserStore:

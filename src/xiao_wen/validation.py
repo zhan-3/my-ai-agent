@@ -98,7 +98,7 @@ def validate_trip(
                 blocking.append(ValidationIssue("invalid_return_date", "返程日期不是有效的 YYYY-MM-DD", "return_date"))
 
     if budget is not None:
-        components = ("transport_cost", "hotel_cost", "meal_cost")
+        components = ("hotel_cost", "meal_cost")
         if any(key not in budget for key in components) or budget.get("total") != sum(
             budget.get(key, 0) for key in components
         ):

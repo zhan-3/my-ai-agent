@@ -1,31 +1,23 @@
-"""端到端集成测试（真实 LLM + 真实 Postgres 记忆，测试库隔离）：
-两层记忆闭环 —— 偏好新增 → 常驻城市补全 → 行程规划 → 历史查询；
-产品默认图（调度图）—— 单意图回归 + 多意图并行派发
+"""真实产品接缝 smoke：只断言结构化 outcome、持久化状态与证据，不锁定模型措辞。
 
-状态验证（τ-bench 思路）：除 answer 文本（轨迹）外，断言行程/偏好
-真实写入记忆库（outcome）——防止 agent 嘴上说做了、库里没落地。
-
-跑法：uv run pytest -m integration
+意图标签质量由人工审阅的 intent_contract.jsonl 单独评测；航班/建议消歧由纯函数测试覆盖。
+本文件验证真实 LLM、Embedding、图编排和 Postgres 能共同完成少量关键闭环。
 """
+
+from datetime import date, timedelta
 
 import pytest
 
-from xiao_wen.graph_builder import build_supervisor_graph
-
-_app = build_supervisor_graph()  # 产品默认图（session.chat 同一实例）
-
-
-def _invoke(user_input: str) -> str:
-    """走完整图（含记忆读写），返回 answer 文本"""
-    state = {"user_input": user_input, "recent": ""}
-    out = _app.invoke(state)
-    return out.get("answer", "")
+from xiao_wen import memory
+from xiao_wen.session import chat
 
 
-def _memory_state(session_id: str = "default") -> dict:
-    """状态验证：查记忆库（而非 answer 文本），确认写入真实落地"""
-    from xiao_wen import memory
+def _future_date(offset_days: int = 45) -> tuple[date, str]:
+    target = date.today() + timedelta(days=offset_days)
+    return target, f"{target.year}年{target.month}月{target.day}日"
 
+
+def _memory_state(session_id: str) -> dict:
     return {
         "itineraries": memory.get_itineraries(session_id=session_id),
         "preferences": memory.get_preferences(session_id=session_id),
@@ -33,151 +25,129 @@ def _memory_state(session_id: str = "default") -> dict:
 
 
 @pytest.mark.integration
-def test_two_layer_memory_loop():
-    # ① 偏好记录（长期记忆）
-    ans = _invoke("我不吃辣，住宿喜欢安静")
-    assert "已新增偏好" in ans
-    # 状态验证：偏好真实入库
-    assert len(_memory_state()["preferences"]) >= 1, "偏好应写入记忆库"
+def test_preference_plan_history_outcomes():
+    """真实模型抽取偏好和行程；验收以结构化结果与落库状态为准。"""
+    session_id = "integration-memory-plan"
+    preference_result = chat("我常住上海，出差不吃辣", session_id=session_id)
+    assert preference_result.intent == "偏好记录"
+    preferences = _memory_state(session_id)["preferences"]
+    assert any(item["content"] == "上海" for item in preferences)
+    assert any("辣" in item["content"] for item in preferences)
 
-    # ② 常驻城市（覆盖式长期记忆）
-    ans = _invoke("我现在常住上海")
-    assert "已更新偏好" in ans
-    # 状态验证：常驻城市上海已入库（而非只回文案）
-    prefs = _memory_state()["preferences"]
-    assert any(p["content"] == "上海" for p in prefs), f"常驻城市应写入，实际：{prefs}"
-
-    # ③ 行程规划：不说出发城市 → 常驻城市补全（长期记忆生效）
-    ans = _invoke("5月8日去北京开会4天")
-    assert "上海" in ans, "应自动补全出发城市（长期记忆常驻城市）"
-    # 状态验证：行程真实入库且出发城市=上海（补全落地，而非只出现在回答里）
-    its = _memory_state()["itineraries"]
-    assert any(it["to_city"] == "北京" and it["from_city"] == "上海" for it in its), f"行程应入库，实际：{its}"
-
-    # ④ 历史查询（长期记忆历史行程可读）
-    ans = _invoke("我上次的行程是什么")
-    assert "北京" in ans
-
-    # ⑤ 边界：个人休闲 → 其他
-    ans = _invoke("这个暑假去哪里玩")
-    assert "服务范围" in ans or "抱歉" in ans
-
-
-@pytest.mark.integration
-def test_external_agent_end_to_end_dispatch():
-    """外部扩展子 Agent（差旅统计）经真实主管图端到端派发：
-    注册表发现 → 词汇表注入 → 意图识别 → 条件边路由 → 懒加载执行"""
-    ans = _invoke("统计一下我的出差情况")
-    assert "暂无历史行程记录" in ans, f"期望 stats.run 输出，实际：{ans}"
-
-
-@pytest.mark.integration
-def test_parallel_multi_intent_end_to_end():
-    """多意图并行（产品默认图 = 调度图）：一句话拆两个子任务 → Send fan-out → merge 汇总
-    （Q7：并行能力进产品的验收——单意图回归由其余 e2e 覆盖）"""
-    ans = _invoke("帮我查下出差住宿标准是什么，顺便看看北京今天天气怎么样")
-    assert "2 个请求" in ans, f"期望并行汇总文案，实际：{ans}"
-    assert "住宿标准" in ans and "北京" in ans, f"两个子任务的回答都应汇总：{ans}"
-
-
-@pytest.mark.integration
-def test_disambiguation_multi_turn():
-    """轻量消歧多轮闭环（真实 LLM + 产品图 + 记忆写回）：
-    turn1 航班信息查询 → 反问带选项；turn2 选② → 消解为行程规划；turn3 选① → 无工具诚实归其他"""
-    from xiao_wen.session import chat
-
-    # turn 1：信息类航班查询 → 消歧门反问（不硬猜成规划任务）
-    r1 = chat("帮我查一下回程日期有没有航班")
-    assert "①" in r1.answer and "②" in r1.answer, f"期望带选项反问，实际：{r1.answer}"
-
-    # turn 2：用户选②（规划含航班的行程）→ 上下文消解 → 行程规划（要素缺失追问）
-    r2 = chat("②")
-    assert r2.intent == "行程规划", f"② 应消解为行程规划，实际 {r2.intent}（{r2.reason}）"
-    assert "①" not in r2.answer, "已消解，不应再反问"
-
-    # turn 3（新会话）：用户选①（查时刻）→ 确定性诚实答复
-
-    r3 = chat("帮我查一下明天上午有没有航班", session_id="disambig-info")
-    assert "①" in r3.answer, "信息类航班查询应再次反问，实际：" + r3.answer
-    # 用户选①（查时刻）→ 确定性诚实答复（不静默进行程规划追问，也不依赖 LLM 意图）
-    r4 = chat("①", session_id="disambig-info")
-    assert "暂不支持" in r4.answer and "航班" in r4.answer, "① 应诚实告知不支持，实际：" + r4.answer
-
-
-# ==================== E2E 场景矩阵（ticket 05：E2E-05 ~ E2E-08） ====================
-
-
-@pytest.mark.integration
-def test_policy_qa_end_to_end():
-    """E2E-05 差旅政策知识问答（RAG）：问住宿标准 → 知识问答给出政策数值"""
-    ans = _invoke("出差住宿标准是什么")
-    assert "标准" in ans or "元" in ans, f"期望政策标准答案，实际：{ans}"
-
-
-@pytest.mark.integration
-def test_web_query_end_to_end():
-    """E2E-06 联网天气查询：指定城市实时信息 → 联网查询（ReAct 工具）"""
-    ans = _invoke("北京今天天气怎么样")
-    assert "北京" in ans, f"答案应含城市名，实际：{ans}"
-    assert any(k in ans for k in ("℃", "度", "晴", "雨", "多云", "天气")), f"答案应含天气信息，实际：{ans}"
-
-
-@pytest.mark.integration
-def test_missing_elements_multi_turn_planning():
-    """E2E-07 缺项追问→补齐→生成→历史按城市过滤（四轮闭环）"""
-    from xiao_wen.session import chat
-
-    # 轮1：只给目的城市 → 缺项追问（出发城市/日期/天数）
-    r1 = chat("帮我规划去杭州出差的行程")
-    assert "请补充" in r1.answer, f"期望缺项追问，实际：{r1.answer}"
-
-    # 轮2：补齐要素 → 生成行程（含杭州与日期）
-    r2 = chat("5月8日从上海出发，待2天")
-    assert "杭州" in r2.answer, f"生成行程应含杭州，实际：{r2.answer}"
-    assert "5月8日" in r2.answer, f"生成行程应含日期，实际：{r2.answer}"
-    assert "请补充" not in r2.answer, "要素已齐，不应再追问"
-    # 状态验证：行程真实写入记忆库（outcome，而非仅回答文案）
-    its = _memory_state()["itineraries"]
-    assert any(it["to_city"] == "杭州" and it["start_date"].startswith("2026-05-08") for it in its), (
-        f"杭州行程应入库，实际：{its}"
+    target, target_text = _future_date()
+    plan_result = chat(f"{target_text}去北京开会4天", session_id=session_id)
+    assert plan_result.intent == "行程规划"
+    assert plan_result.failure is None
+    assert plan_result.plan is not None
+    assert len(plan_result.plan.days) == 4
+    assert plan_result.plan.days[0].date == target.isoformat()
+    itineraries = _memory_state(session_id)["itineraries"]
+    assert any(
+        item["from_city"] == "上海" and item["to_city"] == "北京" and item["start_date"] == target.isoformat()
+        for item in itineraries
     )
 
-    # 轮3：历史按城市过滤 → 命中刚生成的杭州行程
-    r3 = chat("我最近去杭州的行程")
-    assert "杭州" in r3.answer and "5月8日" in r3.answer, f"历史应命中杭州行程，实际：{r3.answer}"
+    history_result = chat("我已规划的行程是什么", session_id=session_id)
+    assert history_result.intent == "历史查询"
+    assert history_result.history is not None
+    assert history_result.history.direction == "计划"
+    assert any(item.to_city == "北京" for item in history_result.history.itineraries)
 
 
 @pytest.mark.integration
-def test_advice_disambiguation_end_to_end():
-    """E2E-08 消歧 B（咨询建议类）：出差住哪里比较好 → 门控反问（①政策/②按偏好）"""
-    ans = _invoke("出差住哪里比较好")
-    assert "①" in ans and "政策" in ans, f"期望消歧反问（①政策 ②偏好），实际：{ans}"
+def test_external_agent_returns_structured_stats():
+    """真实主管发现并派发外部 Agent；验收结构化 stats，不锁定空态文案。"""
+    result = chat("统计一下我的出差情况", session_id="integration-stats")
+    assert result.intent == "差旅统计"
+    assert result.failure is None
+    assert result.stats is not None
+    assert result.stats.has_data is False
 
 
 @pytest.mark.integration
-def test_pending_followup_recovers_plan():
-    """用户报告的 bug：安排行程被追问出发地后，用户回「我现在常住上海」
-    ——必须续接行程（上海当出发地）+ 记偏好，而不是只记偏好丢任务。
-    规则兜底保证分类确定性（实测 LLM 对同一句归类不稳）"""
-    from xiao_wen.session import chat
-
-    # 轮1：缺出发地 → 追问
-    r1 = chat("帮我规划10月8日去北京的行程")
-    assert "请补充" in r1.answer and "出发城市" in r1.answer
-
-    # 轮2：偏好陈述 + 回答追问 → 行程续接（不再只记偏好）
-    r2 = chat("我现在常住上海")
-    assert "行程" in r2.answer or "请补充" in r2.answer, f"应续接行程，实际：{r2.answer}"
-    assert "偏好" in r2.answer, f"应同时记录偏好，实际：{r2.answer}"
-
-    # 轮3：补天数 → 生成含上海出发的行程
-    r3 = chat("4天")
-    assert "上海" in r3.answer and "北京" in r3.answer, f"应生成上海→北京行程，实际：{r3.answer}"
-    assert "请补充" not in r3.answer, f"要素已齐不应再追问，实际：{r3.answer}"
-    # 状态验证（两件事都真实落地，而非只回文案）：
-    # 行程写入记忆库（上海→北京）+ 常驻城市偏好写入
-    st = _memory_state()
-    assert any(it["from_city"] == "上海" and it["to_city"] == "北京" for it in st["itineraries"]), (
-        f"续接行程应入库，实际：{st['itineraries']}"
+def test_parallel_history_and_stats_merge_outcomes():
+    """真实模型拆分多意图，图合并两个确定性分支的结构化结果。"""
+    session_id = "integration-parallel"
+    past = date.today() - timedelta(days=30)
+    memory.add_itinerary(
+        {
+            "from_city": "上海",
+            "to_city": "北京",
+            "start_date": past.isoformat(),
+            "duration_days": 2,
+        },
+        "上海到北京出差",
+        session_id=session_id,
     )
-    assert any(p["content"] == "上海" for p in st["preferences"]), f"常驻城市应入库，实际：{st['preferences']}"
+    result = chat("我上次的行程是什么，顺便统计一下出差次数", session_id=session_id)
+    assert result.intent == "历史查询"
+    assert result.failure is None
+    assert result.history is not None and result.history.itineraries
+    assert result.stats is not None and result.stats.trips == 1
+
+
+@pytest.mark.integration
+def test_policy_qa_returns_grounded_evidence():
+    """真实 RAG 回答必须携带同轮证据；不以是否出现某个关键词代替 grounding。"""
+    result = chat("出差住宿标准是什么", session_id="integration-policy")
+    assert result.intent == "知识问答"
+    assert result.failure is None
+    assert result.policy_status == "grounded"
+    assert result.sources
+    assert all(source.evidence_id and source.source for source in result.sources)
+
+
+@pytest.mark.integration
+def test_pending_followup_persists_both_preference_and_plan():
+    """追问后的常驻城市陈述同时补全行程并保存偏好，最终 outcome 落库。"""
+    session_id = "integration-pending"
+    target, target_text = _future_date(60)
+    first = chat(f"帮我规划{target_text}去北京的行程", session_id=session_id)
+    assert first.intent == "行程规划"
+    assert first.plan is None
+
+    followup = chat("我现在常住上海", session_id=session_id)
+    assert followup.intent == "行程规划"
+    assert any(item["content"] == "上海" for item in _memory_state(session_id)["preferences"])
+
+    final = chat("4天", session_id=session_id)
+    assert final.intent == "行程规划"
+    assert final.plan is not None and len(final.plan.days) == 4
+    assert final.plan.days[0].date == target.isoformat()
+    assert any(
+        item["from_city"] == "上海" and item["to_city"] == "北京" for item in _memory_state(session_id)["itineraries"]
+    )
+
+
+@pytest.mark.integration
+def test_jump_dialogue_interrupts_and_resumes_pending_trip():
+    """独立偏好插入不覆盖待补行程；后续补槽仍只恢复原行程任务。"""
+    user_id = "integration-jump"
+    thread_id = f"{user_id}:thread-a"
+    target, target_text = _future_date(65)
+
+    first = chat(f"帮我规划{target_text}去北京的行程", thread_id, user_id=user_id)
+    assert first.intent == "行程规划" and first.plan is None
+    assert memory.get_active_task(thread_id=thread_id, user_id=user_id) is not None
+
+    interruption = chat("我不吃辣", thread_id, user_id=user_id)
+    assert interruption.intent == "偏好记录"
+    assert "刚才的行程仍保留" in interruption.answer
+    assert any("辣" in item["content"] for item in memory.get_preferences(session_id=user_id))
+
+    home = chat("我现在常住上海", thread_id, user_id=user_id)
+    assert home.intent == "行程规划" and home.plan is None
+    final = chat("4天", thread_id, user_id=user_id)
+    assert final.intent == "行程规划"
+    assert final.plan is not None and final.plan.days[0].date == target.isoformat()
+    assert memory.get_active_task(thread_id=thread_id, user_id=user_id) is None
+
+
+@pytest.mark.integration
+@pytest.mark.external_live
+def test_weather_live_dependency_is_explicit():
+    """第三方天气只做独立诊断；成功或明确失败均可，不能返回空答案。"""
+    result = chat("北京明天天气怎么样", session_id="integration-weather-live")
+    assert result.intent == "联网查询"
+    assert result.answer.strip()
+    assert result.failure is None

@@ -7,22 +7,19 @@
 - 注入点：override 参数供测试传假模型（跳过 env 校验）；overrides 覆盖默认构造参数
 """
 
-import os
 from functools import lru_cache
 from typing import Any
 
-from dotenv import load_dotenv
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
+from xiao_wen.config import LLM_ENV_VARS, load_settings
 from xiao_wen.stability import CircuitBreaker
 
-load_dotenv()
-
 # 接缝校验的环境变量（唯一来源；health_check 复用见 C7）
-REQUIRED_ENV_VARS = ("DEEPSEEK_MODEL", "DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY")
+REQUIRED_ENV_VARS = LLM_ENV_VARS
 
 _DEFAULT_CONFIG: dict[str, Any] = {
     "temperature": 0,
@@ -66,43 +63,17 @@ class _GuardedLLM(Runnable):
 
 
 def _validate_env() -> None:
-    missing = [v for v in REQUIRED_ENV_VARS if not os.environ.get(v)]
-    if missing:
-        raise RuntimeError(f"缺少 LLM 必需环境变量：{', '.join(missing)}（请在 .env 中配置）")
+    load_settings().require_llm()
 
 
 @lru_cache
 def _default_model() -> ChatOpenAI:
-    _validate_env()
+    llm_config = load_settings().require_llm()
     return ChatOpenAI(
-        model=os.environ["DEEPSEEK_MODEL"],
-        base_url=os.environ["DEEPSEEK_BASE_URL"],
-        api_key=SecretStr(os.environ["DEEPSEEK_API_KEY"]),
+        model=llm_config.model,
+        base_url=llm_config.base_url,
+        api_key=SecretStr(llm_config.api_key),
         **_DEFAULT_CONFIG,
-    )
-
-
-JUDGE_ENV_VARS = ("EVAL_JUDGE_MODEL", "EVAL_JUDGE_BASE_URL", "EVAL_JUDGE_API_KEY")
-
-
-def get_judge_llm(*, override=None) -> _GuardedLLM:
-    """judge 模型独立接缝（D4：考生考官分离）。
-
-    优先 EVAL_JUDGE_MODEL/BASE_URL/API_KEY；任一缺失回退 DEEPSEEK_*（同模型降级，
-    日志由 eval.judge.judge_env_used 标记来源）。override 供测试注入假模型。
-    """
-    if override is not None:
-        return _GuardedLLM(override)
-    model = os.environ.get("EVAL_JUDGE_MODEL") or os.environ["DEEPSEEK_MODEL"]
-    base_url = os.environ.get("EVAL_JUDGE_BASE_URL") or os.environ["DEEPSEEK_BASE_URL"]
-    api_key = os.environ.get("EVAL_JUDGE_API_KEY") or os.environ["DEEPSEEK_API_KEY"]
-    return _GuardedLLM(
-        ChatOpenAI(
-            model=model,
-            base_url=base_url,
-            api_key=SecretStr(api_key),
-            **_DEFAULT_CONFIG,
-        )
     )
 
 
@@ -115,13 +86,13 @@ def get_llm(*, override: BaseChatModel | None = None, **overrides) -> _GuardedLL
     if override is not None:
         return _GuardedLLM(override)
     if overrides:
-        _validate_env()
+        llm_config = load_settings().require_llm()
         config = {**_DEFAULT_CONFIG, **overrides}
         return _GuardedLLM(
             ChatOpenAI(
-                model=os.environ["DEEPSEEK_MODEL"],
-                base_url=os.environ["DEEPSEEK_BASE_URL"],
-                api_key=SecretStr(os.environ["DEEPSEEK_API_KEY"]),
+                model=llm_config.model,
+                base_url=llm_config.base_url,
+                api_key=SecretStr(llm_config.api_key),
                 **config,
             )
         )
