@@ -159,6 +159,7 @@ def run(state) -> dict:
         upstream=upstream,
         task_context=(active_task or {}).get("resume_context", ""),
         cancelled=state.get("_cancelled"),
+        defer_write=bool(state.get("_defer_writes")),
     )
     return {
         "answer": out.answer,
@@ -166,4 +167,5 @@ def run(state) -> dict:
         "task_update": out.task_update,
         "policy_status": upstream.get("policy_status"),
         "sources": upstream.get("sources", []),
+        "memory_writes": out.memory_writes,
     }

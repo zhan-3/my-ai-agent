@@ -13,8 +13,6 @@ from typing import Any
 from xiao_wen import ROOT
 from xiao_wen.config import load_settings
 
-# 子 Agent 出参白名单：State 大对象不落盘，只记录可回放的稳定结果。
-AGENT_OUT_KEYS = ("answer", "plan", "stats", "history", "sources", "policy_status", "failure")
 _SENSITIVE_KEYS = {"authorization", "token", "password", "api_key", "apikey", "jwt_secret"}
 
 

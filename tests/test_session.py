@@ -1,1380 +1,470 @@
-"""会话循环测试：假图 + 临时记忆，测循环四动作（读 recent → 注入 → invoke → 写回两轮）
+"""会话接口测试：Agent Loop、线程锁、事件流和持久化闭环。"""
 
-记忆隔离由 conftest 自动夹具提供（MEMORY_PATH 指向 tmp）。
-"""
+import asyncio
+import threading
+import time
+from collections.abc import AsyncGenerator
+from typing import cast
 
 import pytest
 
-from xiao_wen import memory as memory_store
-from xiao_wen.session import ChatResult, chat
+from xiao_wen.session import ChatResult, chat, stream_chat
 
 
-def _run_two_same_session_streams(result_queue):
-    import asyncio
+class Store:
+    def __init__(self):
+        self.messages: dict[str, list[tuple[str, str]]] = {}
+        self.transcripts: dict[str, list[list[dict]]] = {}
+        self.preferences = []
+        self.itineraries = []
+        self.task = None
 
-    from xiao_wen.session import stream_chat
+    def format_recent_messages(self, n, *, session_id="default"):
+        items = self.messages.get(session_id, [])[-n:]
+        return "\n".join(content for _, content in items) or "无"
 
-    class FakeStore:
-        def format_recent_messages(self, n, *, session_id="default"):
-            return ""
+    def add_message(self, role, content, *, session_id="default"):
+        self.messages.setdefault(session_id, []).append((role, content))
 
-        def add_message(self, role, content, *, session_id="default"):
-            return None
+    def add_agent_transcript(self, transcript, *, session_id="default"):
+        self.transcripts.setdefault(session_id, []).append(transcript)
 
-    async def exercise():
-        first_entered = asyncio.Event()
-        release_first = asyncio.Event()
+    def add_or_update_preference(self, category, content, is_update=False, *, session_id="default"):
+        self.preferences.append((session_id, category, content, is_update))
 
-        class Graph:
-            async def astream_events(self, state, **kwargs):
-                if state["user_input"] == "first":
-                    first_entered.set()
-                    await release_first.wait()
-                node = "其他"
-                yield {
-                    "event": "on_chain_stream",
-                    "name": node,
-                    "metadata": {"langgraph_node": node},
-                    "data": {
-                        "chunk": {
-                            "answer": f"{state['user_input']}-answer",
-                            "intent": "其他",
-                            "reason": "test",
-                        }
-                    },
-                }
+    def add_itinerary(self, facts, summary, *, session_id="default"):
+        self.itineraries.append((session_id, facts, summary))
 
-        async def consume(text):
-            return [event async for event in stream_chat(text, "same-session", graph=Graph(), store=FakeStore())]
+    def get_active_task(self, *, thread_id, user_id):
+        return self.task
 
-        first = asyncio.create_task(consume("first"))
-        await first_entered.wait()
-        second = asyncio.create_task(consume("second"))
-        await asyncio.sleep(0.05)
-        release_first.set()
-        results = await asyncio.gather(first, second)
-        result_queue.put([events[-1]["answer"] for events in results])
+    def set_active_task(self, task, *, thread_id, user_id):
+        self.task = task
 
-    asyncio.run(exercise())
+    def clear_active_task(self, *, thread_id, user_id):
+        self.task = None
 
 
-class FakeGraph:
-    def __init__(self, answer="答", intent="其他", reason="测试"):
-        self.answer = answer
-        self.intent = intent
-        self.reason = reason
+class Loop:
+    def __init__(self, result=None, *, fail=None, events=None):
+        self.result = result or {"answer": "答", "intent": "其他", "reason": "测试", "transcript": []}
+        self.fail = fail
+        self.events = events or []
         self.calls = []
 
-    def invoke(self, state):
-        self.calls.append(state)
-        return {"answer": self.answer, "intent": self.intent, "reason": self.reason}
+    def run(self, turn, emit=None):
+        self.calls.append(turn)
+        if self.fail:
+            raise self.fail
+        for event in self.events:
+            if emit:
+                emit(event)
+        return dict(self.result)
 
 
-def test_chat_loop_four_actions():
-    """读 recent → 注入 → invoke → 写回两轮"""
-    graph = FakeGraph()
-    memory_store.add_message("user", "上一轮")
-    memory_store.add_message("assistant", "上一轮回答")
+def collect_stream(*args, **kwargs):
+    async def collect():
+        return [event async for event in stream_chat(*args, **kwargs)]
 
-    r = chat("新问题", graph=graph)
-
-    assert isinstance(r, ChatResult)
-    assert r.answer == "答" and r.intent == "其他" and r.reason == "测试"
-    assert r.plan is None, "图未产出 plan 时 ChatResult.plan 应为 None"
-    # 注入的 recent 包含历史
-    assert "上一轮" in graph.calls[0]["recent"]
-    assert graph.calls[0]["user_input"] == "新问题"
-    # 写回两轮
-    msgs = memory_store.get_recent_messages(6)
-    assert [m["role"] for m in msgs[-2:]] == ["user", "assistant"]
-    assert [m["content"] for m in msgs[-2:]] == ["新问题", "答"]
+    return asyncio.run(collect())
 
 
-def test_chat_trace_final_records_sources():
-    source = {"evidence_id": "ev-1", "source": "差旅政策", "text": "住宿标准 500 元"}
-
-    class SourceGraph:
-        def invoke(self, state):
-            return {"answer": "标准如下", "intent": "知识问答", "reason": "政策问题", "sources": [source]}
-
-    class Recorder:
-        def __init__(self):
-            self.events = []
-
-        def record(self, event):
-            self.events.append(event)
-
-    recorder = Recorder()
-    result = chat("住宿标准", graph=SourceGraph(), recorder=recorder)
-
-    final = next(event for event in recorder.events if event["type"] == "final")
-    assert result.sources[0].evidence_id == "ev-1"
-    assert final["sources"] == [source | {"section": None, "similarity": None}]
-
-
-def test_chat_propagates_structured_plan():
-    """图产出结构化 plan → ChatResult.plan 原样透传（slice 1：前端数据驱动的数据源）"""
-    plan = {
-        "summary": "北京出差 4 天",
-        "reasons": ["按差旅标准选住宿"],
-        "date_is_vague": False,
-        "days": [{"date": "2026-10-08", "transport": "高铁 G1", "hotel": "汉庭", "activities": ["开会"], "notes": ""}],
-    }
-
-    class PlanGraph:
-        def invoke(self, state):
-            return {"answer": "行程如下", "intent": "行程规划", "reason": "r", "plan": plan}
-
-    r = chat("规划行程", graph=PlanGraph())
-    assert r.plan is not None
-    assert r.plan.model_dump() == plan
-
-
-def test_chat_degrades_malformed_plan():
-    """图产出结构不符的 plan → ChatResult.plan 降级为 None（文本是回退通道）"""
-
-    class PlanGraph:
-        def invoke(self, state):
-            return {"answer": "行程如下（文本）", "intent": "行程规划", "reason": "r", "plan": {"summary": "缺 days"}}
-
-    r = chat("规划行程", graph=PlanGraph())
-    assert r.plan is None
-    assert r.answer == "行程如下（文本）"
-
-
-def test_stream_chat_emits_stages_then_done():
-    """流式会话：阶段事件（start→intent→working→done）+ 最终 done（含 plan）；记忆写回两轮"""
-    import asyncio
-
-    from xiao_wen.session import stream_chat
-
-    plan = {"summary": "北京出差", "days": [], "reasons": [], "date_is_vague": False}
-    events = [
-        ("on_chain_start", "classify_intent", None),
-        ("on_chain_stream", "classify_intent", {"intent": "行程规划", "reason": "r"}),
-        ("on_chain_end", "classify_intent", None),
-        ("on_chain_start", "行程规划", None),
-        ("on_chain_stream", "行程规划", {"answer": "行程如下", "plan": plan}),
-        ("on_chain_end", "行程规划", None),
-    ]
-
-    class FakeStreamGraph:
-        async def astream_events(self, state, **kwargs):
-            assert kwargs.get("version") == "v2"
-            assert kwargs.get("stream_mode") == "values"
-            for etype, node, chunk in events:
-                yield {
-                    "event": etype,
-                    "name": node,
-                    "metadata": {"langgraph_node": node},
-                    "data": {"chunk": chunk},
-                }
-
-    out = []
-
-    async def run():
-        async for ev in stream_chat("规划行程", graph=FakeStreamGraph()):
-            out.append(ev)
-
-    asyncio.run(run())
-
-    assert out[0] == {"type": "stage", "status": "start"}
-    stages = [(e.get("status"), e.get("intent")) for e in out if e["type"] == "stage"]
-    assert ("intent", "行程规划") in stages  # 意图已解析
-    assert ("working", "行程规划") in stages
-    assert ("done", "行程规划") in stages
-    assert ("working", "classify_intent") not in stages, "内部节点不暴露为阶段"
-    done = out[-1]
-    assert done["type"] == "done"
-    assert done["answer"] == "行程如下" and done["intent"] == "行程规划"
-    assert done["plan"] == plan  # 契约层验证后输出 dict（与 POST /api/chat 响应体一致）
-    # 记忆写回两轮（与 chat() 一致）
-    msgs = memory_store.get_recent_messages(6)
-    assert [m["content"] for m in msgs[-2:]] == ["规划行程", "行程如下"]
-
-
-def test_stream_chat_filters_nested_chain_events():
-    """流式会话：嵌套链事件（name != 节点名）被过滤，只认节点自身事件"""
-    import asyncio
-
-    from xiao_wen.session import stream_chat
-
-    events: list[dict] = [
-        {"event": "on_chain_start", "name": "行程规划"},
-        {"event": "on_chain_start", "name": "RunnableLambda"},  # 嵌套链（应被过滤）
-        {"event": "on_chain_end", "name": "RunnableLambda"},
-        {
-            "event": "on_chain_stream",
-            "name": "行程规划",
-            "chunk": {"answer": "答", "intent": "行程规划", "reason": "r"},
-        },
-        {"event": "on_chain_end", "name": "行程规划"},
-    ]
-
-    class FakeGraph:
-        async def astream_events(self, state, **kwargs):
-            for ev in events:
-                yield {
-                    "event": ev["event"],
-                    "name": ev["name"],
-                    "metadata": {"langgraph_node": "行程规划"},
-                    "data": {"chunk": ev.get("chunk")},
-                }
-
-    out = []
-
-    async def run():
-        async for ev in stream_chat("hi", graph=FakeGraph()):
-            out.append(ev)
-
-    asyncio.run(run())
-    # 嵌套链事件不产生重复 working/done
-    working = [e for e in out if e.get("status") == "working"]
-    done_stages = [e for e in out if e.get("status") == "done" and e.get("type") == "stage"]
-    assert len(working) == 1 and len(done_stages) == 1
-    assert out[-1]["type"] == "done" and out[-1]["answer"] == "答"
-
-
-def test_stage_event_mapping():
-    """节点名 → 阶段事件：p_ 并行分支剥前缀、merge 占位、classify 隐藏（内部节点）"""
-    from xiao_wen.session import _stage_event
-
-    assert _stage_event("p_行程规划", "working") == {"type": "stage", "status": "working", "intent": "行程规划"}
-    assert _stage_event("merge", "done") == {"type": "stage", "status": "done", "intent": "__merge__"}
-    assert _stage_event("classify_intent", "working") is None
-    assert _stage_event("偏好记录", "working") == {"type": "stage", "status": "working", "intent": "偏好记录"}
-
-
-def test_stream_chat_error_yields_error_event():
-    """流式会话：图异常 → error 事件而非中断（LLM 熔断/网络降级）"""
-    import asyncio
-
-    from xiao_wen.session import stream_chat
-
-    class BoomGraph:
-        async def astream_events(self, state, **kwargs):
-            if False:  # 使函数成为 async generator（有 yield），否则 async for 得到未 await 的协程
-                yield None
-            raise RuntimeError("LLM 挂了")
-
-    out = []
-
-    async def run():
-        async for ev in stream_chat("hi", graph=BoomGraph()):
-            out.append(ev)
-
-    asyncio.run(run())
-    assert out[0]["type"] == "stage"
-    assert out[-1]["type"] == "error"
-    assert "稍后再试" in out[-1]["message"]
-    # 异常时不写回记忆
-    assert memory_store.get_recent_messages(6) == []
-    recovered = chat("after-error", graph=FakeGraph(answer="recovered"))
-    assert recovered.answer == "recovered"
-
-
-def test_chat_propagates_exceptions():
-    class BoomGraph:
-        def invoke(self, state):
-            raise RuntimeError("LLM 挂了")
-
-    with pytest.raises(RuntimeError, match="LLM 挂了"):
-        chat("x", graph=BoomGraph())
-
-
-def test_chat_uses_injected_store():
-    calls = []
-
-    class FakeStore:
-        def format_recent_messages(self, n, *, session_id="default"):
-            return "无历史"
-
-        def add_message(self, role, content, *, session_id="default"):
-            calls.append((role, content, session_id))
-
-    graph = FakeGraph()
-    r = chat("hi", session_id="会话A", graph=graph, store=FakeStore())
-    assert r.answer == "答"
-    assert calls == [("user", "hi", "会话A"), ("assistant", "答", "会话A")]
-    assert graph.calls[0]["recent"] == "无历史"
-
-
-def test_threads_are_isolated_but_share_user_identity():
-    class Store:
-        def __init__(self):
-            self.messages = {}
-
-        def format_recent_messages(self, n, *, session_id="default"):
-            return "\n".join(item[1] for item in self.messages.get(session_id, [])[-n:]) or "无"
-
-        def add_message(self, role, content, *, session_id="default"):
-            self.messages.setdefault(session_id, []).append((role, content))
-
+def test_chat_reads_recent_runs_loop_and_persists_turn_and_transcript():
     store = Store()
-    graph = FakeGraph()
-    chat("线程一消息", "alice:one", user_id="alice", graph=graph, store=store)
-    chat("线程二消息", "alice:two", user_id="alice", graph=graph, store=store)
+    store.add_message("user", "上一轮", session_id="thread")
+    transcript = [{"role": "user", "content": "新问题"}, {"role": "assistant", "content": "答"}]
+    loop = Loop({"answer": "答", "intent": "其他", "reason": "测试", "transcript": transcript})
 
-    assert graph.calls[0]["user_id"] == graph.calls[1]["user_id"] == "alice"
-    assert graph.calls[1]["recent"] == "无"
-    assert store.messages["alice:one"][0][1] == "线程一消息"
+    result = chat("新问题", "thread", user_id="alice", loop=loop, store=store)
+
+    assert isinstance(result, ChatResult)
+    assert "上一轮" in loop.calls[0]["recent"]
+    assert loop.calls[0]["session_id"] == "thread"
+    assert loop.calls[0]["user_id"] == "alice"
+    assert store.messages["thread"][-2:] == [("user", "新问题"), ("assistant", "答")]
+    assert store.transcripts["thread"] == [transcript]
 
 
-def test_independent_turn_retains_active_task_and_completion_clears_it():
-    class Store:
-        def __init__(self):
-            self.messages = []
-            self.task = None
+def test_chat_applies_deferred_domain_writes_only_on_success():
+    store = Store()
+    result = chat(
+        "我常住上海",
+        "thread",
+        user_id="alice",
+        loop=Loop(
+            {
+                "answer": "已记录",
+                "intent": "偏好记录",
+                "reason": "完成",
+                "memory_writes": [{"type": "preference", "category": "常驻城市", "content": "上海", "is_update": True}],
+                "transcript": [],
+            }
+        ),
+        store=store,
+    )
+    assert result.failure is None
+    assert store.preferences == [("alice", "常驻城市", "上海", True)]
 
-        def format_recent_messages(self, n, *, session_id="default"):
-            return "无"
 
-        def add_message(self, role, content, *, session_id="default"):
-            self.messages.append((role, content, session_id))
+def test_postgres_turn_rolls_back_all_writes_on_commit_failure():
+    from xiao_wen import memory as memory_store
 
-        def get_active_task(self, *, thread_id, user_id):
-            return self.task
+    loop = Loop(
+        {
+            "answer": "完成",
+            "intent": "偏好记录",
+            "reason": "完成",
+            "memory_writes": [
+                {"type": "preference", "category": "住宿", "content": "安静", "is_update": False},
+                {"type": "unknown"},
+            ],
+            "transcript": [{"role": "assistant", "content": "完成"}],
+        }
+    )
 
-        def set_active_task(self, task, *, thread_id, user_id):
-            self.task = task
+    with pytest.raises(ValueError, match="未知延迟记忆写入"):
+        chat("记住偏好", "atomic", user_id="alice", loop=loop, store=memory_store)
 
-        def clear_active_task(self, *, thread_id, user_id):
-            self.task = None
+    assert memory_store.get_preferences(session_id="alice") == []
+    assert memory_store.get_recent_messages(session_id="atomic") == []
+    assert memory_store.get_recent_agent_transcripts(session_id="atomic") == []
 
-    class Graph:
-        def invoke(self, state):
-            if state["user_input"] == "规划":
-                return {
-                    "answer": "请补充出发城市",
-                    "intent": "行程规划",
-                    "reason": "缺项",
-                    "task_update": {
-                        "action": "set",
-                        "task": {"intent": "行程规划", "missing": ["出发城市"], "resume_context": "用户: 规划"},
-                    },
-                }
-            if state["user_input"] == "不吃辣":
-                assert state["active_task"]["intent"] == "行程规划"
-                return {"answer": "已记录偏好", "intent": "偏好记录", "reason": "偏好"}
-            return {
+
+def test_chat_propagates_structured_outputs_and_sources():
+    plan = {
+        "summary": "北京出差",
+        "reasons": [],
+        "days": [],
+        "date_is_vague": False,
+    }
+    source = {"evidence_id": "ev-1", "source": "差旅政策", "text": "标准"}
+    result = chat(
+        "规划",
+        loop=Loop(
+            {
+                "answer": "行程如下",
+                "intent": "行程规划",
+                "reason": "观察完成",
+                "plan": plan,
+                "sources": [source],
+                "policy_status": "grounded",
+                "transcript": [],
+            }
+        ),
+        store=Store(),
+    )
+
+    assert result.plan is not None and result.plan.model_dump() == plan
+    assert result.sources[0].evidence_id == "ev-1"
+    assert result.policy_status == "grounded"
+
+
+def test_chat_degrades_malformed_plan_and_empty_answer():
+    result = chat(
+        "规划",
+        loop=Loop({"answer": "", "intent": "行程规划", "reason": "测试", "plan": {"summary": "坏"}}),
+        store=Store(),
+    )
+    assert result.answer == "（暂无回复，请换个说法再试一次）"
+    assert result.plan is None
+
+
+def test_chat_propagates_loop_exception_without_writeback():
+    store = Store()
+    with pytest.raises(RuntimeError, match="LLM 挂了"):
+        chat("问题", loop=Loop(fail=RuntimeError("LLM 挂了")), store=store)
+    assert store.messages == {}
+    assert store.transcripts == {}
+
+
+def test_chat_failure_is_not_committed():
+    store = Store()
+    result = chat(
+        "住宿标准",
+        loop=Loop(
+            {
+                "answer": "政策不可用",
+                "intent": "知识问答",
+                "reason": "依赖失败",
+                "failure": {"code": "policy_unavailable", "message": "政策不可用", "retryable": True},
+                "transcript": [],
+            }
+        ),
+        store=store,
+    )
+    assert result.failure is not None
+    assert store.messages == {}
+    assert store.transcripts == {}
+
+
+@pytest.mark.parametrize("task_update", [{"action": "set", "task": {"intent": "行程规划"}}, {"action": "clear"}])
+def test_failed_turn_never_mutates_active_task(task_update):
+    store = Store()
+    original = {"intent": "行程规划", "missing": ["出差天数"]}
+    store.task = original
+    result = chat(
+        "问题",
+        "thread",
+        user_id="alice",
+        loop=Loop(
+            {
+                "answer": "服务失败",
+                "intent": "知识问答",
+                "reason": "失败",
+                "task_update": task_update,
+                "failure": {"code": "policy_unavailable", "message": "服务失败", "retryable": True},
+            }
+        ),
+        store=store,
+    )
+    assert result.failure is not None
+    assert store.task == original
+
+
+def test_active_task_survives_interrupt_and_can_clear():
+    store = Store()
+    first = Loop(
+        {
+            "answer": "请补充出发城市",
+            "intent": "行程规划",
+            "reason": "缺项",
+            "task_update": {
+                "action": "set",
+                "task": {"intent": "行程规划", "missing": ["出发城市"], "resume_context": "用户: 规划"},
+            },
+        }
+    )
+    chat("规划", "thread", user_id="alice", loop=first, store=store)
+    assert store.task is not None
+
+    interrupted = chat(
+        "不吃辣",
+        "thread",
+        user_id="alice",
+        loop=Loop({"answer": "已记录", "intent": "偏好记录", "reason": "偏好"}),
+        store=store,
+    )
+    assert "刚才的行程仍保留" in interrupted.answer
+    assert store.task is not None
+
+    chat(
+        "上海",
+        "thread",
+        user_id="alice",
+        loop=Loop(
+            {
                 "answer": "行程完成",
                 "intent": "行程规划",
                 "reason": "续接",
                 "task_update": {"action": "clear"},
             }
-
-    store = Store()
-    first = chat("规划", "alice:one", user_id="alice", graph=Graph(), store=store)
-    assert first.answer == "请补充出发城市"
-    interrupted = chat("不吃辣", "alice:one", user_id="alice", graph=Graph(), store=store)
-    assert "已记录偏好" in interrupted.answer
-    assert "刚才的行程仍保留" in interrupted.answer
-    assert store.task is not None
-    chat("武汉", "alice:one", user_id="alice", graph=Graph(), store=store)
+        ),
+        store=store,
+    )
     assert store.task is None
 
 
-def test_chat_default_graph_builds(monkeypatch):
-    """默认图 = 图工厂的产品图（单意图单路由 + 多意图并行）"""
-    import xiao_wen.graph_builder as gb
-
-    seen = {}
-
-    class FakeGraph:
-        def invoke(self, state):
-            seen["state"] = state
-            return {"answer": "答", "intent": "其他", "reason": "默认图"}
-
-    def fake_build():
-        seen["built"] = True
-        return FakeGraph()
-
-    monkeypatch.setattr(gb, "build_supervisor_graph", fake_build)
-    r = chat("hi")
-    assert r.answer == "答"
-    assert seen["built"] is True
-    assert seen["state"]["recent"] is not None
-
-
-def test_chat_session_isolation_with_fake_graph():
-    """会话隔离验收（无 LLM）：A 写记忆 → B 读不到；State 携带 session_id 到图"""
-    from xiao_wen import memory as memory_store
-
-    captured = {}
-
-    class RecGraph:
-        def invoke(self, state):
-            captured["session_id"] = state.get("session_id")
-            captured["recent"] = state["recent"]
-            return {"answer": "答", "intent": "其他", "reason": "测试"}
-
-    chat("A的第一个问题", session_id="会话A", graph=RecGraph())
-    chat("A的第二个问题", session_id="会话A", graph=RecGraph())
-    chat("B的问题", session_id="会话B", graph=RecGraph())
-
-    # State 携带 session_id（产品路径：图内 agent 可感知会话）
-    assert captured["session_id"] == "会话B"
-    # A 的记忆有 A 的两轮（2 轮 × 用户/助手 2 条）；B 只有 B 自己的
-    msgs_a = memory_store.get_recent_messages(6, session_id="会话A")
-    msgs_b = memory_store.get_recent_messages(6, session_id="会话B")
-    assert [m["content"] for m in msgs_a] == ["A的第一个问题", "答", "A的第二个问题", "答"]
-    assert [m["content"] for m in msgs_b] == ["B的问题", "答"]
-    assert memory_store.get_recent_messages(6, session_id="default") == []
-
-
-def test_agents_use_state_session_id(monkeypatch):
-    """preference/history agent 从 State 取 session_id 写入对应会话（无 LLM：短路模型）"""
-    from xiao_wen.agents import history_agent, preference_agent
-    from xiao_wen.memory import get_preferences
-
-    recs = preference_agent.PreferenceList(
-        records=[preference_agent.PreferenceRecord(category="常驻城市", content="上海", is_update=True)]
-    )
-
-    def _fake_pref_model():
-        class M:
-            def invoke(self, _):
-                return recs
-
-        return M()
-
-    monkeypatch.setattr(preference_agent, "_pref_model", _fake_pref_model)
-    out = preference_agent.run({"user_input": "我现在常住上海", "session_id": "会话A"})
-    assert "上海" in out["answer"]
-    assert [p["content"] for p in get_preferences("常驻城市", session_id="会话A")] == ["上海"]
-    assert get_preferences("常驻城市", session_id="会话B") == []
-
-    # history agent：从 State 取 session_id 传给 get_itineraries
-    seen = {}
-
-    def fake_get_itineraries(*args, **kwargs):
-        seen["session_id"] = kwargs.get("session_id")
-        return [
-            {
-                "to_city": "北京",
-                "from_city": "上海",
-                "start_date": "2026-05-08",
-                "duration_days": 4,
-                "summary": "北京出差",
-            }
-        ]
-
-    monkeypatch.setattr(history_agent, "get_itineraries", fake_get_itineraries)
-    out = history_agent.run({"session_id": "会话B"})
-    assert seen["session_id"] == "会话B"
-    assert "北京" in out["answer"]
-
-
-def test_history_agent_filters_by_time(monkeypatch):
-    """时空语义（确定性规则）：问历史 → 未来规划不出现；问计划 → 只给未来规划"""
-    from xiao_wen.agents import history_agent
-
-    its = [
-        {
-            "to_city": "北京",
-            "from_city": "上海",
-            "start_date": "2026-05-08",
-            "duration_days": 4,
-            "summary": "北京出差（已发生）",
-        },
-        {
-            "to_city": "杭州",
-            "from_city": "北京",
-            "start_date": "2099-12-01",
-            "duration_days": 3,
-            "summary": "杭州规划（未发生）",
-        },
-    ]
-    monkeypatch.setattr(history_agent, "get_itineraries", lambda **kw: its)
-
-    hist = history_agent.run({"session_id": "x", "user_input": "我上次出差去哪了"})
-    assert "北京" in hist["answer"] and "杭州规划" not in hist["answer"]
-    # 结构化输出（前端卡片）：只含已发生，status 标注
-    assert hist["history"]["direction"] == "历史"
-    assert [it["status"] for it in hist["history"]["itineraries"]] == ["历史"]
-    assert hist["history"]["itineraries"][0]["summary"] == "北京出差（已发生）"
-
-    plan = history_agent.run({"session_id": "x", "user_input": "我接下来有什么安排"})
-    assert "杭州规划" in plan["answer"] and "北京出差" not in plan["answer"]
-    # 结构化输出：计划向 → 只含未发生，status=已规划
-    assert plan["history"]["direction"] == "计划"
-    assert [it["status"] for it in plan["history"]["itineraries"]] == ["已规划"]
-
-    # BUG：用户问「我规划的行程是什么」曾被当查历史（_PLAN_WORDS 缺「规划」）→ 空态
-    plan2 = history_agent.run({"session_id": "x", "user_input": "我规划的行程是什么"})
-    assert "杭州规划" in plan2["answer"], "「规划」应命中计划向（实测修复前答「暂无历史行程记录」）"
-    assert plan2["history"]["direction"] == "计划"
-
-    empty = history_agent.run({"session_id": "x", "user_input": "杭州的记录"})
-    assert empty["history"] is None, "无命中/无数据 → history 为 None，前端不渲染卡片"
-
-
-def test_preference_agent_records_multiple_preferences(monkeypatch):
-    """偏好 agent：一条消息含多个偏好 → 全部写入（如「我喜欢住汉庭，常住上海」→ 住宿 + 常驻城市）"""
-    from xiao_wen.agents import preference_agent
-    from xiao_wen.memory import get_preferences
-
-    recs = preference_agent.PreferenceList(
-        records=[
-            preference_agent.PreferenceRecord(category="住宿", content="喜欢住汉庭", is_update=False),
-            preference_agent.PreferenceRecord(category="常驻城市", content="上海", is_update=True),
-        ]
-    )
-
-    def _fake_pref_model():
-        class M:
-            def invoke(self, _):
-                return recs
-
-        return M()
-
-    monkeypatch.setattr(preference_agent, "_pref_model", _fake_pref_model)
-    out = preference_agent.run({"user_input": "我喜欢住汉庭，常住上海", "session_id": "会话A"})
-    assert "住宿" in out["answer"] and "常驻城市" in out["answer"]
-    prefs = get_preferences(session_id="会话A")
-    assert {p["category"] for p in prefs} == {"住宿", "常驻城市"}
-    assert [p["content"] for p in prefs if p["category"] == "常驻城市"] == ["上海"]
-
-
-def test_itinerary_agent_passes_session_to_trip_planner(monkeypatch):
-    """行程 agent：State 的 session_id 贯穿到 trip_planner 的 add_itinerary（无 LLM：短路模型链）"""
-    from xiao_wen import trip_planner
-    from xiao_wen.agents import itinerary_agent
-
-    captured = {}
-
-    def fake_add_itinerary(facts, summary, *, session_id="default"):
-        captured["session_id"] = session_id
-        captured["summary"] = summary
-        return {"summary": summary, "ts": "t"}
-
-    monkeypatch.setattr(trip_planner, "add_itinerary", fake_add_itinerary)
-    req = trip_planner.TripRequest(
-        from_city="上海", to_city="北京", start_date="2026-10-08", duration_days=4, hotel_pref="无", budget_pref="中等"
-    )
-    plan = trip_planner.ItineraryPlan(
-        days=[],
-        summary="北京出差 4 天",
-        reasons=["靠近会场"],
-    )
-
-    class FakeExtract:
-        def invoke(self, _):
-            return req
-
-    class FakePlan:
-        def invoke(self, _):
-            return plan
-
-    monkeypatch.setattr(trip_planner, "_extract_model", FakeExtract)
-    monkeypatch.setattr(trip_planner, "_plan_model", FakePlan)
-
-    out = itinerary_agent.run({"user_input": "我10月8日去北京开会4天", "session_id": "会话A"})
-    assert captured["session_id"] == "会话A"  # 行程写进 A 会话
-    assert captured["summary"] == "北京出差 4 天"
-    assert "北京" in out["answer"]
-
-
-def test_itinerary_agent_returns_structured_plan(monkeypatch):
-    """行程 agent：生成成功 → 返回结构化 plan（slice 1 数据驱动源）；缺项 → plan 为 None"""
-    from xiao_wen import trip_planner, web
-    from xiao_wen.agents import itinerary_agent
-
-    req = trip_planner.TripRequest(
-        from_city="上海",
-        to_city="北京",
-        start_date="2026-10-08",
-        duration_days=4,
-        hotel_pref="无",
-        budget_pref="中等",
-    )
-    plan = trip_planner.ItineraryPlan(
-        days=[
-            trip_planner.DayPlan(
-                date=f"2026-10-{day:02d}",
-                transport="高铁 G1",
-                hotel="汉庭",
-                activities=["上午开会"],
-                notes="",
-            )
-            for day in range(8, 12)
-        ],
-        summary="北京出差 4 天",
-        reasons=["按差旅标准选住宿"],
-    )
-
-    class FakeExtract:
-        def invoke(self, _):
-            return req
-
-    class FakePlan:
-        def invoke(self, _):
-            return plan
-
-    monkeypatch.setattr(trip_planner, "_extract_model", FakeExtract)
-    monkeypatch.setattr(trip_planner, "_plan_model", FakePlan)
-    monkeypatch.setattr(
-        trip_planner, "add_itinerary", lambda facts, summary, *, session_id="default": {"summary": summary}
-    )
-    monkeypatch.setattr(web, "get_weather", type("W", (), {"invoke": lambda self, a: "晴"})())
-
-    out = itinerary_agent.run({"user_input": "10月8日去北京开会4天", "session_id": "会话A"})
-    assert out["plan"] == {
-        **plan.model_dump(),
-        "date_is_vague": False,
-    }
-    assert out["plan"]["days"][0]["transport"] == "高铁（具体车次和时间以12306实时查询为准）"
-
-    # 缺项（NeedsInfo）：plan 为 None，前端走文本回退
-    vague_req = trip_planner.TripRequest(
-        from_city="上海", to_city="", start_date="", duration_days=0, hotel_pref="无", budget_pref="中等"
-    )
-
-    class FakeExtract2:
-        def invoke(self, _):
-            return vague_req
-
-    monkeypatch.setattr(trip_planner, "_extract_model", FakeExtract2)
-    out2 = itinerary_agent.run({"user_input": "帮我规划", "session_id": "会话A"})
-    assert out2.get("plan") is None
-
-
-def test_itinerary_agent_appends_weather_reminder(monkeypatch):
-    """行程 agent：生成成功且日期可查 → 答案附加目的地天气提醒（结合行程规划）；天气失败不影响主答案"""
-    from xiao_wen import trip_planner, web
-    from xiao_wen.agents import itinerary_agent
-
-    req = trip_planner.TripRequest(
-        from_city="上海", to_city="北京", start_date="2026-10-08", duration_days=4, hotel_pref="无", budget_pref="中等"
-    )
-    plan = trip_planner.ItineraryPlan(days=[], summary="北京出差 4 天", reasons=["靠近会场"])
-
-    class FakeExtract:
-        def invoke(self, _):
-            return req
-
-    class FakePlan:
-        def invoke(self, _):
-            return plan
-
-    monkeypatch.setattr(trip_planner, "_extract_model", FakeExtract)
-    monkeypatch.setattr(trip_planner, "_plan_model", FakePlan)
-    monkeypatch.setattr(
-        trip_planner, "add_itinerary", lambda facts, summary, *, session_id="default": {"summary": summary}
-    )
-
-    class FakeWeather:
-        def invoke(self, args):
-            return f"{args['city']} {args['date']} 晴 25°C"
-
-    monkeypatch.setattr(web, "get_weather", FakeWeather())
-    out = itinerary_agent.run({"user_input": "10月8日去北京开会4天", "session_id": "会话A"})
-    assert "北京出差 4 天" in out["answer"]
-    assert "目的地天气提醒" in out["answer"] and "晴" in out["answer"]
-
-    # 天气查询失败（网络/超期）：行程主答案不受影响
-    def boom(args):
-        raise RuntimeError("网络挂了")
-
-    monkeypatch.setattr(web, "get_weather", boom)
-    out2 = itinerary_agent.run({"user_input": "10月8日去北京开会4天", "session_id": "会话A"})
-    assert "北京出差 4 天" in out2["answer"]
-    assert "天气" in out2["answer"]
-    assert "暂时无法获取天气" in out2["answer"]
-
-
-def test_trip_dialogue_shows_weather_for_both_cities_and_alerts(monkeypatch):
-    """回归：后天从常驻临沂去广州出差 5 天，天气不能只输出空标题。"""
-    from xiao_wen import trip_planner, web
-    from xiao_wen.agents import itinerary_agent
-
-    req = trip_planner.TripRequest(
-        from_city="临沂",
-        to_city="广州",
-        start_date="2026-08-18",
-        duration_days=5,
-        hotel_pref="无",
-        budget_pref="中等",
-    )
-    plan = trip_planner.ItineraryPlan(
-        summary="临沂至广州出差 5 天",
-        days=[],
-        reasons=[],
-    )
-
-    class Chain:
-        def __init__(self, value):
-            self.value = value
-
-        def invoke(self, _):
-            return self.value
-
-    monkeypatch.setattr(trip_planner, "_extract_model", lambda: Chain(req))
-    monkeypatch.setattr(trip_planner, "_plan_model", lambda: Chain(plan))
-    monkeypatch.setattr(
-        trip_planner,
-        "add_itinerary",
-        lambda facts, summary, *, session_id="default": {"summary": summary},
-    )
-
-    def weather(args):
-        return {
-            "临沂": "临沂 2026-08-18 天气：小毛毛雨，最高 31°C / 最低 23°C，降水概率 26%",
-            "广州": "广州 2026-08-18 天气：雷暴，最高 32°C / 最低 25°C，降水概率 96%",
-        }[args["city"]]
-
-    monkeypatch.setattr(web, "get_weather", type("Weather", (), {"invoke": staticmethod(weather)})())
-    out = itinerary_agent.run({"user_input": "后天我要去广州出差5天", "session_id": "会话A"})
-
-    assert "🌤️ 目的地天气提醒" in out["answer"]
-    assert "出发地：临沂" in out["answer"]
-    assert "目的地：广州" in out["answer"]
-    assert "雷暴" in out["answer"]
-    assert "⚠️ 异常天气安全提醒" in out["answer"]
-    assert "目的地天气提醒：\\n\\n" not in out["answer"]
-
-
-def test_itinerary_agent_confirms_vague_date(monkeypatch):
-    """行程 agent：日期表达模糊（如只说了「下周」）→ 生成后明确提示日期是推断的、可调整；具体日期则无提示"""
-    from xiao_wen import trip_planner, web
-    from xiao_wen.agents import itinerary_agent
-
-    def run_with(req):
-        plan = trip_planner.ItineraryPlan(days=[], summary="杭州出差 3 天", reasons=[])
-
-        class FakeExtract:
-            def invoke(self, _):
-                return req
-
-        class FakePlan:
-            def invoke(self, _):
-                return plan
-
-        monkeypatch.setattr(trip_planner, "_extract_model", FakeExtract)
-        monkeypatch.setattr(trip_planner, "_plan_model", FakePlan)
-        monkeypatch.setattr(
-            trip_planner, "add_itinerary", lambda facts, summary, *, session_id="default": {"summary": summary}
-        )
-        monkeypatch.setattr(web, "get_weather", type("W", (), {"invoke": lambda self, a: "晴"})())
-        return itinerary_agent.run({"user_input": "x", "session_id": "会话A"})["answer"]
-
-    vague = trip_planner.TripRequest(
-        from_city="北京",
-        to_city="杭州",
-        start_date="2026-08-17",
-        duration_days=3,
-        hotel_pref="无",
-        budget_pref="中等",
-        date_is_vague=True,
-    )
-    out_vague = run_with(vague)
-    assert "按 2026-08-17 开始安排" in out_vague and "重新排" in out_vague
-
-    exact = trip_planner.TripRequest(
-        from_city="北京", to_city="杭州", start_date="2026-08-17", duration_days=3, hotel_pref="无", budget_pref="中等"
-    )
-    out_exact = run_with(exact)
-    assert "重新排" not in out_exact
-
-
-def test_preference_agent_skips_questions_no_garbage(monkeypatch):
-    """疑问句（「我常住哪里」）→ 提取器返回空 records → 不写任何记忆、给引导提示"""
-    from xiao_wen.agents import preference_agent
-    from xiao_wen.memory import get_preferences
-
-    recs = preference_agent.PreferenceList(records=[])
-
-    def _empty_model():
-        class M:
-            def invoke(self, _):
-                return recs
-
-        return M()
-
-    monkeypatch.setattr(preference_agent, "_pref_model", _empty_model)
-    out = preference_agent.run({"user_input": "我常住哪里", "session_id": "会话C"})
-    assert "询问" in out["answer"]
-    assert get_preferences(session_id="会话C") == [], "疑问句绝不能写进长期记忆"
-
-
-def test_preference_agent_retries_on_parse_failure(monkeypatch):
-    """BUG-005：json_mode 结构化输出偶发截断/非法 JSON → 同一输入重试，LLM 自愈"""
-    from xiao_wen.agents import preference_agent
-
-    good = preference_agent.PreferenceList(
-        records=[preference_agent.PreferenceRecord(category="住宿", content="喜欢住全季", is_update=False)]
-    )
-
-    class _FlakyModel:
-        def __init__(self, fail_times: int = 1):
-            self.calls = 0
-            self.fail_times = fail_times
-
-        def invoke(self, _):
-            self.calls += 1
-            if self.calls <= self.fail_times:
-                raise ValueError('Failed to parse PreferenceList from completion {"records": ["截断"]}')
-            return good
-
-    flaky = _FlakyModel(fail_times=1)
-    monkeypatch.setattr(preference_agent, "_pref_model", lambda: flaky)
-    out = preference_agent.run({"user_input": "我喜欢住全季", "session_id": "会话F"})
-    assert "全季" in out["answer"]
-    assert flaky.calls == 2, "首次解析失败应自动重试一次"
-
-    # 重试耗尽仍失败（重试 2 次全失败，共 3 次调用）→ 向上抛（web 层稳定性兜底），不静默
-    bad = _FlakyModel(fail_times=99)
-    monkeypatch.setattr(preference_agent, "_pref_model", lambda: bad)
-    with pytest.raises(ValueError):
-        preference_agent.run({"user_input": "我喜欢住全季", "session_id": "会话F"})
-    assert bad.calls == 3, "重试次数应为 2（共 3 次调用）"
-
-
-def test_history_agent_shows_preferences(monkeypatch):
-    """记忆查询（如「我常住哪里」）→ 历史查询 Agent 输出记忆偏好（含常驻城市）"""
-    from xiao_wen.agents import history_agent
-    from xiao_wen.memory import add_or_update_preference
-
-    add_or_update_preference("常驻城市", "上海", True, session_id="会话D")
-    out = history_agent.run({"session_id": "会话D"})
-    assert "常驻城市 上海" in out["answer"]
-
-
-def test_history_agent_answers_what_was_asked(monkeypatch):
-    """意图对齐：问「上次的行程」只答行程（无则明确空态），不无差别倒出偏好"""
-    from xiao_wen.agents import history_agent
-    from xiao_wen.memory import add_or_update_preference
-
-    add_or_update_preference("餐饮", "不吃辣", True, session_id="会话E")
-    add_or_update_preference("住宿", "喜欢安静", True, session_id="会话E")
-
-    # 行程向问题：只有偏好没有行程 → 明确「暂无历史行程」，不列偏好（原实现答非所问）
-    out = history_agent.run({"user_input": "我上次的行程是什么", "session_id": "会话E"})
-    assert "暂无历史行程记录" in out["answer"]
-    assert "不吃辣" not in out["answer"]
-
-    # 偏好向问题：只答偏好
-    out2 = history_agent.run({"user_input": "我的饮食偏好是什么", "session_id": "会话E"})
-    assert "不吃辣" in out2["answer"]
-    assert "暂无历史行程" not in out2["answer"]
-
-    # 综合查询（无关键词）：全答，且空态也说明
-    out3 = history_agent.run({"session_id": "会话E"})
-    assert "不吃辣" in out3["answer"] and "暂无历史行程记录" in out3["answer"]
-
-
-def test_history_agent_followup_never_empty(monkeypatch):
-    """BUG-001：筛选/追问句（无行程/偏好关键词）绝不返回空串，给明确空态文案"""
-    from xiao_wen.agents import history_agent
-
-    # 无任何记录的会话：原实现这些输入会得到 parts=[] → 空回复
-    followups = [
-        "还是没有杭州的记录，你再核实一下，我确定去的是杭州住民宿。",
-        "具体日期我记不清了，只记得在杭州住的是民宿，能帮我找出来吗？",
-        "对，杭州那次就是民宿，你帮我定位一下具体日期和地点。",
-        "我再按民宿筛选一次历史消费，单独查杭州的订单。",
-        "对了，我想起来杭州那次住的民宿好像在西湖区，你按这个范围再筛一下。",
-        "那次西湖区的民宿，我记不清具体日期了，只记得是工作日，能帮我查查入住时间吗？",
-    ]
-    for q in followups:
-        out = history_agent.run({"user_input": q, "session_id": "会话F"})
-        assert out["answer"].strip(), f"BUG-001 空回复：{q}"
-        assert "未找到" in out["answer"] or "暂无" in out["answer"], f"缺空态文案：{q}"
-
-
-def test_history_agent_filters_by_city(monkeypatch):
-    """BUG-001：提到城市时按城市过滤行程，未命中给带城市名的引导空态"""
-    from xiao_wen.agents import history_agent
-    from xiao_wen.memory import add_itinerary
-
-    add_itinerary(
-        {"from_city": "上海", "to_city": "武汉", "start_date": "2026-10-08", "duration_days": 2},
-        "武汉出差总结",
-        session_id="会话G",
-    )
-    add_itinerary(
-        {"from_city": "上海", "to_city": "杭州", "start_date": "2026-09-01", "duration_days": 3},
-        "杭州住民宿见客户",
-        session_id="会话G",
-    )
-
-    # 查杭州 → 只命中杭州那条，不把武汉的倒出来
-    out = history_agent.run({"user_input": "帮我单独查一下杭州的出差记录", "session_id": "会话G"})
-    assert "杭州" in out["answer"] and "武汉" not in out["answer"]
-
-    # 查没有的城市 → 带城市名的引导空态，而不是全部倒出
-    out2 = history_agent.run({"user_input": "有没有广州的出差记录", "session_id": "会话G"})
-    assert "未找到广州的记录" in out2["answer"]
-
-
-def test_stream_chat_plan_from_on_chain_end_output():
-    """普通函数节点不产生 stream chunk——plan 写在 on_chain_end 的 output 里，也必须捕获"""
-    import asyncio
-
-    from xiao_wen.session import stream_chat
-
-    plan = {"summary": "广州出差", "days": [], "reasons": [], "date_is_vague": False}
+def test_stream_forwards_agent_lifecycle_then_done():
+    store = Store()
     events = [
-        ("on_chain_start", "classify_intent", None, None),
-        ("on_chain_stream", "classify_intent", {"intent": "行程规划", "reason": "r"}, None),
-        ("on_chain_end", "classify_intent", None, None),
-        ("on_chain_start", "行程规划", None, None),
-        # 无 on_chain_stream：行程 agent 是普通函数节点，只产出 on_chain_end.output
-        ("on_chain_end", "行程规划", None, {"answer": "行程如下", "plan": plan}),
+        {"type": "run_start"},
+        {"type": "agent_start", "agent": "知识问答", "request": "住宿标准"},
+        {"type": "agent_result", "agent": "知识问答", "result": {"answer": "标准"}},
     ]
+    out = collect_stream(
+        "住宿标准",
+        loop=Loop(
+            {"answer": "标准", "intent": "知识问答", "reason": "观察完成", "transcript": []},
+            events=events,
+        ),
+        store=store,
+    )
 
-    class FakeStreamGraph:
-        async def astream_events(self, state, **kwargs):
-            for etype, node, chunk, output in events:
-                yield {
-                    "event": etype,
-                    "name": node,
-                    "metadata": {"langgraph_node": node},
-                    "data": {"chunk": chunk, "output": output},
-                }
-
-    out = []
-
-    async def run():
-        async for ev in stream_chat("规划行程", graph=FakeStreamGraph()):
-            out.append(ev)
-
-    asyncio.run(run())
-
-    done = out[-1]
-    assert done["type"] == "done"
-    assert done["answer"] == "行程如下"
-    assert done["plan"] == plan  # on_chain_end output 捕获后同样输出 dict
+    assert out[:3] == [
+        {"type": "stage", "status": "start"},
+        {"type": "stage", "status": "working", "intent": "知识问答"},
+        {"type": "stage", "status": "done", "intent": "知识问答"},
+    ]
+    assert out[-1]["type"] == "done" and out[-1]["answer"] == "标准"
+    assert store.messages["default"] == [("user", "住宿标准"), ("assistant", "标准")]
 
 
-def test_chat_falls_back_on_empty_answer(monkeypatch):
-    """防御：Agent 返回空/缺失 answer → 兜底文案，不向前端吐空串"""
-    from xiao_wen import session as sess
-
-    class FakeGraph:
-        def invoke(self, state):
-            return {"answer": "", "intent": "其他", "reason": "r"}
-
-    store = memory_store
-    r = sess.chat("你好", graph=FakeGraph(), store=store)
-    assert r.answer == sess._FALLBACK_ANSWER
-    msgs = store.get_recent_messages(6)
-    assert msgs[-1]["content"] == sess._FALLBACK_ANSWER
-
-
-def test_stream_chat_error_midstream_yields_error_and_skips_writeback():
-    """SSE 错误路径：流中途炸（已发部分阶段事件后异常）→ error 收尾，不中断、无 done、不写回记忆"""
-    import asyncio
-
-    from xiao_wen.session import stream_chat
-
-    class BoomMidGraph:
-        async def astream_events(self, state, **kwargs):
-            yield {
-                "event": "on_chain_start",
-                "name": "classify_intent",
-                "metadata": {"langgraph_node": "classify_intent"},
-                "data": {},
-            }
-            yield {
-                "event": "on_chain_start",
-                "name": "行程规划",
-                "metadata": {"langgraph_node": "行程规划"},
-                "data": {},
-            }
-            raise RuntimeError("LLM 熔断")
-
-    out = []
-
-    async def run():
-        async for ev in stream_chat("规划行程", graph=BoomMidGraph()):
-            out.append(ev)
-
-    asyncio.run(run())
-    assert out[0]["type"] == "stage"
-    assert out[-1]["type"] == "error" and "稍后再试" in out[-1]["message"]
-    assert all(e["type"] != "done" for e in out), "中途异常不应产出 done"
-    assert memory_store.get_recent_messages(6) == [], "异常时不写回记忆"
-
-
-def test_stream_chat_empty_state_yields_error_not_done():
-    """SSE 防御分支：图跑完但没产出任何 state → error 事件（而非假 done 兜底）"""
-    import asyncio
-
-    from xiao_wen.session import stream_chat
-
-    class EmptyGraph:
-        async def astream_events(self, state, **kwargs):
-            yield {
-                "event": "on_chain_start",
-                "name": "知识问答",
-                "metadata": {"langgraph_node": "知识问答"},
-                "data": {},
-            }
-            yield {
-                "event": "on_chain_end",
-                "name": "知识问答",
-                "metadata": {"langgraph_node": "知识问答"},
-                "data": {"output": None},
-            }
-
-    out = []
-
-    async def run():
-        async for ev in stream_chat("住宿标准", graph=EmptyGraph()):
-            out.append(ev)
-
-    asyncio.run(run())
-    assert out[-1]["type"] == "error"
-    assert all(e["type"] != "done" for e in out)
-    assert memory_store.get_recent_messages(6) == []
-
-
-def test_stream_chat_domain_failure_has_stable_error_contract():
-    """预期依赖故障使用 error 事件，不伪装成正常 done，也不写回记忆。"""
-    import asyncio
-
-    from xiao_wen.session import stream_chat
-
-    class FailureGraph:
-        async def astream_events(self, state, **kwargs):
-            yield {
-                "event": "on_chain_end",
-                "name": "知识问答",
-                "metadata": {"langgraph_node": "知识问答"},
-                "data": {
-                    "output": {
-                        "answer": "政策服务暂时不可用",
-                        "intent": "知识问答",
-                        "reason": "政策查询",
-                        "policy_status": "unavailable",
-                        "failure": {
-                            "code": "policy_unavailable",
-                            "message": "政策服务暂时不可用",
-                            "retryable": True,
-                        },
-                    }
-                },
-            }
-
-    async def collect():
-        return [event async for event in stream_chat("住宿标准", graph=FailureGraph())]
-
-    events = asyncio.run(collect())
-    assert events[-1] == {
+def test_stream_failure_has_stable_error_and_no_commit():
+    store = Store()
+    out = collect_stream(
+        "住宿标准",
+        loop=Loop(
+            {
+                "answer": "政策不可用",
+                "intent": "知识问答",
+                "reason": "失败",
+                "failure": {"code": "policy_unavailable", "message": "政策不可用", "retryable": True},
+                "transcript": [],
+            },
+            events=[{"type": "run_start"}],
+        ),
+        store=store,
+    )
+    assert out[-1] == {
         "type": "error",
         "code": "policy_unavailable",
-        "message": "政策服务暂时不可用",
+        "message": "政策不可用",
         "retryable": True,
         "policy_status": "unavailable",
     }
-    assert all(event["type"] != "done" for event in events)
-    assert memory_store.get_recent_messages(6) == []
+    assert store.messages == {}
+
+
+def test_stream_exception_becomes_error_event():
+    out = collect_stream("问题", loop=Loop(fail=RuntimeError("boom")), store=Store())
+    assert out[-1]["type"] == "error"
+    assert out[-1]["code"] == "service_unavailable"
+
+
+def test_default_runtime_is_agent_loop(monkeypatch):
+    from xiao_wen import session
+
+    seen = {}
+
+    class DefaultLoop(Loop):
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+            super().__init__()
+
+    monkeypatch.setattr(session, "AgentLoop", DefaultLoop)
+    result = chat("你好", store=Store())
+    assert result.answer == "答"
+    assert "cancelled" in seen
 
 
 def test_session_coordinator_reclaims_completed_session():
-    """协调器不向调用方暴露锁，并在轮次结束后回收空闲 session。"""
-    from xiao_wen import session as s
+    from xiao_wen import session
 
-    with s._session_coordinator.turn("reclaim-one"):
-        assert s._session_coordinator.active_session_count == 1
-    assert s._session_coordinator.active_session_count == 0
-
-
-def test_two_same_session_streams_complete_without_blocking_event_loop():
-    """第二个流等待同会话锁时不能阻塞第一个流所在的事件循环。"""
-    import multiprocessing
-
-    context = multiprocessing.get_context("spawn")
-    result_queue = context.Queue()
-    process = context.Process(target=_run_two_same_session_streams, args=(result_queue,))
-    process.start()
-    process.join(timeout=3)
-    if process.is_alive():
-        process.terminate()
-        process.join(timeout=1)
-        pytest.fail("两个同 session 流发生死锁：第二个锁等待阻塞了事件循环")
-
-    assert process.exitcode == 0
-    assert result_queue.get(timeout=1) == ["first-answer", "second-answer"]
+    with session._session_coordinator.turn("reclaim"):
+        assert session._session_coordinator.active_session_count == 1
+    assert session._session_coordinator.active_session_count == 0
 
 
-def test_chat_and_stream_same_session_write_turns_in_pairs():
-    """同步 chat 与异步 stream 交错时，共享协调器并保持两轮写回成对有序。"""
-    import asyncio
-    import threading
+def test_same_session_chat_is_serialized():
+    from xiao_wen import session
 
-    from xiao_wen import session as s
+    sequence = []
+    entered = threading.Event()
+    release = threading.Event()
 
-    writes = []
-    stream_entered = asyncio.Event()
-    release_stream = asyncio.Event()
-    chat_entered = threading.Event()
+    class BlockingLoop(Loop):
+        def run(self, turn, emit=None):
+            sequence.append(f"{turn['user_input']}:run")
+            entered.set()
+            release.wait(timeout=3)
+            return {"answer": f"{turn['user_input']}-答", "intent": "其他", "reason": "测试"}
 
-    class Store:
-        def format_recent_messages(self, n, *, session_id="default"):
-            return ""
-
+    class RecordingStore(Store):
         def add_message(self, role, content, *, session_id="default"):
-            writes.append((role, content))
+            sequence.append(f"{content}:{role}")
+            super().add_message(role, content, session_id=session_id)
 
-    class StreamGraph:
-        async def astream_events(self, state, **kwargs):
-            stream_entered.set()
-            await release_stream.wait()
-            node = "其他"
-            yield {
-                "event": "on_chain_stream",
-                "name": node,
-                "metadata": {"langgraph_node": node},
-                "data": {"chunk": {"answer": "stream-answer", "intent": "其他", "reason": "r"}},
-            }
+    store = RecordingStore()
 
-    class ChatGraph:
-        def invoke(self, state):
-            chat_entered.set()
-            return {"answer": "chat-answer", "intent": "其他", "reason": "r"}
+    def run(text):
+        session.chat(text, "same", loop=BlockingLoop(), store=store)
 
-    async def consume_stream():
-        return [event async for event in s.stream_chat("stream", "mixed", graph=StreamGraph(), store=Store())]
-
-    async def exercise():
-        stream_task = asyncio.create_task(consume_stream())
-        await stream_entered.wait()
-        chat_task = asyncio.create_task(asyncio.to_thread(s.chat, "chat", "mixed", graph=ChatGraph(), store=Store()))
-        await asyncio.sleep(0.05)
-        assert not chat_entered.is_set()
-        release_stream.set()
-        await asyncio.gather(stream_task, chat_task)
-
-    asyncio.run(exercise())
-    assert writes == [
-        ("user", "stream"),
-        ("assistant", "stream-answer"),
-        ("user", "chat"),
-        ("assistant", "chat-answer"),
+    first = threading.Thread(target=run, args=("first",))
+    second = threading.Thread(target=run, args=("second",))
+    first.start()
+    assert entered.wait(timeout=1)
+    second.start()
+    time.sleep(0.1)
+    assert "second:run" not in sequence
+    release.set()
+    first.join(timeout=3)
+    second.join(timeout=3)
+    assert sequence == [
+        "first:run",
+        "first:user",
+        "first-答:assistant",
+        "second:run",
+        "second:user",
+        "second-答:assistant",
     ]
 
 
 def test_different_sessions_stream_in_parallel():
-    """不同 session 不共享互斥锁，两条流可同时进入图。"""
-    import asyncio
+    from xiao_wen import session
 
-    from xiao_wen import session as s
+    entered = 0
+    guard = threading.Lock()
+    both = threading.Event()
+    release = threading.Event()
 
-    class Store:
-        def format_recent_messages(self, n, *, session_id="default"):
-            return ""
-
-        def add_message(self, role, content, *, session_id="default"):
-            return None
-
-    async def exercise():
-        entered = 0
-        both_entered = asyncio.Event()
-        release = asyncio.Event()
-
-        class Graph:
-            async def astream_events(self, state, **kwargs):
-                nonlocal entered
+    class ParallelLoop(Loop):
+        def run(self, turn, emit=None):
+            nonlocal entered
+            with guard:
                 entered += 1
                 if entered == 2:
-                    both_entered.set()
-                await release.wait()
-                node = "其他"
-                yield {
-                    "event": "on_chain_stream",
-                    "name": node,
-                    "metadata": {"langgraph_node": node},
-                    "data": {"chunk": {"answer": "done", "intent": "其他", "reason": "r"}},
-                }
+                    both.set()
+            release.wait(timeout=2)
+            return {"answer": "完成", "intent": "其他", "reason": "测试"}
 
+    async def exercise():
         async def consume(session_id):
-            return [event async for event in s.stream_chat("x", session_id, graph=Graph(), store=Store())]
+            return [event async for event in session.stream_chat("x", session_id, loop=ParallelLoop(), store=Store())]
 
-        tasks = [asyncio.create_task(consume("parallel-a")), asyncio.create_task(consume("parallel-b"))]
-        await asyncio.wait_for(both_entered.wait(), timeout=1)
+        tasks = [asyncio.create_task(consume("a")), asyncio.create_task(consume("b"))]
+        assert await asyncio.to_thread(both.wait, 1)
         release.set()
         await asyncio.gather(*tasks)
 
     asyncio.run(exercise())
 
 
-def test_cancelled_stream_releases_session_for_next_turn():
-    """流取消后释放持有状态，下一轮同 session 可立即继续。"""
-    import asyncio
+def test_cancelled_stream_stops_loop_and_skips_commit(monkeypatch):
     from contextlib import suppress
 
-    from xiao_wen import session as s
+    from xiao_wen import session
 
-    class Store:
-        def format_recent_messages(self, n, *, session_id="default"):
-            return ""
+    entered = threading.Event()
+    store = Store()
 
-        def add_message(self, role, content, *, session_id="default"):
-            return None
+    class CancellableLoop:
+        def __init__(self, *, cancelled):
+            self.cancelled = cancelled
 
-    async def exercise():
-        entered = asyncio.Event()
-
-        class BlockingGraph:
-            async def astream_events(self, state, **kwargs):
-                entered.set()
-                await asyncio.Event().wait()
-                yield
-
-        class WorkingGraph:
-            async def astream_events(self, state, **kwargs):
-                node = "其他"
-                yield {
-                    "event": "on_chain_stream",
-                    "name": node,
-                    "metadata": {"langgraph_node": node},
-                    "data": {"chunk": {"answer": "recovered", "intent": "其他", "reason": "r"}},
-                }
-
-        async def consume(graph):
-            return [event async for event in s.stream_chat("x", "cancelled", graph=graph, store=Store())]
-
-        blocked = asyncio.create_task(consume(BlockingGraph()))
-        await entered.wait()
-        blocked.cancel()
-        with suppress(asyncio.CancelledError):
-            await blocked
-        recovered = await asyncio.wait_for(consume(WorkingGraph()), timeout=1)
-        assert recovered[-1]["answer"] == "recovered"
-
-    asyncio.run(exercise())
-    assert s._session_coordinator.active_session_count == 0
-
-
-def test_cancelled_waiting_stream_does_not_acquire_lock_later():
-    """取消正在等待锁的流后，后台线程不能迟到获取并永久占锁。"""
-    import asyncio
-    import threading
-    from contextlib import suppress
-
-    from xiao_wen import session as s
-
-    holder_entered = threading.Event()
-    release_holder = threading.Event()
-
-    class Store:
-        def format_recent_messages(self, n, *, session_id="default"):
-            return ""
-
-        def add_message(self, role, content, *, session_id="default"):
-            return None
-
-    class HoldingGraph:
-        def invoke(self, state):
-            holder_entered.set()
-            release_holder.wait(timeout=2)
-            return {"answer": "holder", "intent": "其他", "reason": "r"}
-
-    class WorkingGraph:
-        async def astream_events(self, state, **kwargs):
-            node = "其他"
-            yield {
-                "event": "on_chain_stream",
-                "name": node,
-                "metadata": {"langgraph_node": node},
-                "data": {"chunk": {"answer": "recovered", "intent": "其他", "reason": "r"}},
+        def run(self, turn, emit=None):
+            if emit:
+                emit({"type": "run_start"})
+            entered.set()
+            while not self.cancelled():
+                time.sleep(0.01)
+            return {
+                "answer": "请求已取消",
+                "intent": "",
+                "reason": "cancelled",
+                "failure": {"code": "cancelled", "message": "请求已取消", "retryable": False},
+                "transcript": [],
             }
 
-    async def consume():
-        return [event async for event in s.stream_chat("x", "waiting-cancel", graph=WorkingGraph(), store=Store())]
+    monkeypatch.setattr(session, "AgentLoop", CancellableLoop)
 
     async def exercise():
-        holder = asyncio.create_task(
-            asyncio.to_thread(s.chat, "holder", "waiting-cancel", graph=HoldingGraph(), store=Store())
-        )
-        assert await asyncio.to_thread(holder_entered.wait, 1)
-        waiter = asyncio.create_task(consume())
-        await asyncio.sleep(0.01)
-        waiter.cancel()
+        stream = cast(AsyncGenerator[dict, None], session.stream_chat("x", "cancelled", store=store))
+        first = await asyncio.wait_for(anext(stream), 1)
+        assert entered.is_set()
+        assert first["status"] == "start"
+        close = asyncio.ensure_future(stream.aclose())
         with suppress(asyncio.CancelledError):
-            await waiter
-        release_holder.set()
-        await holder
-        recovered = await asyncio.wait_for(consume(), timeout=1)
-        assert recovered[-1]["answer"] == "recovered"
+            await asyncio.wait_for(close, 1)
 
     asyncio.run(exercise())
-    assert s._session_coordinator.active_session_count == 0
+    assert store.messages == {}
+    assert store.transcripts == {}
+    assert session._session_coordinator.active_session_count == 0
 
 
-def test_many_one_shot_sessions_do_not_grow_coordinator_table():
-    """大量一次性 session 完成后不永久保留锁项。"""
-    from xiao_wen import session as s
+def test_many_sessions_do_not_leak_coordinator_entries():
+    from xiao_wen import session
 
-    class Store:
-        def format_recent_messages(self, n, *, session_id="default"):
-            return ""
-
-        def add_message(self, role, content, *, session_id="default"):
-            return None
-
-    class Graph:
-        def invoke(self, state):
-            return {"answer": "done", "intent": "其他", "reason": "r"}
-
-    for index in range(200):
-        s.chat("x", f"one-shot-{index}", graph=Graph(), store=Store())
-
-    assert s._session_coordinator.active_session_count == 0
-
-
-def test_chat_same_session_serialized():
-    """同 session 并发两轮 chat：闭环串行化，user/assistant 写回成对不交错
-
-    无锁时第二轮会读旧 recent 并提前进入 invoke，写回顺序错乱（user,user,ai,ai）。
-    """
-    import threading
-    import time
-
-    from xiao_wen import session as s
-
-    seq: list[str] = []
-    entered = threading.Event()
-    release = threading.Event()
-
-    class BlockingGraph:
-        def invoke(self, state_in):
-            seq.append(f"{state_in['user_input']}:invoke")
-            entered.set()
-            release.wait(timeout=5)  # 第一轮阻塞持锁，第二轮必须等待
-            return {"answer": f"{state_in['user_input']}-ans", "intent": "其他", "reason": "r"}
-
-    class FakeStore:
-        def format_recent_messages(self, n, session_id=None):
-            return "无"
-
-        def add_message(self, role, content, session_id=None):
-            seq.append(f"{content}:{role}")
-            return {}
-
-    def run(text):
-        s.chat(text, "u-serial", graph=BlockingGraph(), store=FakeStore())
-
-    t1 = threading.Thread(target=run, args=("first",))
-    t1.start()
-    assert entered.wait(timeout=2), "第一轮应进入 invoke"
-
-    t2 = threading.Thread(target=run, args=("second",))
-    t2.start()
-    time.sleep(0.2)  # 给第二轮时间尝试拿锁
-    assert "second:invoke" not in seq, "串行化下第二轮不应在锁释放前开始"
-
-    release.set()  # 放行第一轮
-    t1.join(timeout=5)
-    t2.join(timeout=5)
-
-    assert seq == [
-        "first:invoke",
-        "first:user",
-        "first-ans:assistant",
-        "second:invoke",
-        "second:user",
-        "second-ans:assistant",
-    ], seq
+    for index in range(100):
+        session.chat("x", f"one-{index}", loop=Loop(), store=Store())
+    assert session._session_coordinator.active_session_count == 0

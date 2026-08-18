@@ -99,10 +99,25 @@ def run(state) -> dict:
         return {"answer": "这是询问而非偏好陈述——如果你告诉我「我常住上海」「我喜欢住汉庭」这类信息，我会帮你记下。"}
     session_id = state.get("user_id", state.get("session_id", "default"))
     lines: list[str] = []
+    writes = []
     for rec in r.records:
         if cancelled():
             raise RuntimeError("请求已取消")
-        stored = add_or_update_preference(rec.category, rec.content, rec.is_update, session_id=session_id)
         act = "更新" if rec.is_update else "新增"
-        lines.append(f"✅ 已{act}偏好：{stored['category']}｜{stored['content']}（{stored['ts']}）")
-    return {"answer": "\n".join(lines) if lines else "✅ 已记录偏好"}
+        if state.get("_defer_writes"):
+            writes.append(
+                {
+                    "type": "preference",
+                    "category": rec.category,
+                    "content": rec.content,
+                    "is_update": rec.is_update,
+                }
+            )
+            lines.append(f"✅ 已{act}偏好：{rec.category}｜{rec.content}")
+        else:
+            stored = add_or_update_preference(rec.category, rec.content, rec.is_update, session_id=session_id)
+            lines.append(f"✅ 已{act}偏好：{stored['category']}｜{stored['content']}（{stored['ts']}）")
+    result: dict[str, object] = {"answer": "\n".join(lines) if lines else "✅ 已记录偏好"}
+    if writes:
+        result["memory_writes"] = writes
+    return result

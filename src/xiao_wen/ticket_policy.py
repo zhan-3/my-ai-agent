@@ -59,7 +59,7 @@ def validate_ticket_dates(travel_date: str, return_date: str = "", *, today: dat
         outbound = date.fromisoformat(travel_date)
         inbound = date.fromisoformat(return_date) if return_date else None
     except ValueError:
-        return None
+        return "日期格式无效，请使用 YYYY-MM-DD。"
     latest, source = latest_query_date(today)
     if outbound < today:
         return f"出发日期 {travel_date} 已经过去。"

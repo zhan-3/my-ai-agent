@@ -40,13 +40,8 @@ def test_observed_chat_attaches_recorder_and_finishes(monkeypatch):
             self.finished = True
 
     observer = Observer()
-    graph = object()
     calls = []
     monkeypatch.setattr(observability, "start_turn", lambda text, user: observer)
-
-    import xiao_wen.graph_builder as graph_builder
-
-    monkeypatch.setattr(graph_builder, "build_supervisor_graph", lambda recorder=None: graph)
 
     def fake_run_chat(text, user, **kwargs):
         calls.append((text, user, kwargs))
@@ -59,7 +54,7 @@ def test_observed_chat_attaches_recorder_and_finishes(monkeypatch):
         (
             "你好",
             "trace-user:conversation",
-            {"user_id": "trace-user", "graph": graph, "recorder": observer.recorder},
+            {"user_id": "trace-user", "recorder": observer.recorder},
         )
     ]
     assert observer.finished
@@ -74,13 +69,8 @@ def test_observed_stream_attaches_recorder_and_finishes(monkeypatch):
             self.finished = True
 
     observer = Observer()
-    graph = object()
     calls = []
     monkeypatch.setattr(observability, "start_turn", lambda text, user: observer)
-
-    import xiao_wen.graph_builder as graph_builder
-
-    monkeypatch.setattr(graph_builder, "build_supervisor_graph", lambda recorder=None: graph)
 
     async def fake_stream(text, user, **kwargs):
         calls.append((text, user, kwargs))
@@ -96,29 +86,25 @@ def test_observed_stream_attaches_recorder_and_finishes(monkeypatch):
         (
             "你好",
             "trace-user:conversation",
-            {"user_id": "trace-user", "graph": graph, "recorder": observer.recorder},
+            {"user_id": "trace-user", "recorder": observer.recorder},
         )
     ]
     assert observer.finished
 
 
-def test_stream_chat_records_recent_final_and_memory_write():
+def test_stream_chat_records_loop_events_final_and_memory_write():
     from xiao_wen.session import stream_chat
 
     recorder = Recorder()
 
-    class Graph:
-        async def astream_events(self, state, **kwargs):
-            yield {
-                "event": "on_chain_stream",
-                "name": "其他",
-                "metadata": {"langgraph_node": "其他"},
-                "data": {"chunk": {"answer": "你好", "intent": "其他", "reason": "问候"}},
-            }
+    class Loop:
+        def run(self, state, emit=None):
+            emit({"type": "run_start"})
+            return {"answer": "你好", "intent": "其他", "reason": "问候", "transcript": []}
 
     async def collect():
-        return [event async for event in stream_chat("你好", graph=Graph(), recorder=recorder)]
+        return [event async for event in stream_chat("你好", loop=Loop(), recorder=recorder)]
 
     events = asyncio.run(collect())
     assert events[-1]["type"] == "done"
-    assert [event["type"] for event in recorder.events] == ["recent", "final", "memory_write"]
+    assert [event["type"] for event in recorder.events] == ["recent", "run_start", "final", "memory_write"]

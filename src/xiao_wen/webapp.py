@@ -6,8 +6,8 @@
     （也可用 `uv run xiao-wen` 等价启动）
 
 设计：
-- 复用图工厂（graph_builder）调度图（子 Agent 注册表驱动主管架构，多意图并行），不重写任何 Agent 逻辑
-- 记忆闭环收口于 xiao_wen.session.chat（读 recent → 注入 → invoke → 写回两轮）
+- 主管使用有界 Agent Loop，子 Agent 由注册中心动态发现并懒加载
+- 记忆闭环收口于 xiao_wen.session.chat（读 recent → Loop → 写回 transcript 与用户/助手消息）
 - 异常兜底在 web 层（session 层向上抛）：任何异常给友好降级文案
 - 认证与线程（ADR-0007/0009）：JWT 用户名决定长期记忆所有者；客户端 conversation_id
   只决定该用户作用域内的可见对话线程
@@ -34,8 +34,8 @@ from xiao_wen.contract import (
     TravelStats,
     TripPlan,
 )
-from xiao_wen.session import chat as run_chat  # 会话循环收口（默认 = 图工厂调度图，多意图并行）
-from xiao_wen.session import service_error_event, stream_chat  # 流式会话循环（SSE 阶段事件）
+from xiao_wen.session import chat as run_chat
+from xiao_wen.session import service_error_event, stream_chat
 
 
 @asynccontextmanager
@@ -79,11 +79,8 @@ def _observed_chat(text: str, user: str, thread_id: str):
     observer = start_turn(text, thread_id)
     if observer is None:
         return run_chat(text, thread_id, user_id=user)
-    from xiao_wen.graph_builder import build_supervisor_graph
-
     try:
-        graph = build_supervisor_graph(recorder=observer.recorder)
-        return run_chat(text, thread_id, user_id=user, graph=graph, recorder=observer.recorder)
+        return run_chat(text, thread_id, user_id=user, recorder=observer.recorder)
     except Exception as error:
         observer.recorder.record({"type": "error", "code": "unhandled", "message": str(error)})
         raise
@@ -99,17 +96,8 @@ async def _observed_stream(text: str, user: str, thread_id: str):
         async for event in stream_chat(text, thread_id, user_id=user):
             yield event
         return
-    from xiao_wen.graph_builder import build_supervisor_graph
-
     try:
-        graph = build_supervisor_graph(recorder=observer.recorder)
-        async for event in stream_chat(
-            text,
-            thread_id,
-            user_id=user,
-            graph=graph,
-            recorder=observer.recorder,
-        ):
+        async for event in stream_chat(text, thread_id, user_id=user, recorder=observer.recorder):
             yield event
     except Exception as error:
         observer.recorder.record({"type": "error", "code": "unhandled", "message": str(error)})
@@ -176,9 +164,7 @@ def _sse(event: dict) -> str:
 
 @app.post("/api/chat/stream")
 def chat_stream(req: ChatRequest, authorization: str | None = Header(default=None)) -> StreamingResponse:
-    """SSE 流式聊天：阶段事件（意图识别/子 Agent 进度）+ 最终 done（answer/intent/reason/plan）。
-    旧前端 / 旧契约走 /api/chat 不受影响；阶段事件让长 LLM 等待有实时进度反馈。
-    """
+    """SSE 流式聊天：子 Agent 生命周期事件 + 最终 done。"""
     user = _current_user(authorization)
     from xiao_wen.dialogue import make_thread_id
 

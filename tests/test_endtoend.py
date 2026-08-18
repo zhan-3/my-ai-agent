@@ -1,7 +1,7 @@
 """真实产品接缝 smoke：只断言结构化 outcome、持久化状态与证据，不锁定模型措辞。
 
-意图标签质量由人工审阅的 intent_contract.jsonl 单独评测；航班/建议消歧由纯函数测试覆盖。
-本文件验证真实 LLM、Embedding、图编排和 Postgres 能共同完成少量关键闭环。
+本文件验证真实 LLM、Embedding、主管 Agent Loop 和 Postgres 能共同完成少量关键闭环；
+只断言稳定 outcome，不冻结模型的中间决策文本。
 """
 
 from datetime import date, timedelta
@@ -65,8 +65,8 @@ def test_external_agent_returns_structured_stats():
 
 
 @pytest.mark.integration
-def test_parallel_history_and_stats_merge_outcomes():
-    """真实模型拆分多意图，图合并两个确定性分支的结构化结果。"""
+def test_loop_observes_history_then_stats_outcomes():
+    """真实主管可依次调用两个子 Agent，并保留两个结构化 observation。"""
     session_id = "integration-parallel"
     past = date.today() - timedelta(days=30)
     memory.add_itinerary(
@@ -80,7 +80,7 @@ def test_parallel_history_and_stats_merge_outcomes():
         session_id=session_id,
     )
     result = chat("我上次的行程是什么，顺便统计一下出差次数", session_id=session_id)
-    assert result.intent == "历史查询"
+    assert result.intent == "差旅统计"
     assert result.failure is None
     assert result.history is not None and result.history.itineraries
     assert result.stats is not None and result.stats.trips == 1

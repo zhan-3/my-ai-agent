@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -20,6 +21,7 @@ Emit = Callable[[dict[str, Any]], None]
 @dataclass(frozen=True)
 class LoopLimits:
     max_steps: int = 6
+    max_tool_calls: int = 6
     timeout_seconds: float = 60
     max_tokens: int = 12_000
     max_repeat_calls: int = 2
@@ -28,12 +30,18 @@ class LoopLimits:
 _SYSTEM = """你是晓问的主管 Agent，只处理企业差旅。
 你可以直接回答简单问候；其他任务应调用最合适的子 Agent，并在看到结果后再决定是否继续调用。
 政策、报销、住宿标准必须调用知识问答；天气、汇率、空气质量和铁路查询必须调用联网查询；
-行程、偏好和历史问题必须调用对应子 Agent。不得编造政策、天气、车次、余票、票价、订单或购买结果。
-调用参数 request 应是子 Agent 可独立理解的完整请求。最终回答只能使用已观察到的结果，不输出思维过程。"""
+新行程或补全行程调用行程规划；只有用户明确查询已保存的记录时才调用历史查询。
+仅陈述常住城市、餐饮、住宿等偏好而未要求规划时，只调用偏好记录，绝不自行调用行程规划。
+若存在活跃行程任务，只有本轮信息直接回答 missing 列表中的缺项时才继续调用行程规划；
+“我现在常住某地”既要调用偏好记录，也要继续调用行程规划。餐饮/住宿偏好若不是当前缺项，属于独立插入请求，
+只调用偏好记录并提醒活跃行程仍保留，不要调用行程规划。政策或实时查询也可以暂时打断行程。
+不得编造政策、天气、车次、余票、票价、订单或购买结果。调用参数 request 应包含本轮原话和必要的活跃任务信息，
+成为子 Agent 可独立理解的完整请求。最终回答只能使用已观察到的结果，不输出思维过程。"""
 
 _POLICY_WORDS = ("政策", "报销", "住宿标准", "差旅标准", "审批")
 _WEATHER_WORDS = ("天气", "气温", "下雨", "降雨", "台风", "雷暴")
-_TICKET_WORDS = ("车票", "车次", "余票", "高铁票", "火车票")
+_TICKET_WORDS = ("车票", "车次", "余票", "高铁票", "火车票", "12306", "铁路", "高铁", "动车", "票价", "购票")
+_TICKET_ACTIONS = ("查", "查询", "票", "余", "购", "买", "价格", "多少钱", "时刻")
 _OUTPUT_KEYS = ("plan", "stats", "history", "task_update", "failure")
 
 
@@ -66,6 +74,7 @@ class AgentLoop:
         outputs: list[tuple[str, dict[str, Any]]] = []
         repeats: Counter[str] = Counter()
         completed: set[str] = set()
+        tool_count = 0
         tokens = _estimate_tokens(_SYSTEM) + _estimate_tokens(prompt)
         deadline = time.monotonic() + self._limits.timeout_seconds
 
@@ -83,7 +92,7 @@ class AgentLoop:
             failure = self._boundary_failure(deadline, tokens)
             if failure:
                 return _failed(failure, send, messages)
-            send({"type": "assistant", "step": step, "content": _text(message)})
+            send({"type": "assistant", "step": step, "content": "" if message.tool_calls else _text(message)})
 
             if not message.tool_calls:
                 result = _result(turn["user_input"], _text(message), outputs, messages)
@@ -91,6 +100,7 @@ class AgentLoop:
                 return result
 
             for tool_call in message.tool_calls:
+                tool_count += 1
                 failure = self._boundary_failure(deadline, tokens)
                 if failure:
                     return _failed(failure, send, messages)
@@ -101,13 +111,25 @@ class AgentLoop:
                 signature = json.dumps([intent, request], ensure_ascii=False)
                 repeats[signature] += 1
                 send({"type": "agent_start", "agent": intent or name, "request": request, "tool_call_id": call_id})
-                post_failure = None
+                post_failure: dict[str, Any] | None = None
+                outcome: dict[str, Any]
 
                 if intent is None:
                     outcome = {"error": f"未知子 Agent：{name}"}
                     is_error = True
                 elif not request:
                     outcome = {"error": "request 不能为空"}
+                    is_error = True
+                elif tool_count > self._limits.max_tool_calls:
+                    outcome = {"error": "本轮已达到子 Agent 调用上限"}
+                    is_error = True
+                    post_failure = {
+                        "code": "agent_limit",
+                        "message": "本轮已达到子 Agent 调用上限，请缩小问题范围后重试。",
+                        "retryable": True,
+                    }
+                elif intent == "行程规划" and not _trip_requested(turn):
+                    outcome = {"error": "用户没有请求新行程，也没有提供活跃行程当前所缺的信息"}
                     is_error = True
                 elif signature in completed:
                     outcome = {"error": "相同子 Agent 请求已执行过，不会重复产生副作用"}
@@ -120,7 +142,13 @@ class AgentLoop:
                         if intent in {"偏好记录", "行程规划"}:
                             completed.add(signature)
                         raw_outcome = self._load(intent).run(
-                            {**turn, "user_input": request, "_cancelled": self._cancelled}
+                            {
+                                **turn,
+                                "user_input": turn["user_input"],
+                                "agent_request": request,
+                                "_cancelled": self._cancelled,
+                                "_defer_writes": True,
+                            }
                         )
                         outcome = _normalize_outcome(raw_outcome)
                         post_failure = self._boundary_failure(deadline, tokens)
@@ -147,7 +175,7 @@ class AgentLoop:
                         "result": outcome,
                     }
                 )
-                serialized = json.dumps(outcome, ensure_ascii=False, default=str)
+                serialized = json.dumps(_model_observation(intent or name, outcome), ensure_ascii=False, default=str)
                 tokens += _estimate_tokens(serialized)
                 messages.append(ToolMessage(content=serialized, tool_call_id=call_id, name=name))
                 if post_failure:
@@ -173,6 +201,43 @@ class AgentLoop:
         return None
 
 
+def _trip_requested(turn: dict[str, Any]) -> bool:
+    text = str(turn.get("user_input", ""))
+    active = turn.get("active_task")
+    if isinstance(active, dict) and active.get("intent") == "行程规划":
+        from xiao_wen.reference_data import KNOWN_CITIES
+
+        missing = active.get("missing") or []
+        if "出发城市" in missing and ("常住" in text or any(city in text for city in KNOWN_CITIES)):
+            return True
+        if any("天数" in str(item) for item in missing) and re.search(r"\d+\s*天", text):
+            return True
+        if any("日期" in str(item) for item in missing) and re.search(r"\d|今天|明天|后天|下周", text):
+            return True
+        return any("目的" in str(item) for item in missing) and any(city in text for city in KNOWN_CITIES)
+    return any(word in text for word in ("规划", "安排行程", "行程安排")) or bool(
+        re.search(r"(?:去|到|前往).{1,12}(?:开会|出差|拜访|培训)", text)
+    )
+
+
+def _model_observation(agent: str, outcome: dict[str, Any]) -> dict[str, Any]:
+    observation: dict[str, Any] = {
+        "agent": agent,
+        **{key: outcome[key] for key in ("answer", "error", "error_type") if key in outcome},
+    }
+    for key in ("policy_status", "realtime_status", "ticket_status", "failure"):
+        if key in outcome:
+            observation[key] = outcome[key]
+    sources = outcome.get("sources")
+    if isinstance(sources, list):
+        observation["evidence_ids"] = [
+            source["evidence_id"]
+            for source in sources
+            if isinstance(source, dict) and isinstance(source.get("evidence_id"), str)
+        ]
+    return observation
+
+
 def _normalize_outcome(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or not isinstance(value.get("answer"), str) or not value["answer"].strip():
         raise TypeError("子 Agent 必须返回含非空 answer 的 dict")
@@ -181,6 +246,8 @@ def _normalize_outcome(value: Any) -> dict[str, Any]:
             raise TypeError(f"子 Agent 字段 {key} 必须是字符串")
     if "sources" in value and not isinstance(value["sources"], list):
         raise TypeError("子 Agent 字段 sources 必须是列表")
+    if "memory_writes" in value and not isinstance(value["memory_writes"], list):
+        raise TypeError("子 Agent 字段 memory_writes 必须是列表")
     return value
 
 
@@ -234,6 +301,10 @@ def _message_tokens(message: AIMessage) -> int:
     return int(value or 0)
 
 
+def _ticket_requested(text: str) -> bool:
+    return any(word in text for word in _TICKET_WORDS) and any(word in text for word in _TICKET_ACTIONS)
+
+
 def _result(
     user_input: str,
     answer: str,
@@ -244,7 +315,7 @@ def _result(
     latest = list(by_intent.items())
     result: dict[str, Any] = {
         "answer": answer or "（暂无回复，请换个说法再试一次）",
-        "intent": outputs[0][0] if outputs else "其他",
+        "intent": outputs[-1][0] if outputs else "其他",
         "reason": "主管根据子 Agent observation 完成" if outputs else "主管直接回答",
         "transcript": _transcript(messages[1:]),
     }
@@ -266,13 +337,16 @@ def _result(
             seen.add(evidence_id)
             sources.append(source)
     result["sources"] = sources
+    result["memory_writes"] = [
+        write for _, out in latest for write in (out.get("memory_writes") or []) if isinstance(write, dict)
+    ]
     allowed_statuses = {"unavailable", "ambiguous", "stale", "grounded", "not_found"}
     statuses = [str(out["policy_status"]) for _, out in latest if out.get("policy_status") in allowed_statuses]
     if statuses:
         priority = {"unavailable": 5, "ambiguous": 4, "stale": 3, "grounded": 2, "not_found": 1}
         result["policy_status"] = max(statuses, key=lambda status: priority[status])
 
-    if any(word in user_input for word in _TICKET_WORDS):
+    if _ticket_requested(user_input):
         web = by_intent.get("联网查询", {})
         web_answer = web.get("answer")
         if isinstance(web_answer, str) and _safe_ticket_answer(web_answer, web.get("ticket_status")):
@@ -339,7 +413,13 @@ def _transcript(messages: list[Any]) -> list[dict[str, Any]]:
         if isinstance(message, HumanMessage):
             transcript.append({"role": "user", "content": message.content})
         elif isinstance(message, AIMessage):
-            transcript.append({"role": "assistant", "content": _text(message), "tool_calls": list(message.tool_calls)})
+            transcript.append(
+                {
+                    "role": "assistant",
+                    "content": "" if message.tool_calls else _text(message),
+                    "tool_calls": list(message.tool_calls),
+                }
+            )
         elif isinstance(message, ToolMessage):
             transcript.append(
                 {

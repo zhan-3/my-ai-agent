@@ -3,7 +3,7 @@
 - S1：MemoryBackend 协议（8 方法）+ PostgresBackend（唯一后端）
 - S2：核心验收——同一后端下 session A 写消息/偏好/行程，session B 三域全空；
   组合函数（常驻城市/常用目的地）也按 session 隔离
-- 隔离由 conftest autouse fixture 保证（每测试前 clear_all 三张表）
+- 隔离由 conftest autouse fixture 保证（每测试前 clear_all 全部业务表）
 """
 
 import os
@@ -35,6 +35,14 @@ def test_backend_messages_append_in_order():
     recent = b.get_recent_messages("A", 6)
     assert [m["role"] for m in recent] == ["user", "assistant"]
     assert recent[1]["content"].startswith("你好")
+
+
+def test_agent_transcript_module_roundtrip():
+    _fresh()
+    transcript = [{"role": "assistant", "content": "", "tool_calls": [{"name": "agent_0"}]}]
+    memory.add_agent_transcript(transcript, session_id="A")
+    assert memory.get_recent_agent_transcripts(1, session_id="A")[0]["transcript"] == transcript
+    assert memory.get_recent_agent_transcripts(1, session_id="B") == []
 
 
 def test_backend_preference_update_overrides_category():

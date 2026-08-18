@@ -22,7 +22,6 @@ def _web_query(question: str, ctx: str = "无") -> tuple[str, str]:
         msgs.append(("system", f"以下是本次对话上文，新问题可能省略了主语（如「那上海呢」）：\n{ctx}"))
     msgs.append(("human", question))
     result = _web.app.invoke({"messages": msgs})
-    answer = str(result["messages"][-1].content)
     expected = set()
     if any(word in question for word in ("天气", "气温", "下雨", "降雨", "台风", "雷暴")):
         expected.add("get_weather")
@@ -33,13 +32,13 @@ def _web_query(question: str, ctx: str = "无") -> tuple[str, str]:
     tool_messages = [message for message in result["messages"] if message.type == "tool"]
     used = {message.name for message in tool_messages}
     if not expected or not expected.issubset(used):
-        return answer, "unavailable"
+        return "暂时无法获取可靠实时信息，请稍后重试。", "unavailable"
     tool_text = "\n".join(str(message.content) for message in tool_messages if message.name in expected)
     if any(word in tool_text for word in ("失败", "服务可能不稳定", "暂时无法")):
-        return answer, "unavailable"
+        return tool_text, "unavailable"
     if any(word in tool_text for word in ("未找到", "仅支持", "不支持", "无法识别", "已经过去", "超出")):
-        return answer, "invalid"
-    return answer, "grounded"
+        return tool_text, "invalid"
+    return tool_text, "grounded"
 
 
 def _normalize_date(value: str) -> str:
@@ -86,9 +85,10 @@ def _ticket_request(question: str, recent: str) -> tuple[str, str, str, str] | N
 def run(state) -> dict:
     """真实现：联网查询（天气/汇率/空气质量/铁路12306查询入口）+ 短期记忆上下文"""
     question = state["user_input"]
-    if any(word in question for word in ("车票", "车次", "余票", "高铁票")) and any(
-        word in question for word in ("查", "看", "查询", "有没有")
-    ):
+    if any(
+        word in question
+        for word in ("车票", "车次", "余票", "高铁票", "火车票", "12306", "铁路", "高铁", "动车", "票价", "购票")
+    ) and any(word in question for word in ("查", "看", "查询", "有没有", "票", "余", "购", "买", "价格", "时刻")):
         request = _ticket_request(question, state.get("recent", ""))
         if request:
             answer = _web.search_train_tickets.func(*request)  # type: ignore[attr-defined]

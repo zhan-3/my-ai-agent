@@ -107,7 +107,8 @@ def validate_trip(
     candidate_texts = [plan.summary, *plan.reasons]
     for item in days:
         candidate_texts.extend((item.transport, item.hotel, *item.activities, item.notes))
-    policy_claims = [text for text in candidate_texts if _POLICY_CLAIM_RE.search(text)]
+    clauses = [clause.strip() for text in candidate_texts for clause in re.split(r"[，。；;\n]", text)]
+    policy_claims = [clause for clause in clauses if _POLICY_CLAIM_RE.search(clause)]
     policy_facts = getattr(policy_context, "facts", ())
     policy_status = getattr(policy_context, "status", "")
     if policy_status in {"ambiguous", "stale"}:

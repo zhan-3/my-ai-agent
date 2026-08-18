@@ -36,6 +36,12 @@ class TestPostgresBackend:
         assert [m["content"] for m in b.get_recent_messages("B", 6)] == ["B的消息"]
         assert b.get_recent_messages("C", 6) == []
 
+    def test_agent_transcripts_roundtrip_and_isolated(self, b):
+        transcript = [{"role": "assistant", "tool_calls": [{"name": "agent_0"}]}, {"role": "tool", "content": "结果"}]
+        b.add_agent_transcript("A", transcript)
+        assert b.get_recent_agent_transcripts("A", 1)[0]["transcript"] == transcript
+        assert b.get_recent_agent_transcripts("B", 1) == []
+
     def test_preferences_override_and_isolated(self, b):
         b.add_or_update_preference("A", "常驻城市", "上海")
         b.add_or_update_preference("A", "常驻城市", "北京", is_update=True)

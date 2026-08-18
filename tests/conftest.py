@@ -1,6 +1,6 @@
 """pytest 公共配置：把 src/（src 布局包）加进 sys.path，并保证测试不碰真实数据文件
 
-记忆隔离：单后端架构（Postgres）——每个测试前清空三张表并注入全新 PostgresBackend，
+记忆隔离：单后端架构（Postgres）——每个测试前清空业务表并注入全新 PostgresBackend，
 绝不共享或读写开发库；必须显式提供 POSTGRES_TEST_URL 独立测试库。
 """
 

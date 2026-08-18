@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage
 
-from xiao_wen.agent_loop import AgentLoop, LoopLimits
+from xiao_wen.agent_loop import AgentLoop, LoopLimits, _trip_requested
 
 
 class ScriptedModel:
@@ -45,6 +45,25 @@ def test_direct_final_uses_no_child_agent():
     assert loaded == []
 
 
+def test_side_effecting_child_receives_original_user_input():
+    model = ScriptedModel(call("agent_0", "用户改为明天去广州"), AIMessage(content="完成"))
+    seen = {}
+
+    def load_child(_intent):
+        def run(state):
+            seen.update(state)
+            return {"answer": "已规划"}
+
+        return SimpleNamespace(run=run)
+
+    loop = AgentLoop(model=model, discover_agents=lambda: manifests("行程规划"), load_child=load_child)
+    loop.run({"user_input": "2026-09-20去北京开会", "recent": "无"})
+
+    assert seen["user_input"] == "2026-09-20去北京开会"
+    assert seen["agent_request"] == "用户改为明天去广州"
+    assert seen["_defer_writes"] is True
+
+
 def test_tool_result_is_observed_before_next_decision():
     model = ScriptedModel(call("agent_0", "住宿标准是什么"), AIMessage(content="住宿标准如下。"))
     seen = []
@@ -83,7 +102,7 @@ def test_multiple_child_calls_are_model_driven():
 
     def load_child(intent):
         def run(state):
-            calls.append((intent, state["user_input"]))
+            calls.append((intent, state["agent_request"]))
             if intent == "知识问答":
                 return {
                     "answer": "知识问答结果",
@@ -99,7 +118,7 @@ def test_multiple_child_calls_are_model_driven():
 
     assert calls == [("知识问答", "查询住宿政策"), ("联网查询", "查询北京天气")]
     assert result["answer"] == "知识问答结果\n\n联网查询结果"
-    assert result["intent"] == "知识问答"
+    assert result["intent"] == "联网查询"
 
 
 def test_child_failure_is_returned_to_model_for_recovery():
@@ -140,6 +159,38 @@ def test_repeated_call_is_blocked_and_loop_is_bounded():
 
     assert len(executions) == 1
     assert result["failure"]["code"] == "agent_limit"
+
+
+def test_active_trip_accepts_pure_city_as_missing_destination():
+    assert _trip_requested(
+        {
+            "user_input": "杭州",
+            "active_task": {"intent": "行程规划", "missing": ["目的城市"]},
+        }
+    )
+
+
+def test_unsolicited_trip_side_effect_is_blocked():
+    model = ScriptedModel(
+        call("agent_0", "用户说出差不吃辣", "trip"),
+        call("agent_1", "记录不吃辣", "preference"),
+        AIMessage(content="偏好已记录。"),
+    )
+    loaded = []
+
+    def load_child(intent):
+        loaded.append(intent)
+        return SimpleNamespace(run=lambda _state: {"answer": "完成"})
+
+    loop = AgentLoop(
+        model=model,
+        discover_agents=lambda: manifests("行程规划", "偏好记录"),
+        load_child=load_child,
+    )
+    result = loop.run({"user_input": "我出差不吃辣", "recent": "无", "active_task": None})
+
+    assert loaded == ["偏好记录"]
+    assert result["intent"] == "偏好记录"
 
 
 def test_failed_side_effecting_agent_is_not_retried():
@@ -212,6 +263,32 @@ def test_deadline_is_a_hard_turn_boundary():
     assert time.monotonic() - started < 1
     assert model.inputs == []
     assert result["failure"]["code"] == "agent_timeout"
+
+
+def test_single_model_response_cannot_exceed_tool_call_budget():
+    calls = [{"name": "agent_0", "args": {"request": f"请求{index}"}, "id": f"call-{index}"} for index in range(7)]
+    model = ScriptedModel(AIMessage(content="", tool_calls=calls))
+    executions = []
+
+    def load_child(_intent):
+        def run(_state):
+            executions.append(1)
+            return {"answer": "完成"}
+
+        return SimpleNamespace(run=run)
+
+    loop = AgentLoop(
+        model=model,
+        discover_agents=lambda: manifests("其他"),
+        load_child=load_child,
+        limits=LoopLimits(max_tool_calls=6),
+    )
+
+    result = loop.run({"user_input": "批量请求", "recent": "无"})
+
+    assert len(executions) == 6
+    assert result["failure"]["code"] == "agent_limit"
+    assert result["transcript"][-1]["role"] == "tool"
 
 
 def test_token_budget_stops_before_model_call():

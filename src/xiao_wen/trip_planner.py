@@ -10,7 +10,7 @@
 import re
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from functools import lru_cache
 
@@ -69,8 +69,9 @@ class ItineraryPlan(BaseModel):
 
 @dataclass
 class PlanResult:
-    plan: ItineraryPlan  # 生成的行程（已写回长期记忆）
-    request: TripRequest | None = None  # 提取的行程要素（供展示层附加目的地天气等）
+    plan: ItineraryPlan
+    request: TripRequest | None = None
+    memory_write: dict | None = None
 
 
 @dataclass
@@ -231,6 +232,7 @@ def plan(
     recent: str = "",
     upstream: dict | None = None,
     cancelled: Callable[[], bool] | None = None,
+    defer_write: bool = False,
 ) -> PlanResult | NeedsInfo | ValidationFailure:
     """编排：提取 → 常驻城市补全 → 缺项检查（短路）→ 生成 → 写回长期记忆
 
@@ -347,8 +349,11 @@ def plan(
     facts["validator_version"] = VALIDATOR_VERSION
     if cancelled and cancelled():
         raise RuntimeError("请求已取消")
-    add_itinerary(facts, plan.summary, session_id=session_id)
-    return PlanResult(plan=plan, request=req)
+    memory_write: dict | None = {"type": "itinerary", "facts": facts, "summary": plan.summary}
+    if not defer_write:
+        add_itinerary(facts, plan.summary, session_id=session_id)
+        memory_write = None
+    return PlanResult(plan=plan, request=req, memory_write=memory_write)
 
 
 # ---- 展示（可读性格式化，测试锁定） ----
@@ -456,8 +461,9 @@ class TripOutcome:
     """行程规划的完整产物（compose 阶段输出，供行程 Agent 透传）"""
 
     answer: str
-    plan: dict | None  # 结构化 plan（含 date_is_vague），缺项时为 None
+    plan: dict | None
     task_update: dict | None = None
+    memory_writes: list[dict] = field(default_factory=list)
 
 
 def _ticket_url(origin: str, destination: str, travel_date: str, return_date: str = "") -> tuple[str, str | None]:
@@ -473,6 +479,7 @@ def handle(
     upstream: dict | None = None,
     task_context: str = "",
     cancelled: Callable[[], bool] | None = None,
+    defer_write: bool = False,
 ) -> TripOutcome:
     """行程规划完整编排入口（collect-then-compose 的 compose 阶段）：
 
@@ -481,7 +488,14 @@ def handle(
     """
     from xiao_wen.web import get_weather
 
-    r = plan(user_input, session_id=session_id, recent=recent, upstream=upstream, cancelled=cancelled)
+    r = plan(
+        user_input,
+        session_id=session_id,
+        recent=recent,
+        upstream=upstream,
+        cancelled=cancelled,
+        defer_write=defer_write,
+    )
     if isinstance(r, NeedsInfo):
         from xiao_wen.dialogue import task_update_set
 
@@ -584,4 +598,5 @@ def handle(
     plan_dict["date_is_vague"] = bool(req and req.date_is_vague)
     from xiao_wen.dialogue import task_update_clear
 
-    return TripOutcome(answer=answer, plan=plan_dict, task_update=task_update_clear())
+    writes = [r.memory_write] if r.memory_write else []
+    return TripOutcome(answer=answer, plan=plan_dict, task_update=task_update_clear(), memory_writes=writes)

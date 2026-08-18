@@ -52,9 +52,9 @@ def test_web_agent_weather_grounding_requires_weather_tool(monkeypatch):
             }
 
     monkeypatch.setattr(web_agent._web, "app", App("get_currency_rate"))
-    assert web_agent._web_query("北京天气") == ("北京晴 25°C", "unavailable")
+    assert web_agent._web_query("北京天气") == ("暂时无法获取可靠实时信息，请稍后重试。", "unavailable")
     monkeypatch.setattr(web_agent._web, "app", App("get_weather"))
-    assert web_agent._web_query("北京天气") == ("北京晴 25°C", "grounded")
+    assert web_agent._web_query("北京天气") == ("工具结果", "grounded")
 
 
 def test_ticket_request_preserves_route_and_return_date():

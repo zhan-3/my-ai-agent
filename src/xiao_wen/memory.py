@@ -10,6 +10,7 @@
 """
 
 from collections import Counter
+from contextlib import contextmanager
 from threading import Lock
 from typing import Protocol
 
@@ -22,6 +23,10 @@ class MemoryBackend(Protocol):
     def add_message(self, session_id: str, role: str, content: str) -> dict: ...
 
     def get_recent_messages(self, session_id: str, n: int) -> list[dict]: ...
+
+    def add_agent_transcript(self, session_id: str, transcript: list[dict]) -> dict: ...
+
+    def get_recent_agent_transcripts(self, session_id: str, n: int) -> list[dict]: ...
 
     def get_active_task(self, thread_id: str, user_id: str) -> dict | None: ...
 
@@ -38,6 +43,8 @@ class MemoryBackend(Protocol):
     def add_itinerary(self, session_id: str, facts: dict, summary: str) -> dict: ...
 
     def get_itineraries(self, session_id: str) -> list[dict]: ...
+
+    def transaction(self): ...
 
     def health_check(self) -> None: ...  # PostgresBackend：探活（连接失败抛异常）
 
@@ -78,12 +85,26 @@ def get_recent_messages(n: int = 6, *, session_id: str = "default") -> list[dict
 
 
 def format_recent_messages(n: int = 6, *, session_id: str = "default") -> str:
-    """格式化为给 LLM 看的文本（供意图识别注入，hot path 注入要克制）"""
+    """格式化为给 LLM 看的文本（供主管注入，hot path 注入要克制）"""
     msgs = get_recent_messages(n, session_id=session_id)
     if not msgs:
         return "无"
     lines = [f"{'用户' if m['role'] == 'user' else '助手'}: {m['content'][:80]}" for m in msgs]
     return "\n".join(lines)
+
+
+def add_agent_transcript(transcript: list[dict], *, session_id: str = "default") -> dict:
+    return _get_backend().add_agent_transcript(session_id, transcript)
+
+
+def get_recent_agent_transcripts(n: int = 6, *, session_id: str = "default") -> list[dict]:
+    return _get_backend().get_recent_agent_transcripts(session_id, n)
+
+
+@contextmanager
+def transaction():
+    with _get_backend().transaction():
+        yield
 
 
 # ---------- 对话状态：线程级活跃任务 ----------

@@ -13,6 +13,11 @@ def test_parse_sale_until_rolls_year_forward():
     assert ticket_policy._parse_sale_until(html, date(2026, 12, 20)) == date(2027, 1, 5)
 
 
+def test_validate_ticket_dates_rejects_malformed_date():
+    assert ticket_policy.validate_ticket_dates("下周") == "日期格式无效，请使用 YYYY-MM-DD。"
+    assert ticket_policy.validate_ticket_dates("2026-08-20", "返程待定") == "日期格式无效，请使用 YYYY-MM-DD。"
+
+
 def test_validate_ticket_dates_checks_both_legs(monkeypatch):
     monkeypatch.setattr(
         ticket_policy,
