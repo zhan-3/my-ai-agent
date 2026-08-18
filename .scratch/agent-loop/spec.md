@@ -1,6 +1,6 @@
 # 主管 Agent Loop
 
-Status: ready-for-agent
+Status: ready-for-human
 Type: spec
 Feature: agent-loop
 
@@ -44,5 +44,5 @@ Feature: agent-loop
 
 | 票据 | 内容 | 状态 |
 |---|---|---|
-| `issues/01-runtime.md` | Agent Loop、子 Agent 调用适配与事件模型 | ready-for-agent |
-| `issues/02-cutover-and-test-prune.md` | Web 切换、旧 Workflow 删除与测试替换 | needs-triage |
+| `issues/01-runtime.md` | Agent Loop、子 Agent 调用适配与事件模型 | resolved |
+| `issues/02-cutover-and-test-prune.md` | Web 切换、旧 Workflow 删除与测试替换 | resolved |
