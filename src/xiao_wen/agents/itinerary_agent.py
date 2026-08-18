@@ -33,37 +33,22 @@ def collect_upstream(user_input: str, session_id: str, recent: str = "") -> dict
         else f"{user_input} 公司差旅政策 住宿标准 交通标准 报销标准 审批要求"
     )
     policy_context = rag.retrieve_trip_policy(policy_query)
-    policy = policy_context.text
-    # 主动知识：出发/目的城市攻略、紧急流程、绿色出行不再依赖用户另问。
-    # 两个城市都取证：出发城市影响机场/车站和天气衔接，目的城市影响住宿、当地交通和安全。
-    guidance: dict[str, tuple[rag.Evidence, ...]] = {
-        "city_tips": (),
-        "emergency_tips": (),
-        "green_tips": (),
-    }
+    # 进 LLM 的约束只含 01 差旅标准；02 报销只取 fact 供返程提醒（原文不进生成上下文）。
+    policy = "\n\n".join(e.text for e in policy_context.evidence if e.source == "01_travel_standards")
+    # 主动知识：只按目的地/出发地注入城市贴士（07）。应急（05）走天气风险触发或用户问答，
+    # 绿色（08）靠 01 环保章节与用户问答，均不随行程规划无条件注入。
+    guidance: dict[str, tuple[rag.Evidence, ...]] = {"city_tips": ()}
     with suppress(Exception):
         cities = _extract_city_hints(user_input, recent)
-        # 应急与绿色知识对任何出行都通用，不依赖城市；先无条件各取一段。
-        base = rag.retrieve_guidance(cities[0] if cities else "")
-        guidance["emergency_tips"] = base["emergency_tips"][:1]
-        guidance["green_tips"] = base["green_tips"][:1]
         if cities:
             results = [rag.retrieve_guidance(city) for city in cities]
-            city_tips = tuple(
-                item for result in results for item in result.get("city_tips", ()) if isinstance(item, rag.Evidence)
-            )
-            # 主动知识是注意事项，不让它挤满生成上下文：城市各取一段。
-            guidance["city_tips"] = city_tips[:2]
-    guidance_text = "\n\n".join(
-        f"【{label} · {item.source}】\n{item.text}"
-        for label, key in (("城市提示", "city_tips"), ("紧急处理", "emergency_tips"), ("绿色出行", "green_tips"))
-        for item in guidance.get(key, ())
-    )
-    guidance_sources = tuple(dict.fromkeys(item.source for items in guidance.values() for item in items))
+            guidance["city_tips"] = tuple(
+                item for result in results for item in result if isinstance(item, rag.Evidence)
+            )[:2]
+    guidance_text = "\n\n".join(f"【城市提示 · {item.source}】\n{item.text}" for item in guidance.get("city_tips", ()))
+    guidance_sources = tuple(dict.fromkeys(item.source for item in guidance.get("city_tips", ())))
     sources = [item.__dict__ for item in policy_context.evidence]
     sources.extend(item.__dict__ for item in guidance.get("city_tips", ()))
-    sources.extend(item.__dict__ for item in guidance.get("emergency_tips", ()))
-    sources.extend(item.__dict__ for item in guidance.get("green_tips", ()))
     history_ref = ""
     try:
         its = get_itineraries(session_id=session_id)

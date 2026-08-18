@@ -542,37 +542,46 @@ def _source_evidence(query: str, col, source: str, k: int = 3) -> tuple[Evidence
     )
 
 
-def retrieve_guidance(city: str) -> dict[str, tuple[Evidence, ...]]:
-    """主动知识检索：按目的地为行程生成收集城市、应急和绿色出行提示。
+def retrieve_guidance(city: str) -> tuple[Evidence, ...]:
+    """主动知识检索：按目的地为行程生成收集城市贴士（07）。
 
     返回证据而非 LLM 文本，调用方可同时把内容注入 prompt 并保留来源。
+    应急（05）与绿色（08）不再随行程规划无条件注入：应急走天气风险触发
+    （retrieve_emergency）或用户主动问答，绿色靠 01 环保章节与用户问答。
     任一 embedding/索引异常均降级为空，不阻塞行程规划。
     """
     try:
         chunks = merge_tiny_chunks(load_chunks())
         col = build_index(chunks)
-        return {
-            "city_tips": _source_evidence(f"{city} 出差交通住宿注意事项", col, "07_city_specific_tips", k=2),
-            "emergency_tips": _source_evidence("出差紧急情况处理流程 联系方式", col, "05_emergency_procedures", k=1),
-            "green_tips": _source_evidence("差旅绿色出行 高铁 公共交通 环保", col, "08_environmental_initiatives", k=1),
-        }
+        return _source_evidence(f"{city} 出差交通住宿注意事项", col, "07_city_specific_tips", k=2)
     except Exception:
-        return {"city_tips": (), "emergency_tips": (), "green_tips": ()}
+        return ()
+
+
+def retrieve_emergency(scenario: str) -> tuple[Evidence, ...]:
+    """应急知识检索（05）：按场景（如恶劣天气）取对应节，供行程风险触发注入。
+
+    任一 embedding/索引异常均降级为空，调用方回退硬编码提醒。
+    """
+    try:
+        chunks = merge_tiny_chunks(load_chunks())
+        col = build_index(chunks)
+        return _source_evidence(f"{scenario} 出差紧急处理 处理步骤", col, "05_emergency_procedures", k=1)
+    except Exception:
+        return ()
 
 
 def retrieve_trip_policy(query: str) -> PolicyContext:
-    """行程规划的多主题政策收集：均衡覆盖四份政策文档（01 标准 / 02 报销 / 03 预订 / 06 平台）。
+    """行程规划的政策收集：01 差旅标准进生成上下文，02 报销只取时限事实供返程提醒。
 
-    retrieve_policy 是知识问答的 top-k 相关度检索；行程生成若复用会让「差旅标准」
-    单一文档霸榜、挤掉报销/预订渠道/平台操作知识。这里按主题分别取各文档代表，
-    保证行程上下文同时看到住宿/交通/餐饮标准、报销、预订、平台四类政策。
-    任一故障统一降级为 unavailable，不阻塞规划。
+    retrieve_policy 是知识问答的 top-k 相关度检索；行程生成需「标准约束」而非
+    报销/预订/平台知识。这里 01 取 k=3 作为生成约束，02 取 k=1 只提取
+    reimbursement_deadline 事实（原文不进 LLM，由 trip_planner 按 source 过滤）。
+    预订（03）/平台（06）靠用户主动问时走知识问答。任一故障降级 unavailable。
     """
     themes: tuple[tuple[str, str, int], ...] = (
-        ("01_travel_standards", "公司差旅标准 住宿标准 交通标准 餐饮标准", 2),
-        ("02_reimbursement_policy", "公司差旅报销 报销标准 报销流程 发票 时限", 1),
-        ("03_booking_guide", "公司差旅预订 机票预订 火车票预订 酒店预订 提前预订 渠道", 1),
-        ("06_platform_guide", "晓问商旅平台 预订操作 行程管理", 1),
+        ("01_travel_standards", "公司差旅标准 住宿标准 交通标准 餐饮标准", 3),
+        ("02_reimbursement_policy", "公司差旅报销 报销时限 发票", 1),
     )
     try:
         chunks = merge_tiny_chunks(load_chunks())

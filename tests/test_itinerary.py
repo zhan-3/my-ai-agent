@@ -244,7 +244,9 @@ def test_trip_policy_unavailable_is_explicit_and_skips_policy_budget(monkeypatch
     request = _req(start_date="待定")
     plan = ItineraryPlan(summary="上海到北京出差", days=[], reasons=["按用户偏好选择住宿"])
     monkeypatch.setattr(_it, "plan", lambda *args, **kwargs: _it.PlanResult(plan=plan, request=request))
-    monkeypatch.setattr(_it, "format_budget", lambda req: (_ for _ in ()).throw(AssertionError("不应生成政策预算")))
+    monkeypatch.setattr(
+        _it, "format_budget", lambda req, facts=(): (_ for _ in ()).throw(AssertionError("不应生成政策预算"))
+    )
     unavailable = rag.PolicyContext(
         query="政策",
         evidence=(),
@@ -272,11 +274,7 @@ def test_collect_upstream_uses_recent_city_for_guidance(monkeypatch):
     monkeypatch.setattr(
         rag,
         "retrieve_guidance",
-        lambda city: {
-            "city_tips": (rag.Evidence("city", city + "城市提示", "", 0.9),),
-            "emergency_tips": (),
-            "green_tips": (),
-        },
+        lambda city: (rag.Evidence("city", city + "城市提示", "", 0.9),),
     )
     monkeypatch.setattr(ms, "get_itineraries", lambda *, session_id="default": [])
     monkeypatch.setattr(pa, "_invoke_pref_model", lambda _: pa.PreferenceList(records=[]))
@@ -296,9 +294,7 @@ def test_collect_upstream_extracts_turn_prefs(monkeypatch):
     monkeypatch.setattr(
         rag, "retrieve_trip_policy", lambda _: rag.PolicyContext(query="", evidence=(), status="not_found")
     )
-    monkeypatch.setattr(
-        rag, "retrieve_guidance", lambda city: {"city_tips": (), "emergency_tips": (), "green_tips": ()}
-    )
+    monkeypatch.setattr(rag, "retrieve_guidance", lambda city: ())
     monkeypatch.setattr(ms, "get_itineraries", lambda *, session_id="default": [])
     monkeypatch.setattr(
         pa,
@@ -465,100 +461,96 @@ def test_needs_info_text_lists_missing():
     assert "请补充" in text
 
 
-# ---------------- 非政策规划估算 ----------------
+# ---------------- 政策标准预算（读 RAG facts） ----------------
 
 
-def test_estimate_budget_deterministic():
-    """预算估算完全确定（无 LLM），且不包含动态交通金额。"""
+def _policy_facts():
+    from xiao_wen.rag import PolicyFact
+
+    return (
+        PolicyFact("hotel_rate", 500, "元/晚", {"city_tier": "一线"}, ()),
+        PolicyFact("hotel_rate", 400, "元/晚", {"city_tier": "二线"}, ()),
+        PolicyFact("hotel_rate", 300, "元/晚", {"city_tier": "三线"}, ()),
+        PolicyFact("meal_rate", 100, "元/餐", {}, ()),
+    )
+
+
+def test_city_tier_classifies():
+    assert _it._city_tier("北京") == "一线"
+    assert _it._city_tier("杭州") == "二线"
+    assert _it._city_tier("临沂") == "三线"
+
+
+def test_estimate_budget_reads_policy_facts():
+    """预算金额读自 RAG 政策事实（酒店/餐饮标准），不依赖本地预算档常量。"""
     req = _req(to_city="杭州", from_city="北京", duration_days=3)
-    b = _it.estimate_budget(req)
+    b = _it.estimate_budget(req, _policy_facts())
     assert "transport_cost" not in b
-    assert b["hotel_per_night"] == 450 and b["hotel_cost"] == 900
-    assert b["meal_cost"] == 600
-    assert b["total"] == 900 + 600
+    assert b["hotel_rate"] == 400 and b["hotel_cost"] == 800  # 二线 400 × 2 晚
+    assert b["meal_cost"] == 600  # 100/餐 × 2 餐 × 3 天
+    assert b["total"] == 800 + 600
 
 
 def test_format_budget_readable():
-    """预算块明确估算边界，并拒绝提供交通金额。"""
+    """预算块明确政策标准上限，并拒绝提供交通金额。"""
     req = _req(to_city="杭州", from_city="北京", duration_days=3)
-    text = _it.format_budget(req)
+    text = _it.format_budget(req, _policy_facts())
     assert "晓问商旅平台" in text and "交通：不提供金额" in text
-    assert "450 元/晚 × 2 晚" in text and "≈ 900 元" in text
-    assert "非报价、非公司政策" in text and "不含交通" in text
+    assert "400 元/晚 × 2 晚" in text and "≈ 800 元" in text
+    assert "按公司差旅标准上限" in text and "不含交通" in text
 
 
 def test_estimate_budget_day_trip_no_hotel():
-    """一日往返：不住宿（0 晚），住宿费为 0，只算交通往返 + 当日餐饮"""
+    """一日往返：不住宿（0 晚），住宿费为 0，只算当日餐饮。"""
     req = _req(to_city="杭州", from_city="北京", duration_days=1)
-    b = _it.estimate_budget(req)
+    b = _it.estimate_budget(req, _policy_facts())
     assert b["nights"] == 0
     assert b["hotel_cost"] == 0
-    assert b["hotel_per_night"] == 450
+    assert b["hotel_rate"] == 400
     assert b["total"] == b["meal_cost"]
 
 
 def test_format_budget_day_trip_no_hotel_line():
-    """一日往返：预算块不出现「× 0 晚」，明示无住宿"""
+    """一日往返：预算块不出现「× 0 晚」，明示无住宿。"""
     req = _req(to_city="杭州", from_city="北京", duration_days=1)
-    text = _it.format_budget(req)
+    text = _it.format_budget(req, _policy_facts())
     assert "0 晚" not in text
     assert "无需住宿" in text
 
 
-def test_estimate_budget_respects_budget_pref():
-    """预算偏好选择不同的通用估算档，不冒充公司政策。"""
-    base = {"to_city": "杭州", "from_city": "北京", "duration_days": 3}
-    b_mid = _it.estimate_budget(_req(**base, budget_pref="中等"))
-    b_eco = _it.estimate_budget(_req(**base, budget_pref="经济"))
-    b_com = _it.estimate_budget(_req(**base, budget_pref="舒适"))
-
-    assert b_mid["hotel_per_night"] == 450
-    assert b_mid["meal_per_day"] == 200
-
-    assert b_eco["hotel_per_night"] == 300
-    assert b_eco["meal_per_day"] == 120
-    assert b_eco["hotel_cost"] == 300 * 2
-    assert b_eco["total"] < b_mid["total"]
-
-    assert b_com["hotel_per_night"] == 700
-    assert b_com["meal_per_day"] == 300
-    assert b_com["total"] > b_mid["total"]
-
-
-def test_estimate_budget_unknown_budget_pref_falls_back_mid():
-    """未知/空档位 → 回退中等，不崩"""
-    b = _it.estimate_budget(_req(budget_pref="豪华"))
-    assert b["budget_level"] == "中等"
-    assert b["hotel_per_night"] == 450
-    assert b["meal_per_day"] == 200
-
-
-def test_format_budget_labels_economy_level():
-    """经济估算档明示住宿与餐饮假设。"""
-    req = _req(to_city="杭州", from_city="北京", duration_days=3, budget_pref="经济")
-    text = _it.format_budget(req)
-    assert "经济估算档" in text and "300 元/晚" in text
-    assert "120 元/天" in text
+def test_estimate_budget_uses_city_tier():
+    """住宿标准按目的地城市分级：一线 500 / 二线 400 / 三线 300。"""
+    assert _it.estimate_budget(_req(to_city="北京"), _policy_facts())["hotel_rate"] == 500
+    assert _it.estimate_budget(_req(to_city="杭州"), _policy_facts())["hotel_rate"] == 400
+    assert _it.estimate_budget(_req(to_city="临沂"), _policy_facts())["hotel_rate"] == 300
 
 
 def test_estimate_budget_multiplies_by_people():
     """多人出行：房数向上取整，住宿和餐饮按人数计算，交通仍不报数。"""
     req = _req(to_city="杭州", from_city="北京", duration_days=3, people_count=3)
-    b = _it.estimate_budget(req)
+    b = _it.estimate_budget(req, _policy_facts())
     assert b["people"] == 3
     assert b["rooms"] == 2  # 3 人 → 2 间双人标间
     assert "transport_cost" not in b
-    assert b["hotel_cost"] == 450 * 2 * 2
-    assert b["meal_cost"] == 200 * 3 * 3
+    assert b["hotel_cost"] == 400 * 2 * 2
+    assert b["meal_cost"] == 100 * 2 * 3 * 3
     assert b["total"] == b["hotel_cost"] + b["meal_cost"]
 
 
 def test_format_budget_shows_people_when_multi():
-    """多人：预算块明示人数与房数"""
+    """多人：预算块明示人数与房数。"""
     req = _req(to_city="杭州", from_city="北京", duration_days=3, people_count=3)
-    text = _it.format_budget(req)
+    text = _it.format_budget(req, _policy_facts())
     assert "× 3 人" in text
     assert "× 2 间" in text
+
+
+def test_format_budget_without_facts_hides_amount():
+    """无政策事实时不显示金额，引导以差旅标准/财务口径为准。"""
+    req = _req(to_city="杭州", from_city="北京", duration_days=3)
+    text = _it.format_budget(req, ())
+    assert "元/晚" not in text
+    assert "政策服务未提供有效标准数字" in text
 
 
 def test_missing_treats_garbage_city_as_missing(monkeypatch):

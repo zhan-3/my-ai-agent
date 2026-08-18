@@ -99,9 +99,9 @@ def validate_trip(
 
     if budget is not None:
         components = ("hotel_cost", "meal_cost")
-        if any(key not in budget for key in components) or budget.get("total") != sum(
-            budget.get(key, 0) for key in components
-        ):
+        costs = [budget.get(key) for key in components]
+        # 无政策事实时金额为 None（不显示具体数字）：跳过金额一致性校验。
+        if all(c is not None for c in costs) and budget.get("total") != sum(c for c in costs if c is not None):
             blocking.append(ValidationIssue("budget_mismatch", "预算分项与预算总额不一致", "budget"))
 
     candidate_texts = [plan.summary, *plan.reasons]

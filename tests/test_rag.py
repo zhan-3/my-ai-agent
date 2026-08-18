@@ -332,7 +332,7 @@ def test_search_expands_ann_candidate_pool_before_top_k(monkeypatch):
     assert hits[0][1] == "01_travel_standards"
 
 
-def test_retrieve_guidance_limits_each_topic(monkeypatch):
+def test_retrieve_guidance_only_city_tips(monkeypatch):
     calls = []
 
     monkeypatch.setattr(rag, "load_chunks", lambda: [("x", "城市提示")])
@@ -343,27 +343,31 @@ def test_retrieve_guidance_limits_each_topic(monkeypatch):
         return []
 
     monkeypatch.setattr(rag, "_search_with_metadata", fake_search)
-    assert rag.retrieve_guidance("北京") == {
-        "city_tips": (),
-        "emergency_tips": (),
-        "green_tips": (),
-    }
-    assert [k for _, k in calls] == [20, 20, 20]
+    assert rag.retrieve_guidance("北京") == ()
+    assert [k for _, k in calls] == [20]
 
 
-def test_retrieve_trip_policy_balances_policy_sources(monkeypatch):
-    """行程规划的政策收集按主题均衡覆盖 01/02/03/06，不让「差旅标准」单一文档霸榜。"""
+def test_retrieve_emergency_filters_scenario(monkeypatch):
+    """应急检索只取 05 文档对应场景节，失败降级空 tuple。"""
+    monkeypatch.setattr(rag, "load_chunks", lambda: [("x", "应急")])
+    monkeypatch.setattr(rag, "build_index", lambda chunks: object())
+    monkeypatch.setattr(
+        rag,
+        "_search_with_metadata",
+        lambda q, col, k=5: [(0.9, {"source": "05_emergency_procedures"}, "台风暴雨待室内")],
+    )
+    ev = rag.retrieve_emergency("台风 暴雨 极端天气")
+    assert [e.source for e in ev] == ["05_emergency_procedures"]
+    assert ev[0].text == "台风暴雨待室内"
+
+
+def test_retrieve_trip_policy_std_and_reimbursement_fact(monkeypatch):
+    """行程规划政策收集：01 标准进上下文，02 只取报销时限事实。"""
 
     def fake_search(query, col, k=5):
-        if "平台" in query:
-            src = "06_platform_guide"
-        elif "报销" in query:
-            src = "02_reimbursement_policy"
-        elif "预订" in query:
-            src = "03_booking_guide"
-        else:
-            src = "01_travel_standards"
-        return [(0.85, {"source": src}, f"{src} 代表段")]
+        if "报销" in query:
+            return [(0.85, {"source": "02_reimbursement_policy"}, "出差结束后，应在30个自然日内提交报销")]
+        return [(0.85, {"source": "01_travel_standards"}, "一线城市住宿标准不超过500元/晚")]
 
     monkeypatch.setattr(rag, "load_chunks", lambda: [("01_travel_standards", "标准段")])
     monkeypatch.setattr(rag, "build_index", lambda chunks: object())
@@ -371,8 +375,11 @@ def test_retrieve_trip_policy_balances_policy_sources(monkeypatch):
 
     ctx = rag.retrieve_trip_policy("去北京出差")
     sources = {e.source for e in ctx.evidence}
-    assert sources == {"01_travel_standards", "02_reimbursement_policy", "03_booking_guide", "06_platform_guide"}
+    assert sources == {"01_travel_standards", "02_reimbursement_policy"}
     assert ctx.status == "grounded"
+    fact_keys = {(f.key, f.value) for f in ctx.facts}
+    assert ("hotel_rate", 500) in fact_keys
+    assert ("reimbursement_deadline", 30) in fact_keys
 
 
 def test_policy_facts_cover_deadline_transport_and_approval():

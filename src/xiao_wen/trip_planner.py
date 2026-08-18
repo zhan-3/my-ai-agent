@@ -352,7 +352,7 @@ def plan(
 
     policy_text = upstream.get("policy") or ""
     evidence_ids = tuple(upstream.get("policy_evidence_ids") or ())
-    budget = estimate_budget(req)
+    budget = estimate_budget(req, getattr(policy_context, "facts", ()))
     validation = validate_trip(
         req,
         plan,
@@ -398,58 +398,105 @@ def plan(
 
 # ---- 展示（可读性格式化，测试锁定） ----
 
-# 通用规划估算，不是供应商报价或公司政策。交通价格变化频繁，不做本地数字估算。
-BUDGET_LEVELS = {
-    "经济": {"hotel_per_night": 300, "meal_per_day": 120},
-    "中等": {"hotel_per_night": 450, "meal_per_day": 200},
-    "舒适": {"hotel_per_night": 700, "meal_per_day": 300},
-}
-DEFAULT_BUDGET_LEVEL = "中等"
+# 差旅住宿标准城市分级（依据 01 差旅标准文档：一线 4 城 / 二线省会与直辖市 / 其余三线及以下）
+_TIER1_CITIES = ("北京", "上海", "广州", "深圳")
+_TIER2_CITIES = (
+    "天津",
+    "重庆",
+    "石家庄",
+    "太原",
+    "呼和浩特",
+    "沈阳",
+    "长春",
+    "哈尔滨",
+    "南京",
+    "杭州",
+    "合肥",
+    "福州",
+    "南昌",
+    "济南",
+    "郑州",
+    "武汉",
+    "长沙",
+    "南宁",
+    "海口",
+    "成都",
+    "贵阳",
+    "昆明",
+    "拉萨",
+    "西安",
+    "兰州",
+    "西宁",
+    "银川",
+    "乌鲁木齐",
+)
 
 
-def estimate_budget(req: TripRequest) -> dict:
-    """确定性规划估算：只估住宿与餐饮，交通金额留给官方实时查询结果。"""
+def _city_tier(city: str) -> str:
+    """住宿标准档位分级：一线 4 城 / 二线省会与直辖市 / 其余三线及以下。"""
+    if city in _TIER1_CITIES:
+        return "一线"
+    if city in _TIER2_CITIES:
+        return "二线"
+    return "三线"
+
+
+def estimate_budget(req: TripRequest, facts: tuple = ()) -> dict:
+    """确定性政策标准估算：住宿/餐饮金额读自 RAG 政策事实（hotel_rate/meal_rate）。
+
+    交通金额不留本地估算。无有效事实时金额为 None，调用方不显示具体数字。
+    """
     assert isinstance(req.duration_days, int), "缺项检查后 duration 必为 int"
     people = req.people_count if isinstance(req.people_count, int) and req.people_count > 0 else 1
     nights = max(req.duration_days - 1, 0)  # 最后一天返程，住 (天数-1) 晚；一日往返 0 晚
-    level = BUDGET_LEVELS.get(req.budget_pref, BUDGET_LEVELS[DEFAULT_BUDGET_LEVEL])
-    budget_level = req.budget_pref if req.budget_pref in BUDGET_LEVELS else DEFAULT_BUDGET_LEVEL
-    hotel_per_night = level["hotel_per_night"]
+    tier = _city_tier(req.to_city)
+    hotel_rate = next((f.value for f in facts if f.key == "hotel_rate" and f.scope.get("city_tier") == tier), None)
+    meal_rate = next((f.value for f in facts if f.key == "meal_rate"), None)
     rooms = (people + 1) // 2  # 双人标准间，向上取整
-    hotel_cost = hotel_per_night * rooms * nights
-    meal_per_day = level["meal_per_day"]
-    meal_cost = meal_per_day * people * req.duration_days
+    hotel_cost = hotel_rate * rooms * nights if hotel_rate is not None else None
+    meal_cost = meal_rate * 2 * people * req.duration_days if meal_rate is not None else None
+    total = hotel_cost + meal_cost if (hotel_cost is not None and meal_cost is not None) else None
     return {
-        "budget_level": budget_level,
+        "city_tier": tier,
         "people": people,
         "rooms": rooms,
-        "hotel_per_night": hotel_per_night,
+        "hotel_rate": hotel_rate,
         "nights": nights,
         "hotel_cost": hotel_cost,
-        "meal_per_day": meal_per_day,
+        "meal_rate": meal_rate,
         "meal_cost": meal_cost,
-        "total": hotel_cost + meal_cost,
+        "total": total,
     }
 
 
-def format_budget(req: TripRequest) -> str:
-    """格式化非政策规划估算；交通只引导至官方实时查询。"""
-    b = estimate_budget(req)
+def format_budget(req: TripRequest, facts: tuple = ()) -> str:
+    """格式化住宿/餐饮政策标准上限；交通只引导官方实时查询。
+
+    金额读自 RAG 政策事实（hotel_rate/meal_rate），不是本地估算；无事实时不显示
+    金额，引导以差旅标准/财务口径为准（避免两套数字漂移）。
+    """
+    b = estimate_budget(req, facts)
+    if b["hotel_rate"] is None or b["meal_rate"] is None:
+        return (
+            "💰 预算参考：\n"
+            "· 交通：不提供金额，请以晓问商旅平台的实时查询结果为准\n"
+            "· 住宿/餐饮：政策服务未提供有效标准数字，请以差旅标准或财务口径为准"
+        )
     if b["nights"] == 0:
         hotel_line = "· 住宿：当日往返，无需住宿\n"
     else:
         rooms_suffix = "" if b["rooms"] == 1 else f" × {b['rooms']} 间"
         hotel_line = (
-            f"· 住宿：{b['budget_level']}估算档 "
-            f"{b['hotel_per_night']} 元/晚 × {b['nights']} 晚{rooms_suffix} ≈ {b['hotel_cost']} 元\n"
+            f"· 住宿（{b['city_tier']}城市标准）：≤ {b['hotel_rate']} 元/晚 × {b['nights']} 晚"
+            f"{rooms_suffix} ≈ {b['hotel_cost']} 元\n"
         )
     meal_people = "" if b["people"] == 1 else f" × {b['people']} 人"
     return (
-        "💰 规划估算（非报价、非公司政策）：\n"
+        "💰 预算参考（按公司差旅标准上限估算，非报价）：\n"
         "· 交通：不提供金额，请以晓问商旅平台的实时查询结果为准\n"
         f"{hotel_line}"
-        f"· 餐饮：{b['meal_per_day']} 元/天{meal_people} × {req.duration_days} 天 ≈ {b['meal_cost']} 元\n"
-        f"· 住宿与餐饮小计（不含交通）：约 {b['total']} 元"
+        f"· 餐饮：≤ {b['meal_rate']} 元/餐 × 2 餐/天{meal_people} × {req.duration_days} 天 ≈ {b['meal_cost']} 元\n"
+        f"· 住宿与餐饮合计（不含交通）：约 {b['total']} 元"
     )
 
 
@@ -466,6 +513,25 @@ def _weather_needs_attention(note: str) -> bool:
         return True
     match = re.search(r"降水概率\s*(\d+)%", note)
     return bool(match and int(match.group(1)) >= 60)
+
+
+def _emergency_note() -> str:
+    """恶劣天气触发的应急提醒：优先引 05 应急文档的极端天气节，检索失败回退硬编码。"""
+    from xiao_wen import rag
+
+    with suppress(Exception):
+        for ev in rag.retrieve_emergency("台风 暴雨 极端天气"):
+            text = ev.text
+            if not text:
+                continue
+            # 优先截取「台风/暴雨/极端天气」相关子节，避免命中整节「自然灾害」时从头截到地震。
+            for marker in ("台风", "暴雨", "极端天气"):
+                idx = text.find(marker)
+                if idx >= 0:
+                    text = text[idx:]
+                    break
+            return "\n\n⚠️ 异常天气安全提醒：\n" + (text if len(text) <= 240 else text[:240] + "…")
+    return "\n\n⚠️ 异常天气安全提醒：请预留交通缓冲，关注航班/高铁和当地预警；必要时联系主管调整安排。"
 
 
 def format_plan(plan: ItineraryPlan) -> str:
@@ -570,9 +636,9 @@ def handle(
             "如果实际日期不同，告诉我具体日期，我重新排。"
         )
     if req and policy_status != "unavailable":
-        # 预算块：非政策规划估算；交通金额始终留给晓问商旅平台实时结果。
+        # 预算块：政策标准上限（读 RAG facts）；交通金额始终留给晓问商旅平台实时结果。
         with suppress(Exception):
-            answer += f"\n\n{format_budget(req)}"
+            answer += f"\n\n{format_budget(req, getattr(policy_context, 'facts', ()))}"
     if req and req.start_date not in ("待定", ""):
         cities = [req.from_city, req.to_city]
         weather_notes: list[tuple[str, str]] = []
@@ -597,7 +663,19 @@ def handle(
             answer += "\n\n🌤️ 目的地天气提醒（出行天气，出发日：" + req.start_date + "）：\n" + "\n".join(weather_lines)
             alerts = [note for _, note in weather_notes if _weather_needs_attention(note)]
             if alerts:
-                answer += "\n\n⚠️ 异常天气安全提醒：请预留交通缓冲，关注航班/高铁和当地预警；必要时联系主管调整安排。"
+                answer += _emergency_note()
+    if req and policy_status != "unavailable":
+        # 返程报销提醒：行程含返程时附时限一句（读 reimbursement_deadline fact），细节引导追问。
+        has_return = bool(req.return_date) or (
+            r.plan.days and ("返程" in (r.plan.days[-1].hotel or "") or "返程" in (r.plan.days[-1].transport or ""))
+        )
+        if has_return:
+            deadline = next(
+                (f.value for f in getattr(policy_context, "facts", ()) if f.key == "reimbursement_deadline"),
+                None,
+            )
+            if deadline is not None:
+                answer += f"\n\n💼 报销提醒：出差结束后 {deadline} 个自然日内提交报销；发票抬头等报销细节可随时问我。"
     if upstream:
         policy_sources = tuple(
             dict.fromkeys(
