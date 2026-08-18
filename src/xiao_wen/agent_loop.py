@@ -29,19 +29,22 @@ class LoopLimits:
 
 _SYSTEM = """你是晓问的主管 Agent，只处理企业差旅。
 你可以直接回答简单问候；其他任务应调用最合适的子 Agent，并在看到结果后再决定是否继续调用。
-政策、报销、住宿标准必须调用知识问答；天气、汇率、空气质量和铁路查询必须调用联网查询；
+政策、报销、住宿标准、预订流程（订票/改签/退票/购票渠道/座位等级）必须调用知识问答；天气、汇率、空气质量必须调用联网查询；
 新行程或补全行程调用行程规划；只有用户明确查询已保存的记录时才调用历史查询。
+票务执行（订票、改签、退票、查车次/余票/票价）：晓问不代购、不提供实时票务查询，一律引导用户通过晓问商旅平台（travel.xiaowen.com）办理；
+预订流程与规则等知识调用知识问答。
 仅陈述常住城市、餐饮、住宿等偏好而未要求规划时，只调用偏好记录，绝不自行调用行程规划。
 若存在活跃行程任务，只有本轮信息直接回答 missing 列表中的缺项时才继续调用行程规划；
 “我现在常住某地”既要调用偏好记录，也要继续调用行程规划。餐饮/住宿偏好若不是当前缺项，属于独立插入请求，
 只调用偏好记录并提醒活跃行程仍保留，不要调用行程规划。政策或实时查询也可以暂时打断行程。
-不得编造政策、天气、车次、余票、票价、订单或购买结果。调用参数 request 应包含本轮原话和必要的活跃任务信息，
-成为子 Agent 可独立理解的完整请求。最终回答只能使用已观察到的结果，不输出思维过程。"""
+不得编造政策、天气、车次、订单或购买结果。调用参数 request 应包含本轮原话和必要的活跃任务信息，
+成为子 Agent 可独立理解的完整请求。最终回答直接写给用户的话术，只能使用已观察到的结果；
+禁止输出推理、计划或元叙述（如「我需要先…」「好的，目前…」「根据…结果，我…」）；
+行程规划提示缺项时，原样给出缺项清单即可，不要复述判断过程。
+"""
 
-_POLICY_WORDS = ("政策", "报销", "住宿标准", "差旅标准", "审批")
+_POLICY_WORDS = ("政策", "报销", "住宿标准", "差旅标准", "审批", "订票", "购票", "改签", "退票")
 _WEATHER_WORDS = ("天气", "气温", "下雨", "降雨", "台风", "雷暴")
-_TICKET_WORDS = ("车票", "车次", "余票", "高铁票", "火车票", "12306", "铁路", "高铁", "动车", "票价", "购票")
-_TICKET_ACTIONS = ("查", "查询", "票", "余", "购", "买", "价格", "多少钱", "时刻")
 _OUTPUT_KEYS = ("plan", "stats", "history", "task_update", "failure")
 
 
@@ -208,7 +211,7 @@ def _trip_requested(turn: dict[str, Any]) -> bool:
         from xiao_wen.reference_data import KNOWN_CITIES
 
         missing = active.get("missing") or []
-        if "出发城市" in missing and ("常住" in text or any(city in text for city in KNOWN_CITIES)):
+        if "出发城市" in missing and _provides_origin(text):
             return True
         if any("天数" in str(item) for item in missing) and re.search(r"\d+\s*天", text):
             return True
@@ -218,6 +221,19 @@ def _trip_requested(turn: dict[str, Any]) -> bool:
     return any(word in text for word in ("规划", "安排行程", "行程安排")) or bool(
         re.search(r"(?:去|到|前往).{1,12}(?:开会|出差|拜访|培训)", text)
     )
+
+
+def _provides_origin(text: str) -> bool:
+    """用户补全出发城市：从X出发 / X出发 / 常住X / 纯城市名（含非白名单城市如临沂）。
+
+    门禁不能只认 KNOWN_CITIES 白名单：临沂等城市不在 20 城名单里，
+    「从临沂出发」会被误判为「没有补全出发城市」而反复拦截行程规划。
+    """
+    from xiao_wen.trip_planner import _detect_home_city, _looks_like_city_name
+
+    if _detect_home_city(text) or _looks_like_city_name(text):
+        return True
+    return bool(re.search(r"从\S{1,8}出发", text))
 
 
 def _model_observation(agent: str, outcome: dict[str, Any]) -> dict[str, Any]:
@@ -294,15 +310,12 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _message_tokens(message: AIMessage) -> int:
-    usage = message.usage_metadata
-    if usage is None:
-        return _estimate_tokens(_text(message))
-    value = usage.get("total_tokens") or usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-    return int(value or 0)
-
-
-def _ticket_requested(text: str) -> bool:
-    return any(word in text for word in _TICKET_WORDS) and any(word in text for word in _TICKET_ACTIONS)
+    # 统一按字符估算，禁用 usage_metadata：其 total_tokens 是本次请求的累计值，
+    # 做增量累加会几何虚增（曾假性触发 agent_token_limit）。tool_calls 一并估算。
+    n = _estimate_tokens(_text(message))
+    for tool_call in getattr(message, "tool_calls", None) or []:
+        n += _estimate_tokens(json.dumps(tool_call, ensure_ascii=False, default=str))
+    return n
 
 
 def _result(
@@ -321,6 +334,17 @@ def _result(
     }
     for key in _OUTPUT_KEYS:
         result[key] = next((out.get(key) for _, out in latest if out.get(key) is not None), None)
+
+    # 行程规划追问缺项（NeedsInfo → task_update.action == "set"）：最终答案直接复用子 Agent 的
+    # 缺项话术，禁止主管重写——重写会把思维链暴露给用户（曾输出「好的，目前没有常驻城市偏好…
+    # 我需要向用户确认」这类推理中间文本）。
+    for _, out in latest:
+        update = out.get("task_update")
+        if isinstance(update, dict) and update.get("action") == "set":
+            child_answer = out.get("answer")
+            if isinstance(child_answer, str) and child_answer.strip():
+                result["answer"] = child_answer
+            break
 
     sources: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -345,15 +369,6 @@ def _result(
     if statuses:
         priority = {"unavailable": 5, "ambiguous": 4, "stale": 3, "grounded": 2, "not_found": 1}
         result["policy_status"] = max(statuses, key=lambda status: priority[status])
-
-    if _ticket_requested(user_input):
-        web = by_intent.get("联网查询", {})
-        web_answer = web.get("answer")
-        if isinstance(web_answer, str) and _safe_ticket_answer(web_answer, web.get("ticket_status")):
-            result["answer"] = web_answer
-        else:
-            result["answer"] = "我只能提供铁路12306官方查询入口；当前没有得到经过核验的官方链接。"
-        return result
 
     needs_policy_gate = any(word in user_input for word in _POLICY_WORDS)
     needs_weather_gate = any(word in user_input for word in _WEATHER_WORDS)
@@ -384,27 +399,6 @@ def _result(
                 exact_answers.append(child_answer)
         result["answer"] = "\n\n".join(dict.fromkeys(exact_answers)) or result["answer"]
     return result
-
-
-def _safe_ticket_answer(answer: str, status: Any) -> bool:
-    if status in {"invalid", "unavailable"}:
-        safe_markers = ("无法", "不能", "已经过去", "超出", "暂时", "请补充", "请稍后")
-        return "http://" not in answer and "https://" not in answer and any(word in answer for word in safe_markers)
-    if status != "official":
-        return False
-    from xiao_wen.ticket_link import URL
-
-    lines = answer.strip().splitlines()
-    disclaimer = (
-        "车站名称和电报码来自12306官方车站数据；请在12306页面确认实际车次、余票、票价和乘车人信息；晓问不代购票。"
-    )
-    return (
-        len(lines) == 3
-        and lines[0].startswith("已生成铁路12306官方预填查询入口：")
-        and lines[1].startswith(f"{URL}?")
-        and all(marker in lines[1] for marker in ("fs=", "ts=", "date="))
-        and lines[2] == disclaimer
-    )
 
 
 def _transcript(messages: list[Any]) -> list[dict[str, Any]]:

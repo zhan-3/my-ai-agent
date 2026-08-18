@@ -15,8 +15,10 @@
 
 INTENT = "历史查询"
 DESCRIPTION = (
-    "查询历史行程/偏好/对话的记录明细（可按城市、日期、住宿类型筛选）"
-    "——查单次或筛选明细找这里；问汇总统计（共几次、总天数、常去哪）不是明细查询"
+    "仅查询已保存的历史行程/偏好/对话记录明细（可按城市、日期、住宿类型筛选）"
+    "——查单次或筛选明细找这里；问汇总统计（共几次、总天数、常去哪）不是明细查询；"
+    "'帮我安排/规划/排/订'是规划请求，不是历史查询"
+    "→ 历史查询。"
 )
 
 from xiao_wen.memory import get_itineraries, get_preferences  # noqa: E402
@@ -28,14 +30,21 @@ _PREF_WORDS = ("偏好", "习惯", "常住", "记忆", "喜欢", "不吃", "口�
 # 计划向词：问「接下来/安排/什么时候出发」→ 未来规划；其余行程词 → 历史（已发生）
 _PLAN_WORDS = ("计划", "安排", "规划", "接下来", "下次", "什么时候", "出发", "即将", "将要", "准备", "待办")
 
-# 城市词表：单一来源 xiao_wen.reference_data.KNOWN_CITIES（由城市经纬度表派生）
-# 问题提到城市 → 按城市过滤行程
-_CITIES = KNOWN_CITIES
+# 城市词表：白名单（有经纬度坐标的常用差旅城市）为基础；
+# 问题提到城市 → 按城市过滤行程。只认白名单会漏掉临沂等非坐标表城市，
+# 导致城市筛选失效（返回全部行程），故候选词表还需含历史行程里实际出现过的城市。
+_CITY_PLACEHOLDERS = ("待定", "未知", "无", "出差")
 
 
-def _mentioned_cities(q: str) -> list[str]:
-    """问题里提到的城市（按词表匹配，保持输入顺序）"""
-    return [c for c in _CITIES if c in q]
+def _mentioned_cities(q: str, itineraries: list[dict] | None = None) -> list[str]:
+    """问题里提到的城市（白名单优先，历史行程城市兜底；按输入顺序去重）"""
+    candidates = list(KNOWN_CITIES)
+    for it in itineraries or []:
+        for key in ("from_city", "to_city"):
+            city = str(it.get(key, "")).strip()
+            if city and city not in _CITY_PLACEHOLDERS and city not in candidates:
+                candidates.append(city)
+    return [c for c in candidates if c in q]
 
 
 def _itinerary_matches(it: dict, cities: list[str]) -> bool:
@@ -65,7 +74,7 @@ def run(state) -> dict:
     cls = classify(its)
     plan_hit = any(w in q for w in _PLAN_WORDS)
 
-    cities = _mentioned_cities(q)
+    cities = _mentioned_cities(q, its)
     trip_hit = any(w in q for w in _TRIP_WORDS)
     pref_hit = any(w in q for w in _PREF_WORDS)
     # 都没命中（纯筛选/指代/追问句）→ 综合：两者都答（空回复是最大的失败）

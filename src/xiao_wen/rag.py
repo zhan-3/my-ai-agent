@@ -15,7 +15,7 @@ import hashlib
 import re
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from functools import lru_cache
 from http import HTTPStatus
@@ -163,9 +163,9 @@ def _extract_policy_facts(evidence: tuple[Evidence, ...]) -> tuple[PolicyFact, .
             ("reimbursement_deadline", r"出差结束后.*?在\s*(\d+)\s*个自然日内提交报销", "自然日", {}),
             ("long_trip_approval_days", r"长期出差（超过\s*(\d+)\s*天）", "天", {}),
             ("meal_entertainment_approval", r"超过\s*(\d+)\s*元需要部门主管审批", "元", {}),
-            ("train_seat_standard", r"允许预订：([^。\n]+)", "座位等级", {}),
-            ("domestic_flight_cabin", r"国内航班：([^。\n]+)", "舱位", {}),
-            ("taxi_reimbursement_scope", r"允许使用场景：([^。\n]+)", "场景", {}),
+            ("train_seat_standard", r"允许预订：([^。\n-]+)", "座位等级", {}),
+            ("domestic_flight_cabin", r"国内航班：([^。\n-]+)", "舱位", {}),
+            ("taxi_reimbursement_scope", r"允许使用场景：([^。\n-]+)", "场景", {}),
         ]
         for key, pattern, unit, scope in patterns:
             match = re.search(pattern, text)
@@ -558,6 +558,35 @@ def retrieve_guidance(city: str) -> dict[str, tuple[Evidence, ...]]:
         }
     except Exception:
         return {"city_tips": (), "emergency_tips": (), "green_tips": ()}
+
+
+def retrieve_trip_policy(query: str) -> PolicyContext:
+    """行程规划的多主题政策收集：均衡覆盖四份政策文档（01 标准 / 02 报销 / 03 预订 / 06 平台）。
+
+    retrieve_policy 是知识问答的 top-k 相关度检索；行程生成若复用会让「差旅标准」
+    单一文档霸榜、挤掉报销/预订渠道/平台操作知识。这里按主题分别取各文档代表，
+    保证行程上下文同时看到住宿/交通/餐饮标准、报销、预订、平台四类政策。
+    任一故障统一降级为 unavailable，不阻塞规划。
+    """
+    themes: tuple[tuple[str, str, int], ...] = (
+        ("01_travel_standards", "公司差旅标准 住宿标准 交通标准 餐饮标准", 2),
+        ("02_reimbursement_policy", "公司差旅报销 报销标准 报销流程 发票 时限", 1),
+        ("03_booking_guide", "公司差旅预订 机票预订 火车票预订 酒店预订 提前预订 渠道", 1),
+        ("06_platform_guide", "晓问商旅平台 预订操作 行程管理", 1),
+    )
+    try:
+        chunks = merge_tiny_chunks(load_chunks())
+        col = build_index(chunks)
+        evidence: list[Evidence] = []
+        for source, theme_query, k in themes:
+            evidence.extend(_source_evidence(theme_query, col, source, k=k))
+        if not evidence:
+            return PolicyContext(query=query, evidence=(), status="not_found")
+        ctx = policy_context_from_texts(query, [(e.source, e.text) for e in evidence])
+        rich = tuple(replace(e, similarity=orig.similarity) for e, orig in zip(ctx.evidence, evidence, strict=True))
+        return replace(ctx, evidence=rich)
+    except Exception:
+        return PolicyProvider._unavailable(query, "search_unavailable", retryable=True)
 
 
 def search_texts(query: str, k: int = 5) -> list[str]:

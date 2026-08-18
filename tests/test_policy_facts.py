@@ -41,3 +41,27 @@ def test_policy_context_marks_conflicting_facts_ambiguous():
     )
     assert context.status == "ambiguous"
     assert context.facts == ()
+
+
+def test_policy_context_extracts_train_seat_standard_consistently():
+    """「允许预订：二等座及以下」在两个文档中一致 → 不误判冲突。
+
+    分块合并换行后，正则若贪婪匹配会吞掉后续列表项（两种「特殊情况」措辞不同），
+    导致同一事实在两个来源里 value 不同而被误判 ambiguous（曾让「火车票能订什么座位」拒答）。
+    """
+    context = rag.policy_context_from_texts(
+        "火车票座位等级",
+        [
+            (
+                "01_travel_standards",
+                "高铁/动车标准 - 允许预订：二等座及以下 - 特殊情况可申请商务座 - 夜间出行可选择卧铺",
+            ),
+            (
+                "03_booking_guide",
+                "座位等级 - 允许预订：二等座及以下 - 特殊情况：长途夜间出行可申请卧铺 - 商务座需特别申请",
+            ),
+        ],
+    )
+    assert context.status == "grounded"
+    seat = {f.key: f for f in context.facts}["train_seat_standard"]
+    assert seat.value == "二等座及以下"

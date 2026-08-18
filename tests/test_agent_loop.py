@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage
 
-from xiao_wen.agent_loop import AgentLoop, LoopLimits, _trip_requested
+from xiao_wen.agent_loop import AgentLoop, LoopLimits, _message_tokens, _provides_origin, _result, _trip_requested
 
 
 class ScriptedModel:
@@ -168,6 +168,66 @@ def test_active_trip_accepts_pure_city_as_missing_destination():
             "active_task": {"intent": "行程规划", "missing": ["目的城市"]},
         }
     )
+
+
+def test_trip_gate_accepts_non_whitelist_origin_city():
+    """「从临沂出发」补缺：临沂不在 KNOWN_CITIES 白名单，但仍是有效的出发城市补全"""
+    turn = {
+        "user_input": "从临沂出发",
+        "active_task": {"intent": "行程规划", "missing": ["出发城市"]},
+    }
+    assert _provides_origin("从临沂出发")
+    assert _trip_requested(turn)
+
+
+def test_provides_origin_variants():
+    assert _provides_origin("从临沂出发")
+    assert _provides_origin("常驻临沂")
+    assert _provides_origin("临沂")
+    assert _provides_origin("临沂市")
+    assert not _provides_origin("好的")
+    assert not _provides_origin("算了不去了")
+
+
+def test_message_tokens_ignores_cumulative_usage():
+    """usage_metadata.total_tokens 是累计值，不得作为增量累加（曾几何虚增触发 token 上限）"""
+    msg = AIMessage(
+        content="",
+        tool_calls=[{"name": "agent_0", "args": {"request": "从临沂出发"}, "id": "c1"}],
+        usage_metadata={"total_tokens": 9000, "input_tokens": 8990, "output_tokens": 10},
+    )
+    assert _message_tokens(msg) < 200  # 按字符估算，而非 9000
+
+
+def test_needs_info_answer_reuses_child_text_not_supervisor_rambling():
+    """行程规划追问缺项时，最终答案直接复用子 Agent 缺项话术，不输出主管思维链"""
+    child_text = "⚠️ 还缺一些信息才能帮你安排行程，请补充：\n· 出发城市"
+    rambling = (
+        "好的，目前没有已记录的常驻城市偏好。我需要向用户询问出发城市。\n\n"
+        "根据行程规划的结果，目前缺少出发城市。我需要向用户确认。\n\n---\n\n"
+        "您的行程规划还缺少…"
+    )
+    result = _result(
+        "帮我规划10月8日去北京开会4天的行程",
+        rambling,
+        [
+            (
+                "行程规划",
+                {
+                    "answer": child_text,
+                    "plan": None,
+                    "task_update": {
+                        "action": "set",
+                        "task": {"intent": "行程规划", "resume_context": "…", "missing": ["出发城市"]},
+                    },
+                },
+            )
+        ],
+        [],
+    )
+    assert result["answer"] == child_text
+    assert "我需要" not in result["answer"]
+    assert "好的，目前" not in result["answer"]
 
 
 def test_unsolicited_trip_side_effect_is_blocked():
@@ -346,45 +406,3 @@ def test_ungrounded_policy_answer_is_exact_child_failure_not_supervisor_claim():
 
     assert result["answer"] == "未检索到相关政策。"
     assert "999" not in result["answer"]
-
-
-def test_ticket_answer_is_exact_child_result():
-    model = ScriptedModel(
-        call("agent_0", "查上海到北京高铁票"),
-        AIMessage(content="G1 还有票，二等座 553 元。"),
-    )
-    official = (
-        "已生成铁路12306官方预填查询入口：上海 → 北京南，出发日期 2026-08-20\n"
-        "https://kyfw.12306.cn/otn/leftTicket/init?fs=上海,SHH&ts=北京南,VNP&date=2026-08-20\n"
-        "车站名称和电报码来自12306官方车站数据；请在12306页面确认实际车次、余票、票价和乘车人信息；晓问不代购票。"
-    )
-    loop = AgentLoop(
-        model=model,
-        discover_agents=lambda: manifests("联网查询"),
-        load_child=lambda _intent: SimpleNamespace(
-            run=lambda _state: {"answer": official, "ticket_status": "official"}
-        ),
-    )
-
-    result = loop.run({"user_input": "查上海到北京高铁票", "recent": "无"})
-
-    assert result["answer"] == official
-
-
-def test_ticket_gate_rejects_unverified_child_claims():
-    model = ScriptedModel(
-        call("agent_0", "查上海到北京高铁票"),
-        AIMessage(content="G1 还有票，二等座 553 元。"),
-    )
-    loop = AgentLoop(
-        model=model,
-        discover_agents=lambda: manifests("联网查询"),
-        load_child=lambda _intent: SimpleNamespace(
-            run=lambda _state: {"answer": "G1 还有票，二等座 553 元。", "ticket_status": "official"}
-        ),
-    )
-
-    result = loop.run({"user_input": "查上海到北京高铁票", "recent": "无"})
-
-    assert "G1" not in result["answer"]
-    assert "官方链接" in result["answer"]

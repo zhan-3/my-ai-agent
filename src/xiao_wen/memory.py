@@ -85,11 +85,15 @@ def get_recent_messages(n: int = 6, *, session_id: str = "default") -> list[dict
 
 
 def format_recent_messages(n: int = 6, *, session_id: str = "default") -> str:
-    """格式化为给 LLM 看的文本（供主管注入，hot path 注入要克制）"""
+    """格式化为给 LLM 看的文本（供主管注入，hot path 注入要克制）
+
+    每条最多 400 字：行程答案等长文本必须对 LLM 可见，
+    否则追问行程细节时主管/子 Agent 只能凭截断文本脑补参数。
+    """
     msgs = get_recent_messages(n, session_id=session_id)
     if not msgs:
         return "无"
-    lines = [f"{'用户' if m['role'] == 'user' else '助手'}: {m['content'][:80]}" for m in msgs]
+    lines = [f"{'用户' if m['role'] == 'user' else '助手'}: {m['content'][:400]}" for m in msgs]
     return "\n".join(lines)
 
 

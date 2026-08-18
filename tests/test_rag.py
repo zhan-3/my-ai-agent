@@ -351,6 +351,30 @@ def test_retrieve_guidance_limits_each_topic(monkeypatch):
     assert [k for _, k in calls] == [20, 20, 20]
 
 
+def test_retrieve_trip_policy_balances_policy_sources(monkeypatch):
+    """行程规划的政策收集按主题均衡覆盖 01/02/03/06，不让「差旅标准」单一文档霸榜。"""
+
+    def fake_search(query, col, k=5):
+        if "平台" in query:
+            src = "06_platform_guide"
+        elif "报销" in query:
+            src = "02_reimbursement_policy"
+        elif "预订" in query:
+            src = "03_booking_guide"
+        else:
+            src = "01_travel_standards"
+        return [(0.85, {"source": src}, f"{src} 代表段")]
+
+    monkeypatch.setattr(rag, "load_chunks", lambda: [("01_travel_standards", "标准段")])
+    monkeypatch.setattr(rag, "build_index", lambda chunks: object())
+    monkeypatch.setattr(rag, "_search_with_metadata", fake_search)
+
+    ctx = rag.retrieve_trip_policy("去北京出差")
+    sources = {e.source for e in ctx.evidence}
+    assert sources == {"01_travel_standards", "02_reimbursement_policy", "03_booking_guide", "06_platform_guide"}
+    assert ctx.status == "grounded"
+
+
 def test_policy_facts_cover_deadline_transport_and_approval():
     context = rag.policy_context_from_texts(
         "政策",

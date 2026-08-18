@@ -18,8 +18,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
 from xiao_wen import llm
-from xiao_wen.memory import add_itinerary, get_home_city, get_preferences
-from xiao_wen.ticket_link import build_ticket_url
+from xiao_wen.memory import add_itinerary, add_or_update_preference, get_home_city, get_preferences
 
 # 相对日期解析：给提取器注入「今天」（含周几），让「下周/明天」能推算成具体日期
 _WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
@@ -71,7 +70,8 @@ class ItineraryPlan(BaseModel):
 class PlanResult:
     plan: ItineraryPlan
     request: TripRequest | None = None
-    memory_write: dict | None = None
+    memory_writes: list[dict] = field(default_factory=list)
+    home_city: str = ""  # 本轮声明并采纳的常驻城市（未声明/与已有相同为空串）
 
 
 @dataclass
@@ -117,16 +117,16 @@ plan_prompt = ChatPromptTemplate.from_messages(
             """你是资深差旅规划师，输出严格 JSON。基于差旅要素生成企业差旅行程。
 约束：
 - 天数与要素一致；每天包含 transport、hotel、activities、notes 四个字段
-- 人数、出行目的、交通偏好影响安排：多人出行注意订房/订票数量，公务目的安排会议/拜访，旅游目的安排景点
+- 人数、出行目的、交通偏好影响安排：多人出行（people_count > 1）注意订房/订票数量，summary 和 reasons 必须明确写出人数与房间/票数；公务目的安排会议/拜访，旅游目的安排景点
 - 交通方式符合城市间距离；活动含公务安排和用餐建议
 - 住宿必须符合用户的【历史偏好】，偏好没提到再按预算安排；酒店给品牌/档位即可
 - reasons：安排理由列表，每项一句，涵盖政策约束、用户偏好、交通合理性，例如："住宿按差旅政策一线城市不超过500元/晚"、"考虑你不吃辣的偏好安排清淡餐饮"
-- summary 是给用户看的中文总结（不含 JSON）
+- summary 是给用户看的中文总结（不含 JSON）；只描述行程安排与理由，**不得声称系统已执行任何动作**（如「已记录/已保存/已添加您的偏好或历史」）；偏好与历史记录由程序负责，会在行程回答之外提示；出行人数>1时 summary 必须明确写出人数与订房数量
 
 字段形状必须严格如下（都是简单值，禁止嵌套对象！）：
-- transport：一句话字符串，如 "高铁（具体车次和时间以12306实时查询为准）"
+- transport：一句话字符串，如 "高铁（具体车次和时间以晓问商旅平台实时查询为准）"
 - hotel：字符串，如 "全季酒店（杭州西湖店）"；最后一天返程写 "无（当晚返程）"
-- 禁止编造车次、发车时间、到达时间、余票或票价；没有实时票务结果时只能写“以12306为准”
+- 禁止编造车次、发车时间、到达时间、余票或票价；没有实时票务结果时只能写“以晓问商旅平台实时查询为准”
 - activities：字符串数组，每项一句，如 "14:00-17:00 公务：拜访客户公司"、"18:30-20:00 用餐：与客户晚餐"
 - notes：字符串，一两句备注
 
@@ -162,6 +162,36 @@ _UNKNOWN_CITIES = ("待定", "未知", "出差", "无")
 
 # 纯城市名补全兜底：排除含方向/回复/时间词的表述（那是完整句，交给 LLM），
 # 排除含数字（「4天」「10月8日」不是城市）——只认「临沂」「北京」这类纯城市名
+_HOME_MARKERS = ("常住", "定居", "家在", "目前住在", "住在")
+
+
+def _detect_home_city(user_input: str) -> str:
+    """识别「常住/定居/家在/目前住在」声明的常驻城市；未声明返回空串。
+
+    命中即视为用户对常驻城市的事实声明（如「从常住地临沂」）。行程规划把该城市沉淀为
+    偏好写回（延迟写），回答中的「已记录常驻城市」由代码在真实落库后追加，禁止模型编造。
+    """
+    if not any(marker in user_input for marker in _HOME_MARKERS):
+        return ""
+    for marker in _HOME_MARKERS:
+        idx = user_input.find(marker)
+        if idx < 0:
+            continue
+        tail = user_input[idx + len(marker) :]
+        if tail.startswith("地"):
+            tail = tail[1:]
+        from xiao_wen.reference_data import KNOWN_CITIES
+
+        t = tail.lstrip(" ，,、:：")
+        for city in sorted(KNOWN_CITIES, key=len, reverse=True):
+            if t.startswith(city):
+                return city
+        candidate = t[:2]  # 已知城市之外（如临沂）：取 2 字城市名
+        if len(candidate) == 2 and candidate not in _CITY_REPLY_WORDS and not any(c.isdigit() for c in candidate):
+            return candidate
+    return ""
+
+
 _CITY_REPLY_WORDS = (
     "去",
     "从",
@@ -316,7 +346,7 @@ def plan(
     if req.transport_pref in ("无", "高铁"):
         for day in plan.days:
             if any(token in day.transport for token in ("高铁", "动车", "火车")):
-                day.transport = "高铁（具体车次和时间以12306实时查询为准）"
+                day.transport = "高铁（具体车次和时间以晓问商旅平台实时查询为准）"
     # 生成后、写回前做确定性验证：日期/天数/政策证据不满足时不污染历史记忆。
     from xiao_wen.validation import validate_trip
 
@@ -349,11 +379,21 @@ def plan(
     facts["validator_version"] = VALIDATOR_VERSION
     if cancelled and cancelled():
         raise RuntimeError("请求已取消")
-    memory_write: dict | None = {"type": "itinerary", "facts": facts, "summary": plan.summary}
+    memory_writes: list[dict] = []
     if not defer_write:
         add_itinerary(facts, plan.summary, session_id=session_id)
-        memory_write = None
-    return PlanResult(plan=plan, request=req, memory_write=memory_write)
+    else:
+        memory_writes.append({"type": "itinerary", "facts": facts, "summary": plan.summary})
+    # 「从常住地X/我常住X/家在X」：常驻城市声明沉淀为偏好（写入与 itinerary 同一事务语义）
+    home_city = ""
+    declared = _detect_home_city(user_input)
+    if declared and declared != hc:
+        home_city = declared
+        if defer_write:
+            memory_writes.append({"type": "preference", "category": "常驻城市", "content": declared, "is_update": True})
+        else:
+            add_or_update_preference("常驻城市", declared, True, session_id=session_id)
+    return PlanResult(plan=plan, request=req, memory_writes=memory_writes, home_city=home_city)
 
 
 # ---- 展示（可读性格式化，测试锁定） ----
@@ -406,7 +446,7 @@ def format_budget(req: TripRequest) -> str:
     meal_people = "" if b["people"] == 1 else f" × {b['people']} 人"
     return (
         "💰 规划估算（非报价、非公司政策）：\n"
-        "· 交通：不提供金额，请以 12306 官方页面的实时查询结果为准\n"
+        "· 交通：不提供金额，请以晓问商旅平台的实时查询结果为准\n"
         f"{hotel_line}"
         f"· 餐饮：{b['meal_per_day']} 元/天{meal_people} × {req.duration_days} 天 ≈ {b['meal_cost']} 元\n"
         f"· 住宿与餐饮小计（不含交通）：约 {b['total']} 元"
@@ -466,11 +506,6 @@ class TripOutcome:
     memory_writes: list[dict] = field(default_factory=list)
 
 
-def _ticket_url(origin: str, destination: str, travel_date: str, return_date: str = "") -> tuple[str, str | None]:
-    """统一生成 12306 官方预填链接。"""
-    return build_ticket_url(origin, destination, travel_date, return_date)
-
-
 def handle(
     user_input: str,
     *,
@@ -521,6 +556,9 @@ def handle(
         )
     answer = format_plan(r.plan)
     req = r.request
+    if req and isinstance(req.people_count, int) and req.people_count > 1:
+        rooms = (req.people_count + 1) // 2
+        answer = f"👥 本次出行 {req.people_count} 人（住宿按 {rooms} 间房估算）\n\n{answer}"
     policy_context = (upstream or {}).get("policy_context")
     policy_status = getattr(policy_context, "status", "not_found")
     if policy_status == "unavailable":
@@ -532,7 +570,7 @@ def handle(
             "如果实际日期不同，告诉我具体日期，我重新排。"
         )
     if req and policy_status != "unavailable":
-        # 预算块：非政策规划估算；交通金额始终留给 12306 实时结果。
+        # 预算块：非政策规划估算；交通金额始终留给晓问商旅平台实时结果。
         with suppress(Exception):
             answer += f"\n\n{format_budget(req)}"
     if req and req.start_date not in ("待定", ""):
@@ -560,26 +598,6 @@ def handle(
             alerts = [note for _, note in weather_notes if _weather_needs_attention(note)]
             if alerts:
                 answer += "\n\n⚠️ 异常天气安全提醒：请预留交通缓冲，关注航班/高铁和当地预警；必要时联系主管调整安排。"
-    ticket_url = ""
-    if (
-        req
-        and req.start_date not in ("待定", "")
-        and req.from_city not in ("待定", "")
-        and req.to_city not in ("待定", "")
-    ):
-        ticket_url, ticket_date_error = _ticket_url(req.from_city, req.to_city, req.start_date, req.return_date)
-        answer += f"\n\n🎫 车票查询：\n· {req.from_city} → {req.to_city}\n· 出发日期：{req.start_date}"
-        if req.return_date:
-            answer += f"\n· 返程日期：{req.return_date}"
-        if ticket_date_error:
-            answer += f"\n· 暂未生成链接：{ticket_date_error}"
-        elif ticket_url:
-            answer += (
-                f"\n· 前往铁路12306查询车次：{ticket_url}"
-                "\n车站名称和电报码来自12306官方车站数据；请在12306页面确认实际车次、余票和票价；晓问不代购票。"
-            )
-        else:
-            answer += "\n· 暂未生成链接：无法从12306官方车站数据确认对应车站，请补充具体车站。"
     if upstream:
         policy_sources = tuple(
             dict.fromkeys(
@@ -598,5 +616,7 @@ def handle(
     plan_dict["date_is_vague"] = bool(req and req.date_is_vague)
     from xiao_wen.dialogue import task_update_clear
 
-    writes = [r.memory_write] if r.memory_write else []
+    writes = list(r.memory_writes)
+    if r.home_city:
+        answer += f"\n\n✅ 已记录您的常驻城市为{r.home_city}，后续出差默认从该城市出发。"
     return TripOutcome(answer=answer, plan=plan_dict, task_update=task_update_clear(), memory_writes=writes)

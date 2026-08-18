@@ -7,8 +7,10 @@ run(state) -> dict：统一子 Agent 接口，state 含 user_input / recent。
 
 INTENT = "行程规划"
 DESCRIPTION = (
-    "用户请助理安排行程、出差计划，或询问行程安排 → 行程规划。"
+    "用户请助理安排行程、出差计划或行程细节（帮我规划/安排/排/订/物色落脚点/弄个安排，"
+    "含口语化表达），或询问行程安排 → 行程规划。"
     "负责生成逐日行程（交通/住宿/餐饮/预算）、常驻城市补全与缺项提示，并写回长期记忆。"
+    "公司团建、个人旅游/度假（如五一去三亚玩）不属于企业差旅，不归这里。"
 )
 
 
@@ -30,7 +32,7 @@ def collect_upstream(user_input: str, session_id: str, recent: str = "") -> dict
         if cities
         else f"{user_input} 公司差旅政策 住宿标准 交通标准 报销标准 审批要求"
     )
-    policy_context = rag.retrieve_policy(policy_query)
+    policy_context = rag.retrieve_trip_policy(policy_query)
     policy = policy_context.text
     # 主动知识：出发/目的城市攻略、紧急流程、绿色出行不再依赖用户另问。
     # 两个城市都取证：出发城市影响机场/车站和天气衔接，目的城市影响住宿、当地交通和安全。
@@ -41,16 +43,17 @@ def collect_upstream(user_input: str, session_id: str, recent: str = "") -> dict
     }
     with suppress(Exception):
         cities = _extract_city_hints(user_input, recent)
+        # 应急与绿色知识对任何出行都通用，不依赖城市；先无条件各取一段。
+        base = rag.retrieve_guidance(cities[0] if cities else "")
+        guidance["emergency_tips"] = base["emergency_tips"][:1]
+        guidance["green_tips"] = base["green_tips"][:1]
         if cities:
             results = [rag.retrieve_guidance(city) for city in cities]
-            guidance = {
-                key: tuple(item for result in results for item in result.get(key, ()) if isinstance(item, rag.Evidence))
-                for key in guidance
-            }
-            # 主动知识是注意事项，不让它挤满生成上下文：城市各取一段，其他类别各取一段。
-            guidance["city_tips"] = guidance["city_tips"][:2]
-            guidance["emergency_tips"] = guidance["emergency_tips"][:1]
-            guidance["green_tips"] = guidance["green_tips"][:1]
+            city_tips = tuple(
+                item for result in results for item in result.get("city_tips", ()) if isinstance(item, rag.Evidence)
+            )
+            # 主动知识是注意事项，不让它挤满生成上下文：城市各取一段。
+            guidance["city_tips"] = city_tips[:2]
     guidance_text = "\n\n".join(
         f"【{label} · {item.source}】\n{item.text}"
         for label, key in (("城市提示", "city_tips"), ("紧急处理", "emergency_tips"), ("绿色出行", "green_tips"))
@@ -86,15 +89,31 @@ def collect_upstream(user_input: str, session_id: str, recent: str = "") -> dict
 
 
 def _extract_city_hints(user_input: str, recent: str = "") -> tuple[str, ...]:
-    """提取本轮/最近对话中的出发和目的城市，保持出现顺序并去重。"""
-    from xiao_wen.reference_data import KNOWN_CITIES
+    """提取本轮/最近对话中的出发和目的城市，保持出现顺序并去重。
 
+    白名单（KNOWN_CITIES）最长匹配优先；再补提白名单之外的出发城市（「从X出发」，
+    如临沂）与常驻城市声明，保证城市攻略/应急/绿色知识也能注入。
+    """
+    import re
+
+    from xiao_wen.reference_data import KNOWN_CITIES
+    from xiao_wen.trip_planner import _detect_home_city, _looks_like_city_name
+
+    _LOCATION_WORDS = ("家里", "这边", "那儿", "那里", "当地", "公司", "单位", "酒店", "机场", "车站")
     found: list[str] = []
     for text in (user_input, recent):
         for city in sorted(KNOWN_CITIES, key=len, reverse=True):
             if city in text and city not in found:
                 found.append(city)
-    return tuple(found[:2])
+        # 非白名单出发城市：从X出发 / 从X走 / 从X过来（X 为 2-4 字城市名，如临沂）
+        for m in re.finditer(r"从(.{2,4}?)(?:出发|走|过来)", text):
+            city = m.group(1)
+            if city not in _LOCATION_WORDS and _looks_like_city_name(city) and city not in found:
+                found.append(city)
+        home = _detect_home_city(text)
+        if home and home not in found:
+            found.append(home)
+    return tuple(found[:3])
 
 
 def _extract_destination_hint(user_input: str, recent: str = "") -> str:

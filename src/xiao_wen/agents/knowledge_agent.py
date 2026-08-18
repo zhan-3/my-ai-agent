@@ -4,7 +4,10 @@
 """
 
 INTENT = "知识问答"
-DESCRIPTION = "用户询问差旅政策、报销规则、预订流程、住宿标准等企业知识 → 知识问答。"
+DESCRIPTION = (
+    "用户询问差旅政策、报销规则、预订流程（机票/火车票/酒店预订、购票渠道、座位等级、改签、退票、开售时间）、"
+    "住宿标准等企业知识 → 知识问答。"
+)
 
 from xiao_wen import rag  # noqa: E402  rag.knowledge_qa(query) -> str
 

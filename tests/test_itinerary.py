@@ -196,12 +196,17 @@ def test_collect_upstream_gathers_and_degrades(monkeypatch):
     monkeypatch.setattr(pa, "_invoke_pref_model", lambda _: pa.PreferenceList(records=[]))
 
     # 正常收集：政策命中 2 段 + 历史最近 2 条
-    monkeypatch.setattr(rag, "load_chunks", lambda: [("policy", "政策段A"), ("policy", "政策段B")])
+    monkeypatch.setattr(
+        rag, "load_chunks", lambda: [("01_travel_standards", "政策段A"), ("01_travel_standards", "政策段B")]
+    )
     monkeypatch.setattr(rag, "build_index", lambda chunks: object())
     monkeypatch.setattr(
         rag,
         "_search_with_metadata",
-        lambda q, col, k=5: [(0.9, {"source": "policy"}, "政策段A"), (0.8, {"source": "policy"}, "政策段B")],
+        lambda q, col, k=5: [
+            (0.9, {"source": "01_travel_standards"}, "政策段A"),
+            (0.8, {"source": "01_travel_standards"}, "政策段B"),
+        ],
     )
     monkeypatch.setattr(
         ms,
@@ -260,7 +265,9 @@ def test_collect_upstream_uses_recent_city_for_guidance(monkeypatch):
     from xiao_wen.agents import itinerary_agent as ia
     from xiao_wen.agents import preference_agent as pa
 
-    monkeypatch.setattr(rag, "retrieve_policy", lambda _: rag.PolicyContext(query="", evidence=(), status="not_found"))
+    monkeypatch.setattr(
+        rag, "retrieve_trip_policy", lambda _: rag.PolicyContext(query="", evidence=(), status="not_found")
+    )
     monkeypatch.setattr(rag, "search_texts", lambda _: [])
     monkeypatch.setattr(
         rag,
@@ -286,7 +293,12 @@ def test_collect_upstream_extracts_turn_prefs(monkeypatch):
     from xiao_wen.agents import itinerary_agent as ia
     from xiao_wen.agents import preference_agent as pa
 
-    monkeypatch.setattr(rag, "load_chunks", lambda: [])
+    monkeypatch.setattr(
+        rag, "retrieve_trip_policy", lambda _: rag.PolicyContext(query="", evidence=(), status="not_found")
+    )
+    monkeypatch.setattr(
+        rag, "retrieve_guidance", lambda city: {"city_tips": (), "emergency_tips": (), "green_tips": ()}
+    )
     monkeypatch.setattr(ms, "get_itineraries", lambda *, session_id="default": [])
     monkeypatch.setattr(
         pa,
@@ -312,6 +324,56 @@ def test_plan_home_city_completes_before_missing_check(monkeypatch):
     r = _it.plan("去北京开会")
     assert isinstance(r, _it.PlanResult)
     assert r.plan.summary == "上海→北京"
+
+
+def test_detect_home_city_pure_function():
+    assert _it._detect_home_city("从常住地临沂") == "临沂"
+    assert _it._detect_home_city("从常住地临沂去北京开会") == "临沂"
+    assert _it._detect_home_city("我常住上海") == "上海"
+    assert _it._detect_home_city("家在杭州") == "杭州"
+    assert _it._detect_home_city("我目前住在深圳") == "深圳"
+    assert _it._detect_home_city("帮我规划去北京的行程") == ""
+    assert _it._detect_home_city("好的") == ""
+    assert _it._detect_home_city("我明天去上海") == ""
+
+
+def test_plan_declares_home_city_writes_preference_deferred(monkeypatch):
+    """「从常住地临沂」→ 常驻城市偏好进入延迟写清单，不直接落库"""
+    from xiao_wen import memory as ms
+
+    plan_out = ItineraryPlan(summary="临沂→北京", days=[], reasons=[])
+    _stub_models(monkeypatch, _req(from_city="临沂"), plan_out=plan_out)
+    r = _it.plan("从常住地临沂去北京开会", defer_write=True)
+    assert isinstance(r, _it.PlanResult)
+    assert r.home_city == "临沂"
+    assert {"type": "preference", "category": "常驻城市", "content": "临沂", "is_update": True} in r.memory_writes
+    assert ms.get_preferences() == []  # 延迟写：库中暂未出现
+
+
+def test_plan_declares_home_city_writes_direct(monkeypatch):
+    """非延迟路径：常驻城市偏好直接写入"""
+    from xiao_wen import memory as ms
+
+    plan_out = ItineraryPlan(summary="临沂→北京", days=[], reasons=[])
+    _stub_models(monkeypatch, _req(from_city="临沂"), plan_out=plan_out)
+    r = _it.plan("从常住地临沂去北京开会")
+    assert isinstance(r, _it.PlanResult)
+    assert r.home_city == "临沂"
+    prefs = ms.get_preferences()
+    assert any(p["category"] == "常驻城市" and p["content"] == "临沂" for p in prefs)
+
+
+def test_plan_does_not_redeclare_existing_home_city(monkeypatch):
+    """已有常驻城市且本轮声明相同 → 不重复写、不声明"""
+    from xiao_wen import memory as ms
+
+    ms.add_or_update_preference("常驻城市", "临沂", True)
+    plan_out = ItineraryPlan(summary="临沂→北京", days=[], reasons=[])
+    _stub_models(monkeypatch, _req(from_city="临沂"), plan_out=plan_out)
+    r = _it.plan("从常住地临沂去北京开会", defer_write=True)
+    assert isinstance(r, _it.PlanResult)
+    assert r.home_city == ""
+    assert all(w.get("type") != "preference" for w in r.memory_writes)
 
 
 def test_plan_does_not_write_back_when_runtime_validation_fails(monkeypatch):
@@ -420,7 +482,7 @@ def test_format_budget_readable():
     """预算块明确估算边界，并拒绝提供交通金额。"""
     req = _req(to_city="杭州", from_city="北京", duration_days=3)
     text = _it.format_budget(req)
-    assert "12306 官方页面" in text and "交通：不提供金额" in text
+    assert "晓问商旅平台" in text and "交通：不提供金额" in text
     assert "450 元/晚 × 2 晚" in text and "≈ 900 元" in text
     assert "非报价、非公司政策" in text and "不含交通" in text
 
@@ -587,3 +649,26 @@ def test_plan_recent_defaults_to_wu(monkeypatch):
     monkeypatch.setattr(_it, "_plan_model", lambda: _FakeChain(plan_out))
     _it.plan("帮我规划去杭州出差")
     assert seen["recent"] == "无"
+
+
+# ---------------- 展示补齐重点要素：人数 ----------------
+
+
+def test_handle_shows_people_count(monkeypatch):
+    """行程展示补齐重点要素：人数（>1 时）"""
+    from xiao_wen import web
+
+    request = _req(from_city="临沂", to_city="北京", people_count=3)
+    plan = ItineraryPlan(summary="临沂去北京开会", days=[], reasons=[])
+
+    monkeypatch.setattr(_it, "plan", lambda *a, **k: _it.PlanResult(plan=plan, request=request))
+
+    class _FakeWeather:
+        def invoke(self, payload):
+            return "晴，最高 25°C"
+
+    monkeypatch.setattr(web, "get_weather", _FakeWeather())
+
+    outcome = _it.handle("我们3个人从临沂去北京开会4天")
+    assert "本次出行 3 人" in outcome.answer
+    assert "住宿按 2 间房" in outcome.answer

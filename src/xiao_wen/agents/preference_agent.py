@@ -5,7 +5,12 @@
 """
 
 INTENT = "偏好记录"
-DESCRIPTION = "用户陈述个人偏好（住宿、餐饮、出行风格、常驻城市、预算）→ 偏好记录。"
+DESCRIPTION = (
+    "仅记录用户对自身出差习惯的陈述（我喜欢/我不吃辣/我常住某地/出差习惯住连锁酒店）"
+    "——住宿、餐饮、常驻城市、预算等；"
+    "不含'帮我安排/规划/排/订'类动作请求（那些属于行程规划）"
+    "→ 偏好记录。"
+)
 
 from functools import lru_cache  # noqa: E402
 from typing import Literal  # noqa: E402
