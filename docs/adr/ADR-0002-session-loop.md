@@ -5,11 +5,11 @@
 
 ## 决策
 
-`session.py` 是同步与流式会话的唯一入口，负责读取最近对话、调用图工厂、归一化结果并在成功
-时写回用户与助手消息。图与存储接缝可注入，Agent 和 Web 层不重复会话循环。
+`session.py` 是同步与流式会话的唯一入口，负责读取最近对话、运行主管 Agent Loop、归一化结果并在成功
+时写回工具 transcript 与用户/助手消息。Loop 与存储接缝可注入，子 Agent 和 Web 层不重复会话循环。
 
 - `chat()` 返回 `ChatResult`，统一答案、意图、证据、政策状态和结构化故障。
-- `chat_stream()` 产生稳定 SSE 事件；系统故障使用 `error`，成功结束使用 `done`。
+- `stream_chat()` 将 Loop 的 `run_start/agent_start/agent_result` 映射为稳定 SSE 阶段事件；系统故障使用 `error`，成功结束使用 `done`。
 - 预期领域故障不写入记忆；未知异常转换为通用可重试服务故障。
 - Web 层从 JWT 提取 `user_id`，并与客户端 `conversation_id` 派生线程 `session_id`。
 - 会话入口加载并持久化线程级活跃任务；独立请求不覆盖未完成行程。

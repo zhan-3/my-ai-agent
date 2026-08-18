@@ -1,7 +1,7 @@
 [project]
 name = "xiao-wen"
 version = "0.1.0"
-description = "企业差旅多 Agent 助手：意图主管 + 子 Agent 注册中心 + 两层记忆 + 知识检索 + 联网查询"
+description = "企业差旅多 Agent 助手：有界主管 Loop + 子 Agent 注册中心 + 两层记忆 + 知识检索 + 联网查询"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

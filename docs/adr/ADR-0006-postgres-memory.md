@@ -10,8 +10,8 @@
 
 ## 决策
 
-1. 运行时唯一后端为 Postgres，`POSTGRES_URL` 必填；消息、偏好、行程和用户分别存入四张表。
-2. 短期消息按线程 `session_id` 过滤；偏好与行程按 `user_id` 过滤。活跃任务表同时校验线程和用户。
+1. 运行时唯一后端为 Postgres，`POSTGRES_URL` 必填；用户消息、Agent transcript、偏好、行程、活跃任务和认证用户分别持久化。
+2. 短期消息与 Agent transcript 按线程 `session_id` 过滤；偏好与行程按 `user_id` 过滤。活跃任务表同时校验线程和用户。
 3. 当前用 `CREATE TABLE IF NOT EXISTS` 幂等初始化表结构，连接按操作短连接。migration 框架和
    连接池不在本迭代引入。
 4. Compose、CI 和镜像 smoke 统一使用 PostgreSQL 16。Compose 数据卷挂载到
@@ -28,5 +28,5 @@
 
 ## 后果与后续
 
-- 当前部署明确支持单应用实例；进程内会话锁、图缓存和熔断状态不提供跨实例一致性。
+- 当前部署明确支持单应用实例；进程内会话锁和熔断状态不提供跨实例一致性。
 - schema migration、连接池、备份恢复和多实例协调是后续独立工作，不伪装为现有能力。

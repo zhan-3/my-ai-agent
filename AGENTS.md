@@ -18,11 +18,9 @@ Before committing code changes, run `scripts/gate.sh`; it executes the determini
 
 Unit tests use the single Postgres memory backend. Start it with `docker compose up -d postgres` and export `POSTGRES_TEST_URL=postgresql://postgres:123456@localhost:5432/xiao_wen_test` before running tests. Tests refuse to fall back to `POSTGRES_URL`.
 
-When changing intent classification in `src/xiao_wen/intent.py`, also run `uv run python scripts/golden_intents.py --set holdout` and report the score; see `tests/data/HOLDOUT.md`.
-
 ### Domain guardrails
 
-- **Supervisor runtime:** The next architecture target is a bounded Pi-inspired `decide → call child Agent → observe → decide → final` loop. Preserve registered child Agents as domain executors; do not replace the loop with more fixed Workflow branches. Test the Loop interface and remove superseded Workflow implementation tests instead of layering both suites.
+- **Supervisor runtime:** Production uses a bounded Pi-inspired `decide → call child Agent → observe → decide → final` loop. Preserve registered child Agents as domain executors; do not reintroduce fixed supervisor Workflow branches. Test the Loop interface rather than internal topology.
 - **Trip orchestration:** Preserve the existing multi-agent `collect-then-compose` flow inside the itinerary child Agent. Keep domain logic in deep modules and child Agents thin. Policy claims in answers must carry RAG evidence, and weather failures must be represented explicitly rather than filled with guesses.
 - **12306 tickets:** Use only the public official railway entry. Station names/codes come from `src/xiao_wen/stations.py` and the official `station_name.js`; link construction and date validation stay in `src/xiao_wen/ticket_link.py` and `src/xiao_wen/ticket_policy.py`. Return official links and clearly bounded policy facts—not invented trains, schedules, availability, fares, orders, or purchase results, and never private ticket APIs.
 - **Ticket dates:** Use the official dynamic sale-until page when available; fallback is 15 days including today (`today + 14 days`). Validate both outbound and return dates, with return date not earlier than outbound. Preserve commas in `fs`, `ts`, and two-date `date` query parameters. The user’s explicit date always wins over defaults.

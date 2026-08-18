@@ -1,7 +1,7 @@
 # 测试与门禁
 
-测试的目标是保护领域不变量和稳定接口，而不是冻结当前 Workflow 的节点拓扑。Agent Loop 接管主管
-入口后，应以 Loop 接口测试替换旧编排实现测试；替换完成前不提前删除仍在保护生产路径的用例。
+测试保护领域不变量和稳定接口，不冻结内部调度拓扑。主管入口已由 Agent Loop 接管，编排测试统一
+通过 Loop 与会话接口验证。
 
 ## 提交前门禁
 
@@ -40,18 +40,12 @@ git diff --exit-code -- frontend/src/api/schema.generated.ts
 # 真实模型或 Embedding 接缝改动
 uv run pytest -q -m "integration and not external_live"
 
-# 意图分类行为改动
-uv run python scripts/golden_intents.py --set holdout
-
-# 人工审阅的明确意图契约
-uv run python scripts/golden_intents.py --threshold 0.90 --min-intent 0.75
-
 # 发布镜像
 scripts/smoke_image.sh xiao-wen:ci
 ```
 
 真实模型与第三方实时检查只用于诊断。它们的波动、成本或供应商故障不得伪装成确定性门禁
-失败，也不得被报告成产品发布成绩。评测数据可信边界见 [`tests/data/EVAL.md`](../tests/data/EVAL.md)。
+失败，也不得被报告成产品发布成绩。
 
 ## 长期保留的安全网
 
@@ -66,9 +60,9 @@ scripts/smoke_image.sh xiao-wen:ci
 - 配置、密钥和 readiness 语义
 - 子 Agent 注册、懒加载和统一执行契约
 
-## Agent Loop 的目标测试面
+## Agent Loop 测试面
 
-主管 Loop 落地时，优先通过其小接口验证：
+主管 Loop 通过其小接口验证：
 
 - 模型可直接结束，也可调用一个或多个子 Agent
 - 子 Agent 结果以 observation 回到下一次决策
@@ -78,5 +72,4 @@ scripts/smoke_image.sh xiao-wen:ci
 - 请求取消会停止运行且不提交不完整结果
 - 最终策略门不能把无证据政策、天气失败或票务猜测改写成成功
 
-新接口覆盖同一行为后，删除只断言 LangGraph 节点名、固定路由、内部 State 字段和 SSE 内部阶段名的
-旧测试。遵循“替换，不叠加”：不在新 Loop 测试之上继续维护一套等价的 Workflow 实现测试。
+旧 LangGraph 主管节点、固定路由、内部 State 与节点名 SSE 测试已经退役；不维护双运行时或双测试套件。

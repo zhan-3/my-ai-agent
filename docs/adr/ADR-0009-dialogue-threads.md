@@ -9,7 +9,7 @@
 
 ## 决策
 
-在既有主管图外增加有状态对话层，借鉴 Pi 的 transcript、显式 state、turn lifecycle 和 continue 语义，但不引入无界自治循环。
+会话层承载 transcript、显式活跃任务和 turn lifecycle；主管使用 ADR-0010 的有界 Agent Loop，不引入无界自治。
 
 1. `user_id` 只标识长期偏好、历史行程和认证主体。
 2. `conversation_id` 标识前端可见的一段对话；Web 层派生用户作用域内的 `thread_id`，短期消息和轮次锁按其隔离。
@@ -21,4 +21,4 @@
 
 ## 后果
 
-前端必须为每个可见对话发送稳定 `conversation_id`，并可创建新对话。Postgres 增加活跃任务表；消息仍复用现有表。对话列表、跨设备恢复和多实例协调留待后续。
+前端必须为每个可见对话发送稳定 `conversation_id`，并可创建新对话。Postgres 保存活跃任务、用户可见消息和每轮工具 transcript。对话列表、跨设备恢复和多实例协调留待后续。

@@ -1,7 +1,7 @@
 # 差旅“晓问”——智能出行助手
 
-基于 LangGraph、FastAPI 和 React 的多 Agent 差旅助手。当前主管使用注册表驱动的一次性
-`classify → route → execute → merge` Workflow；行程子 Agent 内部使用 `collect-then-compose`。
+基于 LangChain、FastAPI 和 React 的多 Agent 差旅助手。主管使用注册表驱动的有界
+`decide → 调用子 Agent → observe → decide → final` Loop；行程子 Agent 内部使用 `collect-then-compose`。
 系统提供行程规划、偏好与历史记忆、政策知识问答、天气查询和 12306 官方查询链接，运行时记忆与
 用户数据统一存储在 PostgreSQL 16。
 
@@ -52,7 +52,7 @@ scripts/gate.sh
 ```
 
 CI 独立运行前端 lint/test/build；OpenAPI 漂移在 HTTP 契约变化时按需检查；镜像 smoke 只在
-主分支和手动触发时运行。真实模型和意图契约均为按需诊断，不阻塞日常提交。命令与保留范围见
+主分支和手动触发时运行。真实模型检查为按需诊断，不阻塞日常提交。命令与保留范围见
 [`docs/test-map.md`](docs/test-map.md)。
 
 ## 容器部署
@@ -71,7 +71,7 @@ Compose、CI 与镜像 smoke 均固定 PostgreSQL 16。旧浮动版本卷若由�
 
 ## 架构与文档
 
-- `src/xiao_wen/`：领域深模块、会话循环、图工厂、Agent 薄适配器和 Web API。
+- `src/xiao_wen/`：领域深模块、主管 Agent Loop、子 Agent 薄适配器和 Web API。
 - `frontend/`：React/Vite 客户端及 Vitest 测试。
 - `tests/`：后端契约、单元与真实模型集成测试。
 - `docs/documents/`：政策 RAG 原始语料；`data/chroma/` 仅为本地运行状态。
@@ -82,15 +82,11 @@ Compose、CI 与镜像 smoke 均固定 PostgreSQL 16。旧浮动版本卷若由�
 
 ## 已知限制与后续优化
 
-- 当前在主管图外已有有界对话状态层：每个前端对话使用独立 `conversation_id`，线程 transcript
-  与用户长期记忆分离；未完成行程可被偏好、政策或实时查询打断并继续，“新对话”不会继承旧 transcript。
-- 当前主管仍是 `classify → route → execute → merge` 的一次性 Workflow，不把它描述为真正的 Agent。
-- 下一阶段最高优先级是借鉴 Pi 的 Agent Loop，将主管升级为
-  `decide → 调用子 Agent → observe → decide → final`；现有子 Agent、注册中心和行程
-  `collect-then-compose` 流程保留为领域执行器。
-- 政策证据、票务事实、天气失败和写回前验证继续作为确定性策略门，不能被主管模型绕过。
-- 循环必须限制步骤、时间和 token，并持久化目标、已知差旅要素、待回答问题与工具观察；不能用
-  装饰性 `while` 或无限自治替代可验证的终止条件。
+- 每个前端对话使用独立 `conversation_id`，工具 transcript 与用户长期记忆分离；未完成行程可被
+  偏好、政策或实时查询打断并继续，“新对话”不会继承旧 transcript。
+- 主管 Loop 限制步骤、时间、token 和重复调用；政策证据、票务事实、天气失败及写回前验证由
+  确定性策略门约束，不能被主管文本覆盖。
+- 第一版不实现运行中 steering/follow-up 队列、自动上下文压缩或完整 Session 树。
 - 多实例会话顺序、数据库 migration、连接池和高可用仍属于后续独立设计。
 
 本地调试可在 `.env` 设置 `OBSERVABILITY_DEBUG=true`。同步与 SSE 对话会按轮追加到
