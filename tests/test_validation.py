@@ -56,6 +56,33 @@ def test_validate_trip_blocks_policy_claim_without_evidence():
     assert any(issue.code == "unsupported_policy_claim" for issue in result.blocking_issues)
 
 
+def test_validate_trip_blocks_policy_claim_that_contradicts_fact():
+    from xiao_wen.rag import PolicyContext, PolicyFact
+
+    candidate = plan(
+        day("2026-03-05"),
+        day("2026-03-06"),
+        day("2026-03-07"),
+    )
+    candidate.days[0].notes = "公司住宿标准为 999 元/晚"
+    context = PolicyContext(
+        query="住宿标准",
+        evidence=(),
+        status="grounded",
+        facts=(PolicyFact("hotel_rate", 500, "元/晚", {"city_tier": "一线"}, ("ev-001",)),),
+    )
+
+    result = validate_trip(
+        request(),
+        candidate,
+        policy_text="一线城市住宿不超过 500 元/晚",
+        evidence_ids=("ev-001",),
+        policy_context=context,
+    )
+
+    assert any(issue.code == "contradictory_policy_claim" for issue in result.blocking_issues)
+
+
 def test_validate_trip_allows_empty_candidate_for_legacy_dry_runs():
     result = validate_trip(request(), plan())
     assert result.passed

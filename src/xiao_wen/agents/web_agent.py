@@ -15,35 +15,60 @@ from xiao_wen import web as _web  # noqa: E402
 from xiao_wen.reference_data import KNOWN_CITIES  # noqa: E402
 
 
-def _web_query(question: str, ctx: str = "无") -> str:
-    """调 xiao_wen.web 的 ToolNode 图（ReAct 循环），返回最终回答文本。ctx=短期记忆上下文，支持指代消解"""
+def _web_query(question: str, ctx: str = "无") -> tuple[str, str]:
+    """执行联网 ReAct，并显式标记实时结果是否有工具 observation。"""
     msgs: list[Any] = [_web.SYSTEM]
     if ctx != "无":
         msgs.append(("system", f"以下是本次对话上文，新问题可能省略了主语（如「那上海呢」）：\n{ctx}"))
     msgs.append(("human", question))
     result = _web.app.invoke({"messages": msgs})
-    return result["messages"][-1].content
+    answer = str(result["messages"][-1].content)
+    expected = set()
+    if any(word in question for word in ("天气", "气温", "下雨", "降雨", "台风", "雷暴")):
+        expected.add("get_weather")
+    if any(word in question for word in ("汇率", "兑换", "换多少")):
+        expected.add("get_currency_rate")
+    if any(word in question for word in ("空气质量", "PM2.5", "雾霾")):
+        expected.add("get_air_quality")
+    tool_messages = [message for message in result["messages"] if message.type == "tool"]
+    used = {message.name for message in tool_messages}
+    if not expected or not expected.issubset(used):
+        return answer, "unavailable"
+    tool_text = "\n".join(str(message.content) for message in tool_messages if message.name in expected)
+    if any(word in tool_text for word in ("失败", "服务可能不稳定", "暂时无法")):
+        return answer, "unavailable"
+    if any(word in tool_text for word in ("未找到", "仅支持", "不支持", "无法识别", "已经过去", "超出")):
+        return answer, "invalid"
+    return answer, "grounded"
+
+
+def _normalize_date(value: str) -> str:
+    if match := re.fullmatch(r"(20\d{2})[-年](\d{1,2})[-月](\d{1,2})日?", value):
+        return f"{match.group(1)}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
+    if match := re.fullmatch(r"(\d{1,2})月(\d{1,2})日?", value):
+        return f"{date.today().year}-{int(match.group(1)):02d}-{int(match.group(2)):02d}"
+    return value
+
+
+def _date_values(text: str) -> list[str]:
+    pattern = r"20\d{2}-\d{1,2}-\d{1,2}|20\d{2}年\d{1,2}月\d{1,2}日?|\d{1,2}月\d{1,2}日?"
+    return [_normalize_date(match.group(0)) for match in re.finditer(pattern, text)]
 
 
 def _ticket_request(question: str, recent: str) -> tuple[str, str, str, str] | None:
     """从明确票务问题和当前行程上文提取站点/城市/日期，避免把查票重新路由成规划。"""
     text = f"{question}\n{recent}"
-    date_match = re.search(r"20\d{2}-\d{2}-\d{2}", text)
-    travel_date = date_match.group(0) if date_match else ""
-    if not travel_date:
-        cn_date = re.search(r"(20\d{2})[-年](\d{1,2})[-月](\d{1,2})日?", text)
-        if cn_date:
-            travel_date = f"{cn_date.group(1)}-{int(cn_date.group(2)):02d}-{int(cn_date.group(3)):02d}"
-        else:
-            short_date = re.search(r"(\d{1,2})月(\d{1,2})日?", text)
-            if short_date:
-                travel_date = f"{date.today().year}-{int(short_date.group(1)):02d}-{int(short_date.group(2)):02d}"
+    dates = _date_values(question) + _date_values(recent)
+    travel_date = dates[0] if dates else ""
     if "明天" in question:
         travel_date = (date.today() + timedelta(days=1)).isoformat()
     elif "后天" in question:
         travel_date = (date.today() + timedelta(days=2)).isoformat()
-    return_match = re.search(r"(?:返程|回来|返回|回程)[^0-9]*(20\d{2}-\d{2}-\d{2})", text)
-    return_date = return_match.group(1) if return_match else ""
+    date_pattern = r"(20\d{2}-\d{1,2}-\d{1,2}|20\d{2}年\d{1,2}月\d{1,2}日?|\d{1,2}月\d{1,2}日?)"
+    return_match = re.search(rf"(?:返程|回来|返回|回程)[^0-9]{{0,10}}{date_pattern}", question)
+    if not return_match:
+        return_match = re.search(rf"{date_pattern}[^，,。]{{0,6}}(?:返程|回来|返回|回程)", question)
+    return_date = _normalize_date(return_match.group(1)) if return_match else (dates[1] if len(dates) > 1 else "")
     station_match = re.search(r"从([^\s，,到]+)到([^\s，,的]+)", question)
     if station_match:
         return station_match.group(1), station_match.group(2), travel_date, return_date
@@ -51,9 +76,10 @@ def _ticket_request(question: str, recent: str) -> tuple[str, str, str, str] | N
     destination_match = re.search(r"(?:去|到)([^\s，,，。]+?)(?:出差|开会|的行程|$)", text)
     if origin_match and destination_match and travel_date:
         return origin_match.group(1), destination_match.group(1), travel_date, return_date
-    cities = [city for city in sorted(KNOWN_CITIES, key=len, reverse=True) if city in text]
+    positioned = sorted((text.find(city), -len(city), city) for city in KNOWN_CITIES if city in text)
+    cities = list(dict.fromkeys(city for _, _, city in positioned))
     if len(cities) >= 2 and travel_date:
-        return cities[-1], cities[0], travel_date, return_date
+        return cities[0], cities[1], travel_date, return_date
     return None
 
 
@@ -65,5 +91,13 @@ def run(state) -> dict:
     ):
         request = _ticket_request(question, state.get("recent", ""))
         if request:
-            return {"answer": _web.search_train_tickets.func(*request)}  # type: ignore[attr-defined]
-    return {"answer": _web_query(question, state.get("recent", "无"))}
+            answer = _web.search_train_tickets.func(*request)  # type: ignore[attr-defined]
+            if "https://kyfw.12306.cn/otn/leftTicket/init" in answer and "不代购票" in answer:
+                status = "official"
+            elif "暂时无法读取" in answer:
+                status = "unavailable"
+            else:
+                status = "invalid"
+            return {"answer": answer, "ticket_status": status}
+    answer, status = _web_query(question, state.get("recent", "无"))
+    return {"answer": answer, "realtime_status": status}

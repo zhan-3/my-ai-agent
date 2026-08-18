@@ -89,7 +89,10 @@ def _invoke_pref_model(input_text: str, retries: int = 2) -> PreferenceList:
 
 
 def run(state) -> dict:
+    cancelled = state.get("_cancelled", lambda: False)
     r = _invoke_pref_model(state["user_input"])
+    if cancelled():
+        raise RuntimeError("请求已取消")
     # 追加/覆盖区分：is_update=True 时替换同类别旧条目（如「我现在常住上海」）
     if not r.records:
         # 疑问句/非偏好陈述：不写任何记忆（防止垃圾数据污染长期记忆）
@@ -97,6 +100,8 @@ def run(state) -> dict:
     session_id = state.get("user_id", state.get("session_id", "default"))
     lines: list[str] = []
     for rec in r.records:
+        if cancelled():
+            raise RuntimeError("请求已取消")
         stored = add_or_update_preference(rec.category, rec.content, rec.is_update, session_id=session_id)
         act = "更新" if rec.is_update else "新增"
         lines.append(f"✅ 已{act}偏好：{stored['category']}｜{stored['content']}（{stored['ts']}）")

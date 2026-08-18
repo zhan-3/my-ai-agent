@@ -8,6 +8,7 @@
 # ruff: noqa: E501 —— 本模块是 prompt 密集模块：发给 LLM 的提示词内容行
 # （要素示例、约束、reasons 说明）天然超行宽，拆分会改变提示词（换行=内容）。
 import re
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date
@@ -229,6 +230,7 @@ def plan(
     session_id: str = "default",
     recent: str = "",
     upstream: dict | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> PlanResult | NeedsInfo | ValidationFailure:
     """编排：提取 → 常驻城市补全 → 缺项检查（短路）→ 生成 → 写回长期记忆
 
@@ -239,6 +241,8 @@ def plan(
     """
     req = _extract_model().invoke({"input": user_input, "today": _today_cn(), "recent": recent or "无"})
     assert isinstance(req, TripRequest)
+    if cancelled and cancelled():
+        raise RuntimeError("请求已取消")
     # 哨兵归一化：先把「无/未知/出差」统一成「待定」，再走补全/缺项检查
     # （否则「无」会绕过两者，带着无意义城市进生成 → 规划 LLM 默认当北京，记忆却记「无」，历史显示不一致）
     if req.from_city in _UNKNOWN_CITIES:
@@ -293,6 +297,8 @@ def plan(
     policy_prompt = upstream.get("policy") or "未检索到相关公司政策；不得引用或推断政策金额、限额、标准或审批时限。"
     if policy_status == "unavailable":
         policy_prompt = "政策服务当前不可用；不得引用或推断政策金额、限额、标准或审批时限。"
+    if cancelled and cancelled():
+        raise RuntimeError("请求已取消")
     plan = _plan_model().invoke(
         {
             "trip_json": req.model_dump_json(),
@@ -339,6 +345,8 @@ def plan(
     from xiao_wen.validation import VALIDATOR_VERSION
 
     facts["validator_version"] = VALIDATOR_VERSION
+    if cancelled and cancelled():
+        raise RuntimeError("请求已取消")
     add_itinerary(facts, plan.summary, session_id=session_id)
     return PlanResult(plan=plan, request=req)
 
@@ -464,6 +472,7 @@ def handle(
     recent: str = "",
     upstream: dict | None = None,
     task_context: str = "",
+    cancelled: Callable[[], bool] | None = None,
 ) -> TripOutcome:
     """行程规划完整编排入口（collect-then-compose 的 compose 阶段）：
 
@@ -472,7 +481,7 @@ def handle(
     """
     from xiao_wen.web import get_weather
 
-    r = plan(user_input, session_id=session_id, recent=recent, upstream=upstream)
+    r = plan(user_input, session_id=session_id, recent=recent, upstream=upstream, cancelled=cancelled)
     if isinstance(r, NeedsInfo):
         from xiao_wen.dialogue import task_update_set
 

@@ -4,6 +4,8 @@ C7：get_air_quality 与 get_weather 共用 _geocode（本地 CITY_COORDS 优先
 常用城市零依赖、不打 nominatim；未知城市给友好文案。
 """
 
+from datetime import date
+
 import pytest
 import requests
 
@@ -30,6 +32,46 @@ def test_get_json_raises_on_non_2xx(monkeypatch):
     with pytest.raises(RuntimeError, match="已重试"):
         web._get_json("https://example.com/api")
     assert calls["n"] == 3  # 首次 + 2 次重试
+
+
+def test_web_agent_weather_grounding_requires_weather_tool(monkeypatch):
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    from xiao_wen.agents import web_agent
+
+    class App:
+        def __init__(self, tool_name):
+            self.tool_name = tool_name
+
+        def invoke(self, _state):
+            return {
+                "messages": [
+                    ToolMessage(content="工具结果", tool_call_id="call-1", name=self.tool_name),
+                    AIMessage(content="北京晴 25°C"),
+                ]
+            }
+
+    monkeypatch.setattr(web_agent._web, "app", App("get_currency_rate"))
+    assert web_agent._web_query("北京天气") == ("北京晴 25°C", "unavailable")
+    monkeypatch.setattr(web_agent._web, "app", App("get_weather"))
+    assert web_agent._web_query("北京天气") == ("北京晴 25°C", "grounded")
+
+
+def test_ticket_request_preserves_route_and_return_date():
+    from xiao_wen.agents.web_agent import _ticket_request
+
+    assert _ticket_request("查北京到上海 2026-08-20 的车票，2026-08-22返程", "") == (
+        "北京",
+        "上海",
+        "2026-08-20",
+        "2026-08-22",
+    )
+    assert _ticket_request("查北京到上海 8月20日去、8月22日返程的车票", "") == (
+        "北京",
+        "上海",
+        f"{date.today().year}-08-20",
+        f"{date.today().year}-08-22",
+    )
 
 
 def test_search_train_tickets_generates_official_prefill_url(monkeypatch):

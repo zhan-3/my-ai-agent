@@ -148,17 +148,22 @@ def run(state) -> dict:
 
     active_task = state.get("active_task")
     recent = focused_recent(active_task, state.get("recent", ""))
+    owner_id = state.get("user_id", state.get("session_id", "default"))
+    upstream = state.get("upstream")
+    if upstream is None:
+        upstream = collect_upstream(state["user_input"], owner_id, recent)
     out = handle(
         state["user_input"],
-        session_id=state.get("user_id", state.get("session_id", "default")),
+        session_id=owner_id,
         recent=recent,
-        upstream=state.get("upstream") or {},
+        upstream=upstream,
         task_context=(active_task or {}).get("resume_context", ""),
+        cancelled=state.get("_cancelled"),
     )
     return {
         "answer": out.answer,
         "plan": out.plan,
         "task_update": out.task_update,
-        "policy_status": state.get("upstream", {}).get("policy_status"),
-        "sources": state.get("upstream", {}).get("sources", []),
+        "policy_status": upstream.get("policy_status"),
+        "sources": upstream.get("sources", []),
     }

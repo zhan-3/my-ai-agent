@@ -104,8 +104,10 @@ def validate_trip(
         ):
             blocking.append(ValidationIssue("budget_mismatch", "预算分项与预算总额不一致", "budget"))
 
-    policy_claims = [reason for reason in plan.reasons if _POLICY_CLAIM_RE.search(reason)]
-    policy_claims.extend(item.hotel for item in days if _POLICY_CLAIM_RE.search(item.hotel))
+    candidate_texts = [plan.summary, *plan.reasons]
+    for item in days:
+        candidate_texts.extend((item.transport, item.hotel, *item.activities, item.notes))
+    policy_claims = [text for text in candidate_texts if _POLICY_CLAIM_RE.search(text)]
     policy_facts = getattr(policy_context, "facts", ())
     policy_status = getattr(policy_context, "status", "")
     if policy_status in {"ambiguous", "stale"}:
@@ -132,8 +134,20 @@ def validate_trip(
                 "policy",
             )
         )
-    elif policy_claims and policy_text and not any(str(item) in policy_text for item in policy_claims):
-        # 只做保守的文本支持检查；复杂的事实抽取留给后续 PolicyFact 阶段。
-        warnings.append(ValidationIssue("policy_claim_not_exactly_matched", "政策表述未能逐字匹配检索片段", "policy"))
+    elif policy_claims:
+        supported_values = {str(getattr(fact, "value", "")) for fact in policy_facts}
+        unsupported = []
+        for claim in policy_claims:
+            values = re.findall(r"\d+(?:\.\d+)?", claim)
+            if any(value not in supported_values for value in values):
+                unsupported.append(claim)
+        if unsupported:
+            blocking.append(
+                ValidationIssue(
+                    "contradictory_policy_claim",
+                    "候选行程包含证据未支持的政策数字",
+                    "policy",
+                )
+            )
 
     return ValidationResult(not blocking, warnings, blocking, evidence_ids)
