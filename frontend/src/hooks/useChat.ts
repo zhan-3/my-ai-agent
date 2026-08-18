@@ -15,11 +15,10 @@ export interface ChatMessage {
   sources?: KnowledgeSource[]
 }
 
-// 实时进度阶段：__start__ 理解中 / __intent__ 已识别意图 / __merge__ 并行汇总 / 其余为子 Agent 意图名
+// 实时进度阶段：__start__ 表示主管决策中，其余为正在执行的子 Agent。
 export interface StageItem {
   intent: string
   status: 'working' | 'done'
-  resolved?: string
 }
 
 const NETWORK_FALLBACK = '⚠️ 网络错误，请确认后端已启动。'
@@ -29,25 +28,22 @@ export function newConversationId(): string {
   return `conversation-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
-// 纯函数：阶段事件 → 阶段列表（start 重置；intent 替换 start；同一意图去重）
+// 纯函数：阶段事件 → 阶段列表（start 重置；子 Agent 开始后移除决策占位；同一 Agent 去重）
 export function applyStage(prev: StageItem[], ev: Pick<StreamEvent, 'status' | 'intent'>): StageItem[] {
   if (ev.status === 'start') return [{ intent: '__start__', status: 'working' }]
-  if (ev.status === 'intent') {
-    const item: StageItem = { intent: '__intent__', status: 'done', resolved: ev.intent }
-    return [...prev.filter((s) => s.intent !== '__start__' && s.intent !== '__intent__'), item]
-  }
   const intent = ev.intent ?? ''
-  const existing = prev.find((s) => s.intent === intent)
+  const active = prev.filter((s) => s.intent !== '__start__')
+  const existing = active.find((s) => s.intent === intent)
   if (existing) {
     // 原位更新（避免完成时顺序抖动）
-    return prev.map((s) =>
+    return active.map((s) =>
       s.intent === intent ? { intent, status: ev.status === 'done' ? 'done' : 'working' } : s,
     )
   }
-  return [...prev, { intent, status: ev.status === 'done' ? 'done' : 'working' }]
+  return [...active, { intent, status: ev.status === 'done' ? 'done' : 'working' }]
 }
 
-// 聊天状态：SSE 流式（阶段进度 + done）为主，旧后端（404）回退 POST；busy 防重；401 登出
+// 聊天状态：SSE 生命周期事件 + done；旧后端（404）回退 POST；busy 防重；401 登出
 export function useChat({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [conversationId, setConversationId] = useState(newConversationId)

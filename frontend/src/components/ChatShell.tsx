@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useChat, type StageItem } from '@/hooks/useChat'
-import { AGENTS, SUGGESTIONS, agentOf } from '@/lib/agents'
+import { SUGGESTIONS, agentOf } from '@/lib/agents'
 import MemorySidebar from '@/components/MemorySidebar'
 import MessageBubble from '@/components/MessageBubble'
 import ThemeToggle from '@/components/ThemeToggle'
@@ -10,11 +10,7 @@ import ThemeToggle from '@/components/ThemeToggle'
 function stageLabel(s: StageItem): string {
   switch (s.intent) {
     case '__start__':
-      return '正在理解你的请求…'
-    case '__intent__':
-      return `已识别意图：${AGENTS[s.resolved ?? ''] ? agentOf(s.resolved).name : '…'}`
-    case '__merge__':
-      return s.status === 'done' ? '并行结果汇总完成' : '汇总并行结果…'
+      return '主管正在决定下一步…'
     default:
       return `${agentOf(s.intent).icon} ${agentOf(s.intent).name}${s.status === 'done' ? '完成' : '处理中…'}`
   }

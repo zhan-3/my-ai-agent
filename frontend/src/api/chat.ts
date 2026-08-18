@@ -16,9 +16,8 @@ export function sendMessage(text: string, token: string, conversationId = 'defau
 
 export interface StreamEvent {
   type: 'stage' | 'done' | 'error'
-  status?: string // start | intent | working | done
-  intent?: string // 意图名；__merge__ 表示并行汇总
-  resolved?: string
+  status?: string // start | working | done
+  intent?: string // 子 Agent 意图名
   answer?: string
   reason?: string
   plan?: TripPlan | null

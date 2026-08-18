@@ -52,12 +52,12 @@ describe('applyStage：阶段事件 → 进度列表', () => {
     expect(applyStage([], { status: 'start' })).toEqual([{ intent: '__start__', status: 'working' }])
   })
 
-  it('intent 事件替换 start（已理解请求，进入意图展示）', () => {
+  it('子 Agent 开始时替换主管决策占位', () => {
     const out = applyStage([{ intent: '__start__', status: 'working' }], {
-      status: 'intent',
+      status: 'working',
       intent: '行程规划',
     })
-    expect(out).toEqual([{ intent: '__intent__', status: 'done', resolved: '行程规划' }])
+    expect(out).toEqual([{ intent: '行程规划', status: 'working' }])
   })
 
   it('同一意图 working → done 去重更新', () => {
@@ -69,12 +69,12 @@ describe('applyStage：阶段事件 → 进度列表', () => {
     expect(s.find((x) => x.intent === '行程规划')?.status).toBe('done')
   })
 
-  it('多 Agent 并行各自推进', () => {
+  it('多个子 Agent 各自推进', () => {
     let s = applyStage([], { status: 'start' })
     s = applyStage(s, { status: 'working', intent: '行程规划' })
     s = applyStage(s, { status: 'working', intent: '偏好记录' })
     s = applyStage(s, { status: 'done', intent: '行程规划' })
-    expect(s.map((x) => x.intent)).toEqual(['__start__', '行程规划', '偏好记录'])
+    expect(s.map((x) => x.intent)).toEqual(['行程规划', '偏好记录'])
     expect(s.find((x) => x.intent === '行程规划')?.status).toBe('done')
     expect(s.find((x) => x.intent === '偏好记录')?.status).toBe('working')
   })

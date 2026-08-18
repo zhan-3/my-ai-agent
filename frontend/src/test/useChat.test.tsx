@@ -33,7 +33,6 @@ const okResponse: chatApi.ChatResponse = {
 function mockStreamOk() {
   vi.mocked(chatApi.streamChat).mockImplementation(
     async (_t: string, _token: string, onEvent: (e: StreamEvent) => void) => {
-      onEvent({ type: 'stage', status: 'intent', intent: '行程规划' })
       onEvent({ type: 'stage', status: 'working', intent: '行程规划' })
       onEvent({ type: 'stage', status: 'done', intent: '行程规划' })
       return okResponse
