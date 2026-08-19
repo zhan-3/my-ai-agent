@@ -3,9 +3,12 @@
 管线（ADR-0003）收口于 xiao_wen.trip_planner：提取 → 常驻城市补全 → 缺项检查 → 生成 → 写回。
 """
 
+import types
 from typing import Any
 
+import xiao_wen.memory
 from xiao_wen import trip_planner as _it
+from xiao_wen.agents import itinerary_agent
 
 TripRequest = _it.TripRequest
 ItineraryPlan = _it.ItineraryPlan
@@ -900,3 +903,179 @@ def test_handle_shows_people_count(monkeypatch):
     outcome = _it.handle("我们3个人从临沂去北京开会4天")
     assert "本次出行 3 人" in outcome.answer
     assert "住宿按 2 间房" in outcome.answer
+
+
+# ---- 行程子 Agent 薄适配层（itinerary_agent）：城市提示/偏好注入/草稿上下文/trip_id 绑定 ----
+
+
+def test_extract_city_hints_whitelist_order_and_dedupe():
+    """白名单城市：按出现顺序去重。"""
+    assert itinerary_agent._extract_city_hints("从北京去上海出差") == ("北京", "上海")
+    assert itinerary_agent._extract_city_hints("北京和北京的行程") == ("北京",)
+
+
+def test_extract_city_hints_non_whitelist_origin_and_home():
+    """非白名单出发城市（临沂）与常驻城市声明都能提取。"""
+    hints = itinerary_agent._extract_city_hints("从临沂出发去北京开会")
+    assert "临沂" in hints and "北京" in hints
+    hints2 = itinerary_agent._extract_city_hints("我常住临沂")
+    assert "临沂" in hints2
+
+
+def test_extract_city_hints_skips_location_words_and_limits():
+    """排除「从家里出发」这类地点词；最多 3 个城市。"""
+    assert itinerary_agent._extract_city_hints("从家里出发去上班") == ()
+    many = itinerary_agent._extract_city_hints("北京上海广州深圳四个城市")
+    assert len(many) <= 3
+
+
+def test_extract_destination_hint_prefers_destination_over_home():
+    """目的地提取：不把常驻城市误当目的地。"""
+    assert itinerary_agent._extract_destination_hint("我常住上海，想去北京开会") == "北京"
+    assert itinerary_agent._extract_destination_hint("后天去武汉") == "武汉"
+
+
+def test_extract_destination_hint_falls_back_to_recent():
+    """recent 兜底：本轮没提目的地时从最近对话提取。"""
+    assert itinerary_agent._extract_destination_hint("那安排一下", recent="后天去武汉开会2天") == "武汉"
+
+
+def test_extract_turn_prefs_joins_records(monkeypatch):
+    """本轮偏好结构化提取：真实 _extract_turn_prefs 拼 category:content 行。"""
+    import xiao_wen.agents.preference_agent as pa
+    from xiao_wen.agents.preference_agent import PreferenceList, PreferenceRecord
+
+    monkeypatch.setattr(
+        pa,
+        "_invoke_pref_model",
+        lambda text: PreferenceList(
+            records=[
+                PreferenceRecord(category="住宿", content="喜欢安静", is_update=False),
+                PreferenceRecord(category="餐饮", content="不吃辣", is_update=False),
+            ]
+        ),
+    )
+    assert itinerary_agent._extract_turn_prefs("我喜欢安静，不吃辣") == "住宿:喜欢安静；餐饮:不吃辣"
+
+
+def test_extract_turn_prefs_degrades_on_failure(monkeypatch):
+    """偏好提取失败降级为空（不阻塞规划）。"""
+
+    def boom(text):
+        raise RuntimeError("llm down")
+
+    import xiao_wen.agents.preference_agent as pa
+
+    monkeypatch.setattr(pa, "_invoke_pref_model", boom)
+    assert itinerary_agent._extract_turn_prefs("x") == ""
+
+
+def test_drafting_context_lists_drafts(monkeypatch):
+    """集合式续接：线程内多草稿注入上下文。"""
+    drafts = [
+        {
+            "id": 1,
+            "status": "drafting",
+            "start_date": "2026-09-01",
+            "to_city": "北京",
+            "missing": ["出发城市"],
+            "resume_context": "",
+        },
+        {
+            "id": 2,
+            "status": "drafting",
+            "start_date": "2026-09-05",
+            "to_city": "广州",
+            "missing": [],
+            "resume_context": "已收集人数",
+        },
+    ]
+    monkeypatch.setattr(xiao_wen.memory, "get_trips", lambda **kw: drafts)
+    ctx = itinerary_agent._drafting_context("u1", {"resume_context": "单条"})
+    assert "草稿#1" in ctx and "草稿#2" in ctx
+    assert "待补：['出发城市']" in ctx
+
+
+def test_drafting_context_degrades_to_active(monkeypatch):
+    """记忆异常降级为单条活跃任务上下文。"""
+
+    def boom(**kw):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(xiao_wen.memory, "get_trips", boom)
+    ctx = itinerary_agent._drafting_context("u1", {"resume_context": "单条上下文"})
+    assert ctx == "单条上下文"
+
+
+def _fake_handle_out():
+    return types.SimpleNamespace(
+        answer="好的，已调整。",
+        plan=None,
+        task_update=None,
+        memory_writes=[],
+    )
+
+
+def test_run_binds_trip_id_on_modify_words(monkeypatch):
+    """run()：修改词 + 最近行程 → handle 收到 trip_id=最近行程 id。"""
+    seen = {}
+    monkeypatch.setattr(
+        xiao_wen.trip_planner,
+        "handle",
+        lambda *a, **kw: seen.update(kw) or _fake_handle_out(),
+    )
+    monkeypatch.setattr(xiao_wen.memory, "get_trips", lambda **kw: [])
+    result = itinerary_agent.run(
+        {
+            "user_input": "把行程改成一男一女",
+            "session_id": "c1",
+            "user_id": "u1",
+            "recent": "最近对话",
+            "latest_trip": {"id": 7, "to_city": "北京", "start_date": "2026-09-01"},
+            "upstream": {"policy_status": "grounded", "sources": []},
+        }
+    )
+    assert seen.get("trip_id") == 7
+    assert result["answer"] == "好的，已调整。"
+
+
+def test_run_prefers_active_task_trip_id(monkeypatch):
+    """run()：活跃任务（drafting 续接）的 trip_id 优先于修改词绑定。"""
+    seen = {}
+    monkeypatch.setattr(
+        xiao_wen.trip_planner,
+        "handle",
+        lambda *a, **kw: seen.update(kw) or _fake_handle_out(),
+    )
+    monkeypatch.setattr(xiao_wen.memory, "get_trips", lambda **kw: [])
+    itinerary_agent.run(
+        {
+            "user_input": "补上出发城市：从上海出发",
+            "session_id": "c1",
+            "user_id": "u1",
+            "active_task": {"intent": "行程规划", "trip_id": 3, "missing": ["出发城市"]},
+            "upstream": {"policy_status": "grounded", "sources": []},
+        }
+    )
+    assert seen.get("trip_id") == 3
+
+
+def test_run_new_trip_has_no_trip_id(monkeypatch):
+    """run()：全新行程不带 trip_id（走身份去重/新建，不误覆盖历史）。"""
+    seen = {}
+    monkeypatch.setattr(
+        xiao_wen.trip_planner,
+        "handle",
+        lambda *a, **kw: seen.update(kw) or _fake_handle_out(),
+    )
+    monkeypatch.setattr(xiao_wen.memory, "get_trips", lambda **kw: [])
+    itinerary_agent.run(
+        {
+            "user_input": "帮我规划10月8日去北京开会4天",
+            "session_id": "c1",
+            "user_id": "u1",
+            "latest_trip": {"id": 7, "to_city": "北京"},
+            "upstream": {"policy_status": "grounded", "sources": []},
+        }
+    )
+    assert seen.get("trip_id") is None
