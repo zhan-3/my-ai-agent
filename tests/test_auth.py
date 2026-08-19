@@ -17,7 +17,7 @@ from xiao_wen.memory_pg import PostgresUserStore
 
 def _fresh_store() -> PostgresUserStore:
     """真实 Postgres 用户存储（测试库；conftest 已清 users 表，这里再清一次保险）"""
-    url = os.environ.get("POSTGRES_TEST_URL") or os.environ["POSTGRES_URL"]
+    url = os.environ["POSTGRES_TEST_URL"]  # conftest 已强制并重定向 POSTGRES_URL，绝不回退开发库
     s = PostgresUserStore(url)
     s.clear_all()
     return s

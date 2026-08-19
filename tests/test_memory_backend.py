@@ -18,7 +18,7 @@ from xiao_wen.memory_pg import PostgresBackend
 
 def _fresh() -> PostgresBackend:
     """注入全新 PostgresBackend（同一测试库）并返回（每测试独立隔离由 conftest 清表保证）"""
-    url = os.environ.get("POSTGRES_TEST_URL") or os.environ["POSTGRES_URL"]
+    url = os.environ["POSTGRES_TEST_URL"]  # conftest 已强制并重定向 POSTGRES_URL，绝不回退开发库
     b = PostgresBackend(url)
     b.clear_all()
     memory.set_backend(b)

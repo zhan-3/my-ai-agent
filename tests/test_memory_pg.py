@@ -4,16 +4,13 @@
 """
 
 import os
-
 import pytest
 
-pg_url = os.environ.get("POSTGRES_TEST_URL") or ""
-needs_pg = pytest.mark.skipif(not pg_url, reason="需本地 Postgres（POSTGRES_TEST_URL）")
+pg_url = os.environ["POSTGRES_TEST_URL"]  # conftest 已强制存在，绝不回退开发库
 
 from xiao_wen.memory_pg import PostgresBackend  # noqa: E402
 
 
-@needs_pg
 class TestPostgresBackend:
     """PostgresBackend 直测：8 方法 + 幂等建表 + session 隔离"""
 
@@ -87,7 +84,6 @@ class TestPostgresBackend:
         assert b.get_recent_messages("keep", 1)[0]["content"] == "untouched"
 
 
-@needs_pg
 class TestPostgresPersistence:
     """S6 持久化验收：写记忆 → 丢弃后端（模拟进程重启）→ 新连接数据仍在"""
 
