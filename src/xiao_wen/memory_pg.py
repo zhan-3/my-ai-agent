@@ -7,6 +7,7 @@
 
 import time
 from contextlib import contextmanager
+from datetime import date, timedelta
 from threading import local
 
 import psycopg
@@ -36,27 +37,32 @@ CREATE TABLE IF NOT EXISTS preferences (
     ts TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_preferences_session ON preferences(session_id);
-CREATE TABLE IF NOT EXISTS itineraries (
+CREATE TABLE IF NOT EXISTS trips (
     id BIGSERIAL PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    facts JSONB NOT NULL,
-    summary TEXT NOT NULL,
-    ts TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_itineraries_session ON itineraries(session_id);
-CREATE TABLE IF NOT EXISTS active_tasks (
-    thread_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
-    task JSONB NOT NULL,
+    thread_id TEXT,
+    status TEXT NOT NULL DEFAULT 'upcoming',
+    facts JSONB NOT NULL DEFAULT '{}',
+    plan JSONB,
+    missing JSONB NOT NULL DEFAULT '[]',
+    resume_context TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_active_tasks_user ON active_tasks(user_id);
+CREATE INDEX IF NOT EXISTS idx_trips_user ON trips(user_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_trips_thread ON trips(thread_id, updated_at);
 CREATE TABLE IF NOT EXISTS users (
     id BIGSERIAL PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+"""
+
+# 旧表（itineraries / active_tasks）被 trips 取代（ADR-0011）：启动时幂等移除，数据不保留。
+_LEGACY_DROP = """
+DROP TABLE IF EXISTS itineraries;
+DROP TABLE IF EXISTS active_tasks;
 """
 
 
@@ -101,13 +107,14 @@ class PostgresBackend:
 
     def _ensure_schema(self) -> None:
         with self._connection() as conn:
+            conn.execute(_LEGACY_DROP)
             conn.execute(_SCHEMA)
             conn.commit()
 
     def clear_all(self) -> None:
         """清空业务表（测试专用：保证每个用例干净起点）"""
         with self._connection() as conn:
-            for t in ("messages", "agent_transcripts", "preferences", "itineraries", "active_tasks"):
+            for t in ("messages", "agent_transcripts", "preferences", "trips"):
                 conn.execute(f"DELETE FROM {t}")
             conn.commit()
 
@@ -146,31 +153,71 @@ class PostgresBackend:
             ).fetchall()
         return [{"transcript": row[0], "ts": row[1]} for row in reversed(rows)]
 
-    # ---------- 对话状态：每个 thread 最多一个活跃任务 ----------
+    # ---------- 对话状态：线程内 drafting 行程（兼容旧「活跃任务」接口，ADR-0011） ----------
     def get_active_task(self, thread_id: str, user_id: str) -> dict | None:
+        """线程内最近一条 drafting 行程，包装成旧活跃任务形状（intent/resume_context/missing + trip_id）。"""
         with self._connection() as conn:
             row = conn.execute(
-                "SELECT task FROM active_tasks WHERE thread_id = %s AND user_id = %s",
+                "SELECT id, facts, missing, resume_context FROM trips "
+                "WHERE thread_id = %s AND user_id = %s AND status = 'drafting' "
+                "ORDER BY updated_at DESC, id DESC LIMIT 1",
                 (thread_id, user_id),
             ).fetchone()
-        return row[0] if row else None
+        if row is None:
+            return None
+        return {
+            "intent": "行程规划",
+            "resume_context": row[3] or "",
+            "missing": list(row[2] or []),
+            "trip_id": row[0],
+            "facts": dict(row[1] or {}),
+        }
 
     def set_active_task(self, thread_id: str, user_id: str, task: dict) -> dict:
-        updated_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        """把旧活跃任务形状写回 trips 表：有 trip_id 更新原 drafting，否则按线程新建。"""
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        missing = list(task.get("missing") or [])
+        resume_context = str(task.get("resume_context") or "")
+        trip_id = task.get("trip_id")
+        facts = dict(task.get("facts") or {})
         with self._connection() as conn:
-            conn.execute(
-                "INSERT INTO active_tasks (thread_id, user_id, task, updated_at) VALUES (%s, %s, %s, %s) "
-                "ON CONFLICT (thread_id) DO UPDATE SET user_id = EXCLUDED.user_id, "
-                "task = EXCLUDED.task, updated_at = EXCLUDED.updated_at",
-                (thread_id, user_id, Jsonb(task), updated_at),
-            )
-        return task
+            if trip_id is not None:
+                conn.execute(
+                    "UPDATE trips SET missing = %s, resume_context = %s, facts = %s, updated_at = %s "
+                    "WHERE id = %s AND user_id = %s",
+                    (Jsonb(missing), resume_context, Jsonb(facts), ts, trip_id, user_id),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO trips "
+                    "(user_id, thread_id, status, facts, missing, resume_context, created_at, updated_at) "
+                    "VALUES (%s, %s, 'drafting', %s, %s, %s, %s, %s)",
+                    (user_id, thread_id, Jsonb(facts), Jsonb(missing), resume_context, ts, ts),
+                )
+                row = conn.execute(
+                    "SELECT id FROM trips WHERE thread_id = %s AND user_id = %s AND status = 'drafting' "
+                    "ORDER BY id DESC LIMIT 1",
+                    (thread_id, user_id),
+                ).fetchone()
+                trip_id = row[0] if row else None
+        return {**task, "intent": "行程规划", "trip_id": trip_id}
 
     def clear_active_task(self, thread_id: str, user_id: str) -> None:
+        """行程完成：删除线程内 drafting 草稿（已生成待出发行程，草稿废弃）。"""
         with self._connection() as conn:
             conn.execute(
-                "DELETE FROM active_tasks WHERE thread_id = %s AND user_id = %s",
+                "DELETE FROM trips WHERE thread_id = %s AND user_id = %s AND status = 'drafting'",
                 (thread_id, user_id),
+            )
+
+    def cancel_active_task(self, thread_id: str, user_id: str) -> None:
+        """用户取消：线程内 drafting 草稿转 cancelled（保留记录不删除）。"""
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE trips SET status = 'cancelled', updated_at = %s "
+                "WHERE thread_id = %s AND user_id = %s AND status = 'drafting'",
+                (ts, thread_id, user_id),
             )
 
     # ---------- 长期记忆：偏好（追加 / 覆盖） ----------
@@ -182,6 +229,15 @@ class PostgresBackend:
                     "DELETE FROM preferences WHERE session_id = %s AND category = %s",
                     (session_id, category),
                 )
+            else:
+                # 幂等去重：同一用户同类别已存在相同内容时不重复追加（「我喜欢住全季」说两次不应两条）。
+                # 依赖 LLM 的 is_update 不稳定（同一输入偶发 True/False），去重必须代码层确定性保证。
+                exists = conn.execute(
+                    "SELECT 1 FROM preferences WHERE session_id = %s AND category = %s AND content = %s LIMIT 1",
+                    (session_id, category, content),
+                ).fetchone()
+                if exists:
+                    return {"category": category, "content": content, "ts": ts}
             conn.execute(
                 "INSERT INTO preferences (session_id, category, content, ts) VALUES (%s, %s, %s, %s)",
                 (session_id, category, content, ts),
@@ -199,43 +255,178 @@ class PostgresBackend:
             rows = conn.execute(sql, tuple(args)).fetchall()
         return [{"category": r[0], "content": r[1], "ts": r[2]} for r in rows]
 
-    # ---------- 长期记忆：历史行程 ----------
-    def add_itinerary(self, session_id: str, facts: dict, summary: str) -> dict:
-        """写入行程；相同出发日/路线/天数的候选更新原记录，避免重试产生重复档案。
+    # ---------- 长期记忆：行程（trips 表，ADR-0011 生命周期） ----------
+    def _derived_status(self, status: str, facts: dict) -> str:
+        """upcoming 且行程已结束（today > 最后一天）→ 展示为 completed（读时派生，不写库）。"""
+        if status != "upcoming":
+            return status
+        raw = str((facts or {}).get("start_date", ""))[:10]
+        try:
+            start = date.fromisoformat(raw)
+        except ValueError:
+            return status
+        dur = facts.get("duration_days")
+        end = start + timedelta(days=(int(dur) - 1 if isinstance(dur, int) and dur > 0 else 0))
+        return "completed" if end < date.today() else status
 
-        缺少完整身份字段的旧数据仍追加，保持历史数据和兼容调用语义不变。
+    def _trip_dict(self, row: tuple) -> dict:
+        id_, thread_id, status, facts, plan, missing, resume_context, updated_at = row
+        facts = dict(facts or {})
+        plan = dict(plan) if plan else None
+        return {
+            "id": id_,
+            "thread_id": thread_id or "",
+            "status": self._derived_status(status, facts),
+            **facts,
+            "plan": plan,
+            "summary": (plan or {}).get("summary", ""),
+            "missing": list(missing or []),
+            "resume_context": resume_context or "",
+            "ts": updated_at,
+        }
+
+    def save_trip(
+        self,
+        user_id: str,
+        facts: dict,
+        plan: dict | None,
+        *,
+        thread_id: str | None = None,
+        trip_id: int | None = None,
+        status: str = "upcoming",
+        missing: list | None = None,
+        resume_context: str = "",
+    ) -> dict:
+        """写入/更新一条行程。trip_id 给定时更新同一条；否则按身份字段去重
+        （出发日/路线/天数命中 → 更新原记录，避免重试产生重复档案）。
         """
-        ts = time.strftime("%Y-%m-%d %H:%M")
-        identity = tuple(facts.get(key) for key in ("start_date", "from_city", "to_city", "duration_days"))
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        missing = list(missing or [])
+        plan_json = Jsonb(plan) if plan is not None else None
         with self._connection() as conn:
-            row = None
-            if all(value not in (None, "", "待定", "未知", 0) for value in identity):
-                row = conn.execute(
-                    "SELECT id FROM itineraries WHERE session_id = %s "
-                    "AND facts->>'start_date' = %s AND facts->>'from_city' = %s "
-                    "AND facts->>'to_city' = %s AND facts->>'duration_days' = %s "
-                    "ORDER BY id DESC LIMIT 1",
-                    (session_id, *(str(value) for value in identity)),
-                ).fetchone()
-            if row:
+            if trip_id is not None:
                 conn.execute(
-                    "UPDATE itineraries SET facts = %s, summary = %s, ts = %s WHERE id = %s",
-                    (Jsonb(facts), summary, ts, row[0]),
+                    "UPDATE trips SET facts = %s, plan = %s, status = %s, missing = %s, "
+                    "resume_context = %s, thread_id = COALESCE(%s, thread_id), updated_at = %s "
+                    "WHERE id = %s AND user_id = %s",
+                    (Jsonb(facts), plan_json, status, Jsonb(missing), resume_context, thread_id, ts, trip_id, user_id),
                 )
+                row = conn.execute("SELECT id FROM trips WHERE id = %s", (trip_id,)).fetchone()
+                stored_id = row[0] if row else None
             else:
-                conn.execute(
-                    "INSERT INTO itineraries (session_id, facts, summary, ts) VALUES (%s, %s, %s, %s)",
-                    (session_id, Jsonb(facts), summary, ts),
-                )
-        return {**facts, "summary": summary, "ts": ts}
+                identity = tuple(facts.get(key) for key in ("start_date", "from_city", "to_city", "duration_days"))
+                existing = None
+                if all(value not in (None, "", "待定", "未知", 0) for value in identity):
+                    existing = conn.execute(
+                        "SELECT id FROM trips WHERE user_id = %s AND status != 'cancelled' "
+                        "AND facts->>'start_date' = %s AND facts->>'from_city' = %s "
+                        "AND facts->>'to_city' = %s AND facts->>'duration_days' = %s "
+                        "ORDER BY id DESC LIMIT 1",
+                        (user_id, *(str(value) for value in identity)),
+                    ).fetchone()
+                if existing:
+                    conn.execute(
+                        "UPDATE trips SET facts = %s, plan = %s, status = %s, missing = %s, "
+                        "resume_context = %s, thread_id = COALESCE(%s, thread_id), updated_at = %s WHERE id = %s",
+                        (Jsonb(facts), plan_json, status, Jsonb(missing), resume_context, thread_id, ts, existing[0]),
+                    )
+                    stored_id = existing[0]
+                else:
+                    conn.execute(
+                        "INSERT INTO trips "
+                        "(user_id, thread_id, status, facts, plan, missing, resume_context, created_at, updated_at) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        (user_id, thread_id, status, Jsonb(facts), plan_json, Jsonb(missing), resume_context, ts, ts),
+                    )
+                    row = conn.execute(
+                        "SELECT id FROM trips WHERE user_id = %s ORDER BY id DESC LIMIT 1", (user_id,)
+                    ).fetchone()
+                    stored_id = row[0] if row else None
+        return {**facts, "summary": (plan or {}).get("summary", ""), "ts": ts, "id": stored_id, "status": status}
 
-    def get_itineraries(self, session_id: str) -> list[dict]:
+    def get_trips(self, user_id: str) -> list[dict]:
+        """当前用户全部非取消行程（含 drafting），status 已按日期派生（completed 读时判定）。"""
         with self._connection() as conn:
             rows = conn.execute(
-                "SELECT facts, summary, ts FROM itineraries WHERE session_id = %s ORDER BY id",
+                "SELECT id, thread_id, status, facts, plan, missing, resume_context, updated_at "
+                "FROM trips WHERE user_id = %s AND status != 'cancelled' ORDER BY id",
+                (user_id,),
+            ).fetchall()
+        return [self._trip_dict(row) for row in rows]
+
+    def get_trip(self, user_id: str, trip_id: int) -> dict | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT id, thread_id, status, facts, plan, missing, resume_context, updated_at "
+                "FROM trips WHERE user_id = %s AND id = %s",
+                (user_id, trip_id),
+            ).fetchone()
+        return self._trip_dict(row) if row else None
+
+    def update_trip(
+        self,
+        user_id: str,
+        trip_id: int,
+        *,
+        facts: dict | None = None,
+        plan: dict | None = None,
+        status: str | None = None,
+    ) -> dict | None:
+        """改期/改细节：更新同一条行程（id 不变）。未找到返回 None。"""
+        current = self.get_trip(user_id, trip_id)
+        if current is None:
+            return None
+        merged_facts = {
+            **{
+                k: v
+                for k, v in current.items()
+                if k not in ("id", "status", "plan", "summary", "missing", "resume_context", "ts")
+            },
+            **(facts or {}),
+        }
+        return self.save_trip(
+            user_id,
+            merged_facts,
+            plan if plan is not None else current.get("plan"),
+            trip_id=trip_id,
+            status=status or "upcoming",
+        )
+
+    def cancel_trip(self, user_id: str, trip_id: int) -> bool:
+        """取消已确定行程（upcoming）→ cancelled。drafting 用 cancel_active_task。"""
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        with self._connection() as conn:
+            cur = conn.execute(
+                "UPDATE trips SET status = 'cancelled', updated_at = %s WHERE id = %s AND user_id = %s",
+                (ts, trip_id, user_id),
+            )
+        return cur.rowcount > 0
+
+    def duplicate_trip(self, user_id: str, trip_id: int) -> dict | None:
+        """参考历史再来一次：复制 facts 开新行程（新 id，drafting 态待补全/重排）。"""
+        current = self.get_trip(user_id, trip_id)
+        if current is None:
+            return None
+        facts = {
+            k: v
+            for k, v in current.items()
+            if k not in ("id", "status", "plan", "summary", "missing", "resume_context", "ts")
+        }
+        return self.save_trip(user_id, facts, None, status="drafting", missing=[])
+
+    def add_itinerary(self, session_id: str, facts: dict, summary: str) -> dict:
+        """兼容旧调用：写入已确定行程（plan 仅 summary）。相同出发日/路线/天数的候选更新原记录。"""
+        return self.save_trip(session_id, facts, {"summary": summary}, status="upcoming")
+
+    def get_itineraries(self, session_id: str) -> list[dict]:
+        """兼容旧调用：已确定行程（非 drafting/取消），facts 展开 + summary。"""
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT id, thread_id, status, facts, plan, missing, resume_context, updated_at "
+                "FROM trips WHERE user_id = %s AND status IN ('upcoming', 'completed') ORDER BY id",
                 (session_id,),
             ).fetchall()
-        return [{**r[0], "summary": r[1], "ts": r[2]} for r in rows]
+        return [self._trip_dict(row) for row in rows]
 
     # ---------- 只读探活（stability 健康检查用） ----------
     def health_check(self) -> None:

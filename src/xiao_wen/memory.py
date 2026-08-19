@@ -34,6 +34,8 @@ class MemoryBackend(Protocol):
 
     def clear_active_task(self, thread_id: str, user_id: str) -> None: ...
 
+    def cancel_active_task(self, thread_id: str, user_id: str) -> None: ...
+
     def add_or_update_preference(
         self, session_id: str, category: str, content: str, is_update: bool = False
     ) -> dict: ...
@@ -43,6 +45,37 @@ class MemoryBackend(Protocol):
     def add_itinerary(self, session_id: str, facts: dict, summary: str) -> dict: ...
 
     def get_itineraries(self, session_id: str) -> list[dict]: ...
+
+    def save_trip(
+        self,
+        user_id: str,
+        facts: dict,
+        plan: dict | None,
+        *,
+        thread_id: str | None = None,
+        trip_id: int | None = None,
+        status: str = "upcoming",
+        missing: list | None = None,
+        resume_context: str = "",
+    ) -> dict: ...
+
+    def get_trips(self, user_id: str) -> list[dict]: ...
+
+    def get_trip(self, user_id: str, trip_id: int) -> dict | None: ...
+
+    def update_trip(
+        self,
+        user_id: str,
+        trip_id: int,
+        *,
+        facts: dict | None = None,
+        plan: dict | None = None,
+        status: str | None = None,
+    ) -> dict | None: ...
+
+    def cancel_trip(self, user_id: str, trip_id: int) -> bool: ...
+
+    def duplicate_trip(self, user_id: str, trip_id: int) -> dict | None: ...
 
     def transaction(self): ...
 
@@ -124,6 +157,10 @@ def clear_active_task(*, thread_id: str, user_id: str) -> None:
     _get_backend().clear_active_task(thread_id, user_id)
 
 
+def cancel_active_task(*, thread_id: str, user_id: str) -> None:
+    _get_backend().cancel_active_task(thread_id, user_id)
+
+
 # ---------- 长期记忆：偏好（追加 / 覆盖） ----------
 def add_or_update_preference(
     category: str, content: str, is_update: bool = False, *, session_id: str = "default"
@@ -161,3 +198,69 @@ def add_itinerary(facts: dict, summary: str, *, session_id: str = "default") -> 
 
 def get_itineraries(*, session_id: str = "default") -> list[dict]:
     return _get_backend().get_itineraries(session_id)
+
+
+# ---------- 长期记忆：行程生命周期（trips 表，ADR-0011） ----------
+def save_trip(
+    facts: dict,
+    plan: dict | None,
+    *,
+    session_id: str = "default",
+    thread_id: str | None = None,
+    trip_id: int | None = None,
+    status: str = "upcoming",
+    missing: list | None = None,
+    resume_context: str = "",
+) -> dict:
+    """写入/更新行程（完整 plan 落库）；trip_id 给定更新同一条，否则按身份去重。"""
+    return _get_backend().save_trip(
+        session_id,
+        facts,
+        plan,
+        thread_id=thread_id,
+        trip_id=trip_id,
+        status=status,
+        missing=missing,
+        resume_context=resume_context,
+    )
+
+
+def get_trips(*, session_id: str = "default") -> list[dict]:
+    """当前用户全部非取消行程（含 drafting），status 已按日期派生。"""
+    return _get_backend().get_trips(session_id)
+
+
+def get_trip(trip_id: int, *, session_id: str = "default") -> dict | None:
+    return _get_backend().get_trip(session_id, trip_id)
+
+
+def get_latest_trip(*, session_id: str = "default") -> dict | None:
+    """最近一条未完成（upcoming/drafting）的行程，供「修改已有行程」续接；无则 None。
+
+    completed/cancelled 均已排除（status 已按日期派生），只把仍可改的行程交出去。
+    """
+    trips = get_trips(session_id=session_id)
+    for trip in reversed(trips):
+        if trip.get("status") in ("upcoming", "drafting"):
+            return trip
+    return None
+
+
+def update_trip(
+    trip_id: int,
+    *,
+    session_id: str = "default",
+    facts: dict | None = None,
+    plan: dict | None = None,
+    status: str | None = None,
+) -> dict | None:
+    """改期/改细节：更新同一条行程（id 不变）。"""
+    return _get_backend().update_trip(session_id, trip_id, facts=facts, plan=plan, status=status)
+
+
+def cancel_trip(trip_id: int, *, session_id: str = "default") -> bool:
+    return _get_backend().cancel_trip(session_id, trip_id)
+
+
+def duplicate_trip(trip_id: int, *, session_id: str = "default") -> dict | None:
+    return _get_backend().duplicate_trip(session_id, trip_id)

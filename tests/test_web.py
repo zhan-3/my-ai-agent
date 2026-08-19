@@ -141,6 +141,9 @@ def test_weather_tomorrow_uses_daily_forecast(monkeypatch):
                 "temperature_2m_max": [30.0] * 7,
                 "temperature_2m_min": [22.0] * 7,
                 "precipitation_probability_max": [10] * 7,
+                "uv_index_max": [6.0] * 7,
+                "apparent_temperature_max": [32.0] * 7,
+                "wind_speed_10m_max": [12.0] * 7,
             }
         }
 
@@ -148,6 +151,7 @@ def test_weather_tomorrow_uses_daily_forecast(monkeypatch):
     out = web.get_weather.func("杭州", "明天")  # type: ignore[attr-defined]
     assert (_date.today() + timedelta(days=1)).isoformat() in out
     assert "最高 30.0°C" in out and "最低 22.0°C" in out and "降水概率 10%" in out
+    assert "紫外线指数 6.0（高）" in out and "体感最高 32.0°C" in out and "最大风速 12.0km/h" in out
 
 
 def test_weather_out_of_range_short_circuits_locally(monkeypatch):
@@ -163,3 +167,71 @@ def test_weather_out_of_range_short_circuits_locally(monkeypatch):
     assert "仅支持未来 7 天" in out
     out2 = web.get_weather.func("北京", "昨天")  # type: ignore[attr-defined]
     assert "不支持查询过去日期" in out2
+
+
+def test_local_time_known_city_and_timezone(monkeypatch):
+    """get_local_time：中国城市 Asia/Shanghai，国际城市用本地时区表，不发 geocoding 请求"""
+
+    def boom(*a, **k):
+        raise AssertionError("本地表城市不应发起 geocoding 请求")
+
+    monkeypatch.setattr(web, "_get_json", boom)
+    assert web._timezone_of("北京") == "Asia/Shanghai"
+    assert web._timezone_of("纽约") == "America/New_York"
+    assert web._timezone_of("东京") == "Asia/Tokyo"
+    assert web._timezone_of("伦敦") == "Europe/London"
+    out_ny = web.get_local_time.func("纽约")  # type: ignore[attr-defined]
+    assert "America/New_York" in out_ny and "比北京时间晚" in out_ny
+    out_bj = web.get_local_time.func("北京")  # type: ignore[attr-defined]
+    assert "与北京时间相同" in out_bj
+
+
+def test_local_time_unknown_city_friendly(monkeypatch):
+    """未收录城市：geocoding 无结果 → 友好文案（不伪装成服务故障）"""
+    monkeypatch.setattr(web, "_get_json", lambda *a, **k: {"results": []})
+    out = web.get_local_time.func("不存在的城市")  # type: ignore[attr-defined]
+    assert "未找到城市时区" in out
+
+
+def test_web_agent_local_time_grounding(monkeypatch):
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    from xiao_wen.agents import web_agent
+
+    class App:
+        def __init__(self, tool_name):
+            self.tool_name = tool_name
+
+        def invoke(self, _state):
+            return {
+                "messages": [
+                    ToolMessage(content="纽约当前当地时间...", tool_call_id="call-1", name=self.tool_name),
+                    AIMessage(content="纽约现在几点..."),
+                ]
+            }
+
+    monkeypatch.setattr(web_agent._web, "app", App("get_weather"))
+    assert web_agent._web_query("纽约现在几点") == ("暂时无法获取可靠实时信息，请稍后重试。", "unavailable")
+    monkeypatch.setattr(web_agent._web, "app", App("get_local_time"))
+    assert web_agent._web_query("纽约现在几点") == ("纽约当前当地时间...", "grounded")
+
+
+def test_is_overseas_local_tables_and_nominatim(monkeypatch):
+    """境外判定：中国城市表→境内，国际城市表（含港澳台）→境外，兜底 Nominatim display_name 含「中国」"""
+    assert web.is_overseas("北京") is False
+    assert web.is_overseas("纽约") is True
+    assert web.is_overseas("香港") is True
+    assert web.is_overseas("澳门") is True
+    monkeypatch.setattr(web, "_nominatim", lambda c: {"display_name": "临沂市, 山东省, 中国"})
+    assert web.is_overseas("临沂") is False
+    monkeypatch.setattr(web, "_nominatim", lambda c: {"display_name": "奥兰多, 美国"})
+    assert web.is_overseas("奥兰多") is True
+    monkeypatch.setattr(web, "_nominatim", lambda c: None)
+    assert web.is_overseas("未知名城") is None
+
+
+def test_time_diff_from_beijing():
+    """时差：东京早 1 小时、北京 0；纽约受夏令时影响 -12 或 -13。"""
+    assert abs(web.time_diff_from_beijing("东京") - 1.0) < 0.01
+    assert web.time_diff_from_beijing("北京") == 0.0
+    assert web.time_diff_from_beijing("纽约") in (-12.0, -13.0)

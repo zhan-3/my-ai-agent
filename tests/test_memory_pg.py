@@ -50,13 +50,26 @@ class TestPostgresBackend:
         assert [p["content"] for p in b.get_preferences("A")] == ["北京"]
         assert [p["content"] for p in b.get_preferences("B")] == ["广州"]
 
+    def test_preference_duplicate_declaration_is_idempotent(self, b):
+        """同一用户重复声明完全相同偏好（is_update=False）不重复追加（曾致「我喜欢住全季」说两次 → 两条）。"""
+        b.add_or_update_preference("A", "住宿", "喜欢住全季")
+        b.add_or_update_preference("A", "住宿", "喜欢住全季")
+        b.add_or_update_preference("A", "住宿", "喜欢住全季")
+        assert [p["content"] for p in b.get_preferences("A", "住宿")] == ["喜欢住全季"]
+        # 内容不同仍追加（不是去重过头）；is_update 覆盖语义不受影响
+        b.add_or_update_preference("A", "住宿", "喜欢住汉庭")
+        assert [p["content"] for p in b.get_preferences("A", "住宿")] == ["喜欢住全季", "喜欢住汉庭"]
+
     def test_active_task_roundtrip_and_user_guard(self, b):
         task = {"intent": "行程规划", "missing": ["出发城市"]}
         b.set_active_task("alice:thread-a", "alice", task)
-        assert b.get_active_task("alice:thread-a", "alice") == task
+        got = b.get_active_task("alice:thread-a", "alice")
+        assert got["intent"] == "行程规划"
+        assert got["missing"] == ["出发城市"]
+        assert got["trip_id"] is not None  # 新架构：活跃任务绑定 trips.drafting 行的 id
         assert b.get_active_task("alice:thread-a", "bob") is None
         b.clear_active_task("alice:thread-a", "bob")
-        assert b.get_active_task("alice:thread-a", "alice") == task
+        assert b.get_active_task("alice:thread-a", "alice")["trip_id"] is not None
         b.clear_active_task("alice:thread-a", "alice")
         assert b.get_active_task("alice:thread-a", "alice") is None
 

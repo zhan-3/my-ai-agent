@@ -35,8 +35,7 @@ export interface paths {
         put?: never;
         /**
          * Chat Stream
-         * @description SSE 流式聊天：阶段事件（意图识别/子 Agent 进度）+ 最终 done（answer/intent/reason/plan）。
-         *     旧前端 / 旧契约走 /api/chat 不受影响；阶段事件让长 LLM 等待有实时进度反馈。
+         * @description SSE 流式聊天：子 Agent 生命周期事件 + 最终 done。
          */
         post: operations["chat_stream_api_chat_stream_post"];
         delete?: never;
@@ -136,11 +135,51 @@ export interface paths {
         };
         /**
          * Memory
-         * @description 当前用户记忆快照：偏好 + 历史行程（前端记忆侧栏可视化，体现 Agent 长期记忆）
+         * @description 当前用户记忆快照：偏好 + 行程档案（前端记忆侧栏可视化，体现 Agent 长期记忆）
          */
         get: operations["memory_api_memory_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Messages
+         * @description 按 conversation_id 拉回历史消息（前端箭头跳转续聊时恢复上下文）。
+         */
+        get: operations["messages_api_messages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trips/{trip_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel Trip
+         * @description 取消行程（任意状态 → cancelled，保留记录不物理删除）。
+         */
+        post: operations["cancel_trip_api_trips__trip_id__cancel_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -323,9 +362,11 @@ export interface components {
         };
         /**
          * Itinerary
-         * @description 历史行程摘要（记忆侧栏展示字段；容忍旧数据缺字段）
+         * @description 行程档案（记忆侧栏展示字段；容忍旧数据缺字段）
          */
         Itinerary: {
+            /** Id */
+            id?: number | null;
             /** Start Date */
             start_date?: string | null;
             /** From City */
@@ -341,6 +382,14 @@ export interface components {
              * @default 历史
              */
             status: string;
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** People Count */
+            people_count?: number | null;
+            /** Return Date */
+            return_date?: string | null;
+            /** Purpose */
+            purpose?: string | null;
         };
         /**
          * KnowledgeSource
@@ -671,6 +720,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemorySnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    messages_api_messages_get: {
+        parameters: {
+            query: {
+                conversation_id: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_trip_api_trips__trip_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                trip_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

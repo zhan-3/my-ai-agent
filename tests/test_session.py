@@ -17,6 +17,7 @@ class Store:
         self.transcripts: dict[str, list[list[dict]]] = {}
         self.preferences = []
         self.itineraries = []
+        self.trips = []
         self.task = None
 
     def format_recent_messages(self, n, *, session_id="default"):
@@ -35,6 +36,21 @@ class Store:
     def add_itinerary(self, facts, summary, *, session_id="default"):
         self.itineraries.append((session_id, facts, summary))
 
+    def save_trip(
+        self,
+        facts,
+        plan,
+        *,
+        session_id="default",
+        thread_id=None,
+        trip_id=None,
+        status="upcoming",
+        missing=None,
+        resume_context="",
+    ):
+        self.trips.append((session_id, facts, plan, trip_id, status))
+        return {"id": trip_id or len(self.trips), **facts, "summary": (plan or {}).get("summary", ""), "status": status}
+
     def get_active_task(self, *, thread_id, user_id):
         return self.task
 
@@ -42,6 +58,9 @@ class Store:
         self.task = task
 
     def clear_active_task(self, *, thread_id, user_id):
+        self.task = None
+
+    def cancel_active_task(self, *, thread_id, user_id):
         self.task = None
 
 

@@ -142,6 +142,32 @@ def _extract_turn_prefs(user_input: str) -> str:
     return "；".join(f"{rec.category}:{rec.content}" for rec in r.records)
 
 
+def _drafting_context(session_id: str, active_task: dict | None) -> str:
+    """集合式续接（ADR-0011）：线程内全部 drafting 草稿（含已收集的部分要素/待补清单）注入上下文，
+    支持一轮多规划（多条未完成草稿各自续接，不互相覆盖）。记忆不可用时降级为单条活跃任务上下文。
+    """
+    try:
+        from xiao_wen.memory import get_trips
+
+        drafts = [t for t in get_trips(session_id=session_id) if t.get("status") == "drafting"]
+    except Exception:
+        drafts = []
+    if not drafts:
+        return (active_task or {}).get("resume_context", "")
+    lines = []
+    for d in drafts:
+        f = {
+            k: v
+            for k, v in d.items()
+            if k not in ("id", "status", "plan", "summary", "missing", "resume_context", "ts")
+        }
+        lines.append(
+            f"草稿#{d.get('id')}（要素：{f or '无'}；待补：{d.get('missing') or '无'}；"
+            f"上文：{d.get('resume_context') or '无'}）"
+        )
+    return "线程内未完成行程草稿：\n" + "\n".join(lines)
+
+
 def run(state) -> dict:
     """收尾者（collect-then-compose 的 compose 阶段）：读图级 collect 节点写入的黑板 upstream，
     委托深模块 xiao_wen.trip_planner.handle 完成规划 + 展示拼装（预算/天气/日期模糊提示）。
@@ -151,19 +177,29 @@ def run(state) -> dict:
     from xiao_wen.trip_planner import handle
 
     active_task = state.get("active_task")
+    latest_trip = state.get("latest_trip")
     recent = focused_recent(active_task, state.get("recent", ""))
     owner_id = state.get("user_id", state.get("session_id", "default"))
     upstream = state.get("upstream")
     if upstream is None:
         upstream = collect_upstream(state["user_input"], owner_id, recent)
+    # trip_id：活跃任务（drafting 续接）优先；否则仅当本轮是「修改已有行程」（修改词）才绑定
+    # 最近行程 id（更新同一条）；新行程不带 trip_id，走身份去重/新建，避免误覆盖历史行程。
+    from xiao_wen.trip_planner import TRIP_MODIFY_WORDS
+
+    trip_id = (active_task or {}).get("trip_id")
+    if trip_id is None and latest_trip and any(w in state["user_input"] for w in TRIP_MODIFY_WORDS):
+        trip_id = latest_trip.get("id")
     out = handle(
         state["user_input"],
         session_id=owner_id,
+        thread_id=state.get("session_id"),
         recent=recent,
         upstream=upstream,
-        task_context=(active_task or {}).get("resume_context", ""),
+        task_context=_drafting_context(owner_id, active_task),
         cancelled=state.get("_cancelled"),
         defer_write=bool(state.get("_defer_writes")),
+        trip_id=trip_id,
     )
     return {
         "answer": out.answer,

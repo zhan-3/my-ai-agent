@@ -46,7 +46,9 @@ pref_prompt = ChatPromptTemplate.from_messages(
 例如「我常住哪里？」「我的住宿偏好是什么？」「帮我记一下」都不是偏好陈述 → records 返回空数组 []。
 顶层键名必须为 records（数组，可为空），每项键名为：
 - category：严格是六词之一：住宿、餐饮、交通、预算、常驻城市、其他
-- content：偏好内容一句话
+- content：只存偏好本身的关键词，去掉主语「我」和更新语气词（改/改成/改为/现在/以后/不再/其实是）；
+  否定词「不」要保留（「我不吃辣」→「不吃辣」）。
+  反例：「我改吃辣了」→ content 必须是「吃辣」，绝不能写成「改吃辣了」。
 - is_update：布尔。用户表达「现在/改成/以后/不再/其实是」等更新语气时 true，否则 false。
 **常驻城市的边界（重要）**：只有「常住/定居/家在/目前住在」才算常驻城市；
 「去过XX」「常去XX」「之前去过XX」「到过XX」是出差经历/历史行程，**不是**常驻城市，
@@ -62,7 +64,8 @@ pref_prompt = ChatPromptTemplate.from_messages(
   {{"category": "住宿", "content": "喜欢住汉庭", "is_update": false}},
   {{"category": "常驻城市", "content": "上海", "is_update": true}}
 ]}}
-单个偏好：「我喜欢住全季」→ {{"records": [{{"category": "住宿", "content": "喜欢住全季", "is_update": false}}]}}。""",
+单个偏好：「我喜欢住全季」→ {{"records": [{{"category": "住宿", "content": "喜欢住全季", "is_update": false}}]}}。
+更新偏好：「我改吃辣了」→ {{"records": [{{"category": "餐饮", "content": "吃辣", "is_update": true}}]}}。""",
         ),
         ("human", "{input}"),
     ]

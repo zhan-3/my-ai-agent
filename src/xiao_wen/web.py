@@ -12,9 +12,10 @@
 import os
 import time
 from datetime import date as _date
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 import requests
 from langchain_core.messages import SystemMessage
@@ -25,7 +26,7 @@ from langgraph.prebuilt import ToolNode
 from typing_extensions import TypedDict
 
 from xiao_wen import llm
-from xiao_wen.reference_data import CITY_COORDS
+from xiao_wen.reference_data import CITY_COORDS, CITY_TIMEZONES
 
 # ---- 网络工具：代理 + 重试（免费 API 不稳定，工程上必须健壮）----
 
@@ -58,18 +59,67 @@ def _get_json(url, params=None, headers=None, retries=2):
 
 
 # 城市经纬度表：单一来源 xiao_wen.reference_data.CITY_COORDS（本地内置，零依赖）
-def _geocode(city: str) -> tuple[float, float]:
-    """城市名 → 经纬度：优先本地表（零依赖），未收录才走 Nominatim（免费但限流）"""
-    if city in CITY_COORDS:
-        return CITY_COORDS[city]
+def _nominatim(city: str) -> dict | None:
+    """Nominatim 地理编码：返回首个结果（含 lat/lon/display_name），失败返回 None"""
     geo = _get_json(
         "https://nominatim.openstreetmap.org/search",
         params={"q": city, "format": "json", "limit": 1, "accept-language": "zh"},
         headers={"User-Agent": "xiao-wen-travel-assistant/1.0"},
     )
+    return geo[0] if geo else None
+
+
+def _geocode(city: str) -> tuple[float, float]:
+    """城市名 → 经纬度：优先本地表（零依赖），未收录才走 Nominatim（免费但限流）"""
+    if city in CITY_COORDS:
+        return CITY_COORDS[city]
+    geo = _nominatim(city)
     if not geo:
         raise ValueError(f"未找到城市：{city}")
-    return float(geo[0]["lat"]), float(geo[0]["lon"])
+    return float(geo["lat"]), float(geo["lon"])
+
+
+def _timezone_of(city: str) -> str:
+    """城市名 → IANA 时区：中国城市统一 Asia/Shanghai，本地表优先，未收录走 open-meteo geocoding（仅英文名有效）"""
+    if city in CITY_COORDS or city in CITY_TIMEZONES:
+        return CITY_TIMEZONES.get(city, "Asia/Shanghai")
+    geo = _get_json(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        params={"name": city, "count": 1, "format": "json"},
+    )
+    results = geo.get("results")
+    if not results:
+        raise ValueError(f"未找到城市时区：{city}")
+    return results[0]["timezone"]
+
+
+def is_overseas(city: str) -> bool | None:
+    """判定城市是否境外（用于行程预算币种）：港澳台按境外处理。
+
+    本地国际城市表（含港澳台）时区非 Asia/Shanghai → 境外；中国城市表 → 境内；
+    兜底用 Nominatim display_name 是否含「中国」判定；无法判定返回 None（调用方不显示金额）。
+    """
+    if city in CITY_TIMEZONES:
+        return CITY_TIMEZONES[city] != "Asia/Shanghai"
+    if city in CITY_COORDS:
+        return False
+    try:
+        geo = _nominatim(city)
+    except Exception:
+        return None
+    if not geo:
+        return None
+    return "中国" not in geo.get("display_name", "")
+
+
+def time_diff_from_beijing(city: str) -> float | None:
+    """城市与北京时差（小时），无法确定时区返回 None。正值=比北京早，负值=比北京晚。"""
+    try:
+        local_off = datetime.now(ZoneInfo(_timezone_of(city))).utcoffset() or timedelta(0)
+        bj_off = datetime.now(ZoneInfo("Asia/Shanghai")).utcoffset() or timedelta(0)
+        return (local_off - bj_off).total_seconds() / 3600
+    except Exception:
+        return None
 
 
 @tool
@@ -82,12 +132,16 @@ def get_weather(city: str, date: str = "今天") -> str:
         # ② 地理编码：本地城市表优先，未收录城市走 OSM Nominatim
         lat, lon = _geocode(city)
         # ③ 天气：open-meteo daily 预报（免费无需 key），按 idx 取对应天
+        daily_fields = (
+            "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,"
+            "uv_index_max,apparent_temperature_max,wind_speed_10m_max"
+        )
         daily = _get_json(
             "https://api.open-meteo.com/v1/forecast",
             params={
                 "latitude": lat,
                 "longitude": lon,
-                "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+                "daily": daily_fields,
                 "timezone": "auto",
             },
         )["daily"]
@@ -115,9 +169,13 @@ def get_weather(city: str, date: str = "今天") -> str:
             99: "雷暴伴大冰雹",
         }
         desc = wmo.get(daily["weather_code"][idx], f"天气代码{daily['weather_code'][idx]}")
+        uv = daily["uv_index_max"][idx]
+        uv_level = "低" if uv <= 2 else "中" if uv <= 5 else "高" if uv <= 7 else "很高" if uv <= 10 else "极高"
         return (
             f"{city} {daily['time'][idx]} 天气：{desc}，最高 {daily['temperature_2m_max'][idx]}°C / "
-            f"最低 {daily['temperature_2m_min'][idx]}°C，降水概率 {daily['precipitation_probability_max'][idx]}%"
+            f"最低 {daily['temperature_2m_min'][idx]}°C，体感最高 {daily['apparent_temperature_max'][idx]}°C，"
+            f"降水概率 {daily['precipitation_probability_max'][idx]}%，"
+            f"紫外线指数 {uv}（{uv_level}），最大风速 {daily['wind_speed_10m_max'][idx]}km/h"
         )
     except ValueError as e:
         return str(e)
@@ -189,7 +247,27 @@ def get_air_quality(city: str) -> str:
         return f"查询空气质量失败（服务可能不稳定，请稍后再试）：{type(e).__name__}"
 
 
-tools = [get_weather, get_currency_rate, get_air_quality]
+@tool
+def get_local_time(city: str) -> str:
+    """查询指定城市当前当地时间及与北京时间的时差。city：城市名，如「纽约」「东京」「伦敦」"""
+    try:
+        tz_name = _timezone_of(city)
+        local = datetime.now(ZoneInfo(tz_name))
+        diff_hours = time_diff_from_beijing(city)
+        if diff_hours is None:
+            rel = "时差未知"
+        elif abs(diff_hours) < 0.01:
+            rel = "与北京时间相同"
+        else:
+            rel = f"比北京时间{'早' if diff_hours > 0 else '晚'}{abs(diff_hours):.0f}小时"
+        return f"{city} 当前当地时间 {local.strftime('%Y-%m-%d %H:%M')}（{tz_name}），{rel}"
+    except ValueError as e:
+        return str(e)
+    except Exception as e:
+        return f"查询当地时间失败（服务可能不稳定，请稍后再试）：{type(e).__name__}"
+
+
+tools = [get_weather, get_currency_rate, get_air_quality, get_local_time]
 # ---- 2. 图：agent(LLM+工具) ⇄ tools(ToolNode) 的 ReAct 循环 ----
 
 

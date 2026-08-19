@@ -76,6 +76,7 @@ export default function MessageBubble({ msg }: { msg: ChatMessage }) {
       {isTrip ? (
         <div className="max-w-[85%]">
           <TripCard text={msg.text} plan={msg.plan} />
+          <Sources sources={msg.sources ?? []} />
         </div>
       ) : hasStats ? (
         <div className="max-w-[85%]">

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { sendMessage, streamChat, type ChatResponse, type StreamEvent } from '@/api/chat'
+import { getMessages } from '@/api/memory'
 import { ApiError } from '@/api/client'
 import { getStoredToken } from '@/lib/storage'
 import type { TripPlan } from '@/lib/trip'
@@ -107,7 +108,10 @@ export function useChat({ onUnauthorized }: { onUnauthorized: () => void }) {
             return null
           }
         }
-        append({ role: 'ai', text: NETWORK_FALLBACK, plan: null })
+        // 503 = 后端 SSE error 事件（agent_limit / service_unavailable 等）：展示后端真实文案；
+        // 只有真正网络断开（非 ApiError）才用「网络错误」兜底，避免误导用户。
+        const fallback = e instanceof ApiError && e.status === 503 ? e.message : NETWORK_FALLBACK
+        append({ role: 'ai', text: fallback, plan: null })
         return null
       } finally {
         busyRef.current = false
@@ -125,5 +129,27 @@ export function useChat({ onUnauthorized }: { onUnauthorized: () => void }) {
     setStages([])
   }, [])
 
-  return { messages, busy, send, stages, conversationId, startNewConversation }
+  // 行程档案箭头跳转：切到该行程所在对话，拉回历史消息恢复「当时的对话状态」。
+  const switchConversation = useCallback(async (id: string): Promise<boolean> => {
+    if (busyRef.current || !id) return false
+    setConversationId(id)
+    setStages([])
+    setMessages([]) // 先清空，加载中不显示旧对话
+    try {
+      const { messages: history } = await getMessages(getStoredToken() ?? '', id)
+      setMessages(
+        history.map((m) => ({
+          role: m.role,
+          text: m.text,
+          // 历史消息只持久化了纯文本：行程答案靠文本特征回退识别（后端未存 intent）
+          intent: m.role === 'ai' && m.text.includes('📋') ? '行程规划' : undefined,
+        })),
+      )
+      return true
+    } catch {
+      return false
+    }
+  }, [])
+
+  return { messages, busy, send, stages, conversationId, startNewConversation, switchConversation }
 }

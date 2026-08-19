@@ -119,6 +119,14 @@ def _current_user(authorization: str | None = None) -> str:
     return user
 
 
+def _conversation_id_of(thread_id: str | None, user: str) -> str | None:
+    """trips.thread_id 形如 `{user}:{conversation_id}`；剥离用户前缀给前端当 conversation_id 用。"""
+    if not thread_id:
+        return None
+    prefix = user + ":"
+    return thread_id[len(prefix) :] if thread_id.startswith(prefix) else None
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, authorization: str | None = Header(default=None)) -> ChatResponse:
     """聊天接口：JWT 决定用户，conversation_id 决定该用户内的可见线程。"""
@@ -234,14 +242,64 @@ def stats(authorization: str | None = Header(default=None)) -> TravelStats:
 
 @app.get("/api/memory", response_model=MemorySnapshot)
 def memory(authorization: str | None = Header(default=None)) -> MemorySnapshot:
-    """当前用户记忆快照：偏好 + 历史行程（前端记忆侧栏可视化，体现 Agent 长期记忆）"""
-    user = _current_user(authorization)
-    from xiao_wen.memory import get_itineraries, get_preferences
+    """当前用户记忆快照：偏好 + 行程档案（前端记忆侧栏可视化，体现 Agent 长期记忆）"""
+    from datetime import date, timedelta
 
+    from xiao_wen.memory import get_preferences, get_trips
+
+    user = _current_user(authorization)
+    _status_label = {"drafting": "规划中", "upcoming": "待出发", "completed": "已完成", "cancelled": "已取消"}
+
+    def _label(it: dict) -> str:
+        status = str(it.get("status"))
+        if status == "upcoming":
+            # 进行中是展示层派生标签（非存储状态）：出发日 ≤ 今天 ≤ 最后一天
+            raw = str(it.get("start_date", ""))[:10]
+            try:
+                start = date.fromisoformat(raw)
+                dur = it.get("duration_days")
+                end = start + timedelta(days=(int(dur) - 1 if isinstance(dur, int) and dur > 0 else 0))
+                if start <= date.today() <= end:
+                    return "进行中"
+            except ValueError:
+                pass
+        return _status_label.get(status, status or "历史")
+
+    itineraries = [
+        Itinerary(**{**it, "status": _label(it), "conversation_id": _conversation_id_of(it.get("thread_id"), user)})
+        for it in get_trips(session_id=user)
+    ]
     return MemorySnapshot(
         preferences=[Preference(**p) for p in get_preferences(session_id=user)],
-        itineraries=[Itinerary(**it) for it in get_itineraries(session_id=user)],
+        itineraries=itineraries,
     )
+
+
+@app.get("/api/messages")
+def messages(conversation_id: str, authorization: str | None = Header(default=None)) -> dict:
+    """按 conversation_id 拉回历史消息（前端箭头跳转续聊时恢复上下文）。"""
+    from xiao_wen.dialogue import make_thread_id
+    from xiao_wen.memory import get_recent_messages
+
+    user = _current_user(authorization)
+    try:
+        thread_id = make_thread_id(user, conversation_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    rows = get_recent_messages(n=200, session_id=thread_id)
+    msgs = [{"role": "user" if m.get("role") == "user" else "ai", "text": m.get("content", "")} for m in rows]
+    return {"messages": msgs}
+
+
+@app.post("/api/trips/{trip_id}/cancel")
+def cancel_trip(trip_id: int, authorization: str | None = Header(default=None)) -> dict:
+    """取消行程（任意状态 → cancelled，保留记录不物理删除）。"""
+    from xiao_wen.memory import cancel_trip as cancel
+
+    user = _current_user(authorization)
+    if not cancel(trip_id, session_id=user):
+        raise HTTPException(status_code=404, detail="行程不存在")
+    return {"ok": True}
 
 
 # ---- React 前端（frontend/dist 构建产物；开发模式走 vite dev :5173，/api 代理到本服务） ----

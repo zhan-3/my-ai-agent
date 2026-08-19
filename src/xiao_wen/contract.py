@@ -41,14 +41,19 @@ class Preference(BaseModel):
 
 
 class Itinerary(BaseModel):
-    """历史行程摘要（记忆侧栏展示字段；容忍旧数据缺字段）"""
+    """行程档案（记忆侧栏展示字段；容忍旧数据缺字段）"""
 
+    id: int | None = None
     start_date: str | None = None
     from_city: str | None = None
     to_city: str | None = None
     duration_days: int | None = None
     summary: str | None = None
     status: str = "历史"
+    conversation_id: str | None = None  # 该行程所在对话线程（前端箭头跳转续聊用）
+    people_count: int | None = None
+    return_date: str | None = None
+    purpose: str | None = None
 
 
 class MemorySnapshot(BaseModel):

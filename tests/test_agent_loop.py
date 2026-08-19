@@ -180,6 +180,17 @@ def test_trip_gate_accepts_non_whitelist_origin_city():
     assert _trip_requested(turn)
 
 
+def test_trip_gate_new_trip_not_blocked_by_active_task():
+    """active_task 存在时，用户换目的地重提新行程，门禁不得拦截（曾致 agent_limit）"""
+    active = {"intent": "行程规划", "missing": ["出发城市"]}
+    # 新行程（去武汉开会）不是补全北京的「出发城市」，但仍是行程请求
+    assert _trip_requested({"user_input": "后天我要去武汉开两天的会", "active_task": active})
+    assert _trip_requested({"user_input": "去武汉出差3天", "active_task": active})
+    # 纯闲聊/无关话术仍被拒
+    assert not _trip_requested({"user_input": "好的", "active_task": active})
+    assert not _trip_requested({"user_input": "武汉天气怎么样", "active_task": active})
+
+
 def test_provides_origin_variants():
     assert _provides_origin("从临沂出发")
     assert _provides_origin("常驻临沂")
@@ -187,6 +198,31 @@ def test_provides_origin_variants():
     assert _provides_origin("临沂市")
     assert not _provides_origin("好的")
     assert not _provides_origin("算了不去了")
+
+
+def test_trip_gate_accepts_pure_fact_listing():
+    """纯要素列举（无目的词/触发词）也是新行程请求：如「后天, 2人, 去武汉, 2天」"""
+    assert _trip_requested({"user_input": "后天, 2人, 去武汉, 2天"})
+    assert _trip_requested({"user_input": "去武汉 2天"})
+    assert _trip_requested({"user_input": "2人去武汉"})
+    assert _trip_requested({"user_input": "后天去武汉"})
+    assert _trip_requested({"user_input": "10月8日去北京"})
+    # 非行程请求仍被拒：无目的地/无天数/无日期
+    assert not _trip_requested({"user_input": "武汉天气怎么样"})
+    assert not _trip_requested({"user_input": "报销标准是什么"})
+    # 票务执行是商旅平台职责，不是行程规划：不能被「日期+目的地」规则误判
+    assert not _trip_requested({"user_input": "帮我订明天去北京的高铁票"})
+    assert not _trip_requested({"user_input": "买两张去上海的机票"})
+    assert not _trip_requested({"user_input": "查一下明天去广州的余票"})
+
+
+def test_trip_gate_accepts_modify_existing_trip():
+    """修改已有行程（改期/改人数/改细节）在有最近行程时也触发行程规划。"""
+    turn = {"user_input": "改成一男一女", "latest_trip": {"id": 1, "status": "upcoming"}}
+    assert _trip_requested(turn)
+    assert _trip_requested({"user_input": "改期到明天", "latest_trip": {"id": 1}})
+    # 无最近行程时，修改词不构成行程请求（无处可改）
+    assert not _trip_requested({"user_input": "改成一男一女"})
 
 
 def test_message_tokens_ignores_cumulative_usage():

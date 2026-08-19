@@ -28,19 +28,28 @@ def focused_recent(active_task: dict | None, fallback: str) -> str:
     return fallback
 
 
-def task_update_set(*, resume_context: str, missing: list[str]) -> dict:
-    return {
-        "action": "set",
-        "task": {
-            "intent": "行程规划",
-            "resume_context": resume_context[-_MAX_RESUME_CONTEXT:],
-            "missing": list(missing),
-        },
+def task_update_set(
+    *, resume_context: str, missing: list[str], trip_id: int | None = None, facts: dict | None = None
+) -> dict:
+    task: dict = {
+        "intent": "行程规划",
+        "resume_context": resume_context[-_MAX_RESUME_CONTEXT:],
+        "missing": list(missing),
     }
+    if trip_id is not None:
+        task["trip_id"] = trip_id
+    if facts:
+        task["facts"] = facts
+    return {"action": "set", "task": task}
 
 
 def task_update_clear() -> dict:
     return {"action": "clear"}
+
+
+def task_update_cancel() -> dict:
+    """用户取消：drafting 行程转 cancelled（保留记录不删除，区别于「完成」的 clear）。"""
+    return {"action": "cancel"}
 
 
 def apply_task_update(
@@ -55,6 +64,7 @@ def apply_task_update(
     update = state.get("task_update")
     setter = getattr(store, "set_active_task", None)
     clearer = getattr(store, "clear_active_task", None)
+    canceller = getattr(store, "cancel_active_task", None)
     if isinstance(update, dict) and update.get("action") == "set" and isinstance(update.get("task"), dict):
         if setter:
             setter(update["task"], thread_id=thread_id, user_id=user_id)
@@ -62,6 +72,10 @@ def apply_task_update(
     if isinstance(update, dict) and update.get("action") == "clear":
         if clearer:
             clearer(thread_id=thread_id, user_id=user_id)
+        return state
+    if isinstance(update, dict) and update.get("action") == "cancel":
+        if canceller:
+            canceller(thread_id=thread_id, user_id=user_id)
         return state
     if active_before and state.get("intent") != "行程规划":
         missing = [str(item) for item in active_before.get("missing", []) if item]

@@ -71,6 +71,27 @@ def test_backend_itinerary_roundtrip():
     assert its[0]["to_city"] == "北京"  # facts 扁平化进 rec（与现有行为一致）
 
 
+def test_get_latest_trip_excludes_completed():
+    """最近可改行程：只返回 upcoming/drafting；已结束（completed）被排除。"""
+    _fresh()
+    # 过去日期 → completed（读时派生），不可再改
+    memory.save_trip(
+        {"start_date": "2020-01-01", "to_city": "北京", "from_city": "临沂", "duration_days": 2},
+        {"summary": "旧行程"},
+        session_id="A",
+    )
+    assert memory.get_latest_trip(session_id="A") is None
+    # 未来日期 → upcoming，命中
+    memory.save_trip(
+        {"start_date": "2026-09-01", "to_city": "武汉", "from_city": "临沂", "duration_days": 2},
+        {"summary": "新行程"},
+        session_id="A",
+    )
+    latest = memory.get_latest_trip(session_id="A")
+    assert latest is not None and latest["to_city"] == "武汉" and latest["status"] == "upcoming"
+    assert latest["id"] is not None
+
+
 # ---------- S2：会话隔离（核心验收） ----------
 
 
@@ -115,7 +136,9 @@ def test_thread_task_is_separate_from_user_long_term_memory():
     memory.set_active_task(task, thread_id="alice:one", user_id="alice")
     memory.add_or_update_preference("餐饮", "不吃辣", session_id="alice")
 
-    assert memory.get_active_task(thread_id="alice:one", user_id="alice") == task
+    got = memory.get_active_task(thread_id="alice:one", user_id="alice")
+    assert got is not None
+    assert got["intent"] == "行程规划" and got["missing"] == ["出差天数"]
     assert memory.get_active_task(thread_id="alice:two", user_id="alice") is None
     assert memory.get_preferences(session_id="alice")[-1]["content"] == "不吃辣"
 

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useChat, type StageItem } from '@/hooks/useChat'
@@ -6,6 +6,7 @@ import { SUGGESTIONS, agentOf } from '@/lib/agents'
 import MemorySidebar from '@/components/MemorySidebar'
 import MessageBubble from '@/components/MessageBubble'
 import ThemeToggle from '@/components/ThemeToggle'
+import type { Itinerary } from '@/api/contract'
 
 function stageLabel(s: StageItem): string {
   switch (s.intent) {
@@ -24,9 +25,19 @@ export default function ChatShell({
   username: string | null
   onLogout: () => void
 }) {
-  const { messages, busy, send, stages, startNewConversation } = useChat({ onUnauthorized: onLogout })
+  const { messages, busy, send, stages, startNewConversation, switchConversation } = useChat({
+    onUnauthorized: onLogout,
+  })
   const [input, setInput] = useState('')
   const [memTick, setMemTick] = useState(0) // 回复成功后 +1，触发记忆侧栏刷新
+  const inputRef = useRef<HTMLInputElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  // 新消息/阶段进度出现时自动滚到底部，避免长对话看不到最新回复（含恢复历史对话后）
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [messages, busy])
 
   async function handleSend(text?: string) {
     const t = (text ?? input).trim()
@@ -36,9 +47,17 @@ export default function ChatShell({
     if (res) setMemTick((k) => k + 1) // 仅成功回复后刷新记忆（偏好/行程可能已更新）
   }
 
+  // 行程档案箭头：切到该行程所在对话，恢复当时的上下文继续聊。
+  function handleContinue(it: Itinerary) {
+    if (it.conversation_id) {
+      void switchConversation(it.conversation_id)
+      inputRef.current?.focus()
+    }
+  }
+
   return (
     <div className="flex h-screen">
-      <MemorySidebar refreshKey={memTick} />
+      <MemorySidebar refreshKey={memTick} onContinue={handleContinue} />
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b px-6 py-3">
           <div>
@@ -60,7 +79,7 @@ export default function ChatShell({
           )}
         </header>
 
-        <div className="flex-1 space-y-4 overflow-y-auto p-6" data-testid="chat-scroll">
+        <div className="flex-1 space-y-4 overflow-y-auto p-6" data-testid="chat-scroll" ref={scrollRef}>
           {messages.length === 0 && (
             <div className="mx-auto max-w-md pt-10 text-center">
               <div className="text-xl font-semibold">你好，我是晓问 👋</div>
@@ -108,6 +127,7 @@ export default function ChatShell({
           </div>
           <div className="flex gap-2">
             <Input
+              ref={inputRef}
               value={input}
               placeholder="输入差旅问题，回车发送…"
               disabled={busy}

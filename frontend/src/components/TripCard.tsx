@@ -9,10 +9,9 @@ import { parseTrip, planToParsed, type TripPlan } from '@/lib/trip'
 
 // 行标签语义色：主题 token（--row-*），跨浅/深色稳定（备注直接用 muted-foreground）
 const ROW_CLS: Record<string, string> = {
-  交通: 'text-[color:var(--row-transport)]',
+  去程: 'text-[color:var(--row-transport)]',
   住宿: 'text-[color:var(--row-hotel)]',
-  活动: 'text-[color:var(--row-activity)]',
-  用餐: 'text-[color:var(--row-meal)]',
+  返程: 'text-[color:var(--row-transport)]',
 }
 
 export default function TripCard({ text, plan }: { text: string; plan?: TripPlan | null }) {
@@ -23,6 +22,7 @@ export default function TripCard({ text, plan }: { text: string; plan?: TripPlan
       ...planToParsed(plan),
       budget: parsed.budget, // 附加块不在 plan 里，从文本取
       reminders: parsed.reminders,
+      tail: parsed.tail,
     }
   }, [text, plan])
 
@@ -40,11 +40,10 @@ export default function TripCard({ text, plan }: { text: string; plan?: TripPlan
             </ul>
           </div>
         )}
-        {trip.days.map((d, i) => (
-          <div key={i} className="rounded-lg border bg-muted/30 p-3">
-            <div className="mb-2 text-sm font-medium">📅 {d.date}</div>
+        {trip.rows.length > 0 && (
+          <div className="rounded-lg border bg-muted/30 p-3">
             <div className="space-y-1">
-              {d.rows.map((r, j) =>
+              {trip.rows.map((r, j) =>
                 r.label ? (
                   <div key={j} className="flex gap-2 text-sm">
                     <span className={`shrink-0 font-medium ${ROW_CLS[r.label] ?? 'text-muted-foreground'}`}>
@@ -60,15 +59,33 @@ export default function TripCard({ text, plan }: { text: string; plan?: TripPlan
               )}
             </div>
           </div>
-        ))}
+        )}
+        {trip.diet && (
+          <div className="text-sm text-muted-foreground">{trip.diet}</div>
+        )}
+        {trip.itinerary.length > 0 && (
+          <div className="rounded-lg border bg-muted/30 p-3">
+            <div className="mb-2 text-sm font-medium">📌 行程安排</div>
+            <div className="space-y-1">
+              {trip.itinerary.map((it, i) => (
+                <div key={i} className="text-sm">
+                  · {it}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {trip.budget && (
           <div className="whitespace-pre-wrap rounded-lg bg-muted/50 p-3 text-sm">{trip.budget}</div>
         )}
         {trip.reminders.map((r, i) => (
-          <div key={`r${i}`} className="text-sm text-muted-foreground">
+          <div key={`r${i}`} className="whitespace-pre-wrap text-sm text-muted-foreground">
             {r.text}
           </div>
         ))}
+        {trip.tail && (
+          <div className="whitespace-pre-wrap rounded-lg bg-muted/50 p-3 text-sm">{trip.tail}</div>
+        )}
       </CardContent>
     </Card>
   )

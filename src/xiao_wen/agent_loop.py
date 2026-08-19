@@ -30,7 +30,14 @@ class LoopLimits:
 _SYSTEM = """你是晓问的主管 Agent，只处理企业差旅。
 你可以直接回答简单问候；其他任务应调用最合适的子 Agent，并在看到结果后再决定是否继续调用。
 政策、报销、住宿标准、预订流程（订票/改签/退票/购票渠道/座位等级）必须调用知识问答；天气、汇率、空气质量必须调用联网查询；
-新行程或补全行程调用行程规划；只有用户明确查询已保存的记录时才调用历史查询。
+新行程、修改已有行程、补全行程缺项都调用行程规划：
+- 修改已有行程：用户用「改成/改为/改期/调整/换成/变更」等修改词（如「改成一男一女」「改期到明天」）时，
+  直接调用行程规划，request 里带上「最近行程」中的行程 id 和本轮修改内容；「最近行程」非「无」即可改，
+  不要反问、不要自称无法修改、不要误把「最近行程」当「活跃任务」。
+- 补全行程缺项：本轮信息回答了「活跃任务」missing 列表中的项时调用；
+只有用户明确查询已保存的记录时才调用历史查询。
+用户要取消/放弃行程（说「算了」「不去了」「取消」「不要了」）必须调用「其他」子 Agent 执行取消，
+不要自己直接回答「已取消」；取消要真实落到行程状态（cancelled），不是口头应付。
 票务执行（订票、改签、退票、查车次/余票/票价）：晓问不代购、不提供实时票务查询，一律引导用户通过晓问商旅平台（travel.xiaowen.com）办理；
 预订流程与规则等知识调用知识问答。
 仅陈述常住城市、餐饮、住宿等偏好而未要求规划时，只调用偏好记录，绝不自行调用行程规划。
@@ -39,7 +46,8 @@ _SYSTEM = """你是晓问的主管 Agent，只处理企业差旅。
 只调用偏好记录并提醒活跃行程仍保留，不要调用行程规划。政策或实时查询也可以暂时打断行程。
 不得编造政策、天气、车次、订单或购买结果。调用参数 request 应包含本轮原话和必要的活跃任务信息，
 成为子 Agent 可独立理解的完整请求。最终回答直接写给用户的话术，只能使用已观察到的结果；
-禁止输出推理、计划或元叙述（如「我需要先…」「好的，目前…」「根据…结果，我…」）；
+禁止输出推理、计划或元叙述（如「我需要先…」「好的，目前…」「根据…结果，我…」，
+或任何英文思考文本如「I need to…」「Let me…」）；
 行程规划提示缺项时，原样给出缺项清单即可，不要复述判断过程；
 回答应急/突发类问题（航班取消、延误、被盗、突发疾病等）后，末尾主动追问是否需要重新安排行程。
 """
@@ -234,6 +242,10 @@ class AgentLoop:
 
 def _trip_requested(turn: dict[str, Any]) -> bool:
     text = str(turn.get("user_input", ""))
+    # 票务执行（订票/买票/购票/抢票/查余票车次）是商旅平台职责，不是行程规划；门禁直接排除，
+    # 避免「帮我订明天去北京的高铁票」被下方「日期+目的地」规则误判成行程、误建 drafting。
+    if ("票" in text and re.search(r"(订|买|购|抢|查)", text)) or re.search(r"(余票|车次)", text):
+        return False
     active = turn.get("active_task")
     if isinstance(active, dict) and active.get("intent") == "行程规划":
         from xiao_wen.reference_data import KNOWN_CITIES
@@ -245,10 +257,31 @@ def _trip_requested(turn: dict[str, Any]) -> bool:
             return True
         if any("日期" in str(item) for item in missing) and re.search(r"\d|今天|明天|后天|下周", text):
             return True
-        return any("目的" in str(item) for item in missing) and any(city in text for city in KNOWN_CITIES)
-    return any(word in text for word in ("规划", "安排行程", "行程安排")) or bool(
-        re.search(r"(?:去|到|前往).{1,12}(?:开会|出差|拜访|培训)", text)
-    )
+        if any("目的" in str(item) for item in missing) and any(city in text for city in KNOWN_CITIES):
+            return True
+        # 不是补全缺项就继续往下判断「是否新行程」——用户可能换了目的地重新提行程，
+        # 不能因 active_task 存在就拦截新行程（曾致「北京缺出发城市时，后天去武汉开会」被误拒）
+    if any(word in text for word in ("规划", "安排行程", "行程安排")):
+        return True
+    # 「去/到/前往 X」+ 出行意图（开会/出差/拜访/培训/会议/洽谈；含「开 X 天的会」这类拆分说法）
+    if re.search(r"(?:去|到|前往)[^，。,.！？]{0,15}(?:开会|出差|拜访|培训|会议|洽谈|开.{0,6}会)", text):
+        return True
+    # 纯要素列举（无目的词也认）：如「去武汉 2天」「2人去武汉」「后天去武汉」
+    # 目的地 + 天数/人数
+    if re.search(r"(?:去|到|前往)[^，。,.\s]{1,8}[\s,，]*\d+\s*[天人]", text):
+        return True
+    # 人数 + 去/到/前往
+    if re.search(r"\d+\s*人[\s,，]*(?:去|到|前往)", text):
+        return True
+    # 日期 + 去/到/前往（「后天去武汉」「10月8日去北京」「后天我要去武汉」）
+    if re.search(r"(?:今天|明天|后天|下周|\d{1,2}月\d{1,2}日)[^，。,.！？]{0,8}(?:去|到|前往)", text):
+        return True
+    # 修改已有行程：修改词 + 有可改的行程（「改成一男一女」「改期到明天」）
+    from xiao_wen.trip_planner import TRIP_MODIFY_WORDS
+
+    if any(word in text for word in TRIP_MODIFY_WORDS):
+        return bool(turn.get("latest_trip"))
+    return False
 
 
 def _provides_origin(text: str) -> bool:
@@ -322,8 +355,19 @@ def _tool_specs(manifest: list[dict]) -> tuple[list[dict[str, Any]], dict[str, s
 def _prompt(turn: dict[str, Any]) -> str:
     active = turn.get("active_task")
     active_text = json.dumps(active, ensure_ascii=False) if active else "无"
+    latest = turn.get("latest_trip")
+    if latest:
+        latest_text = (
+            f"id={latest.get('id')} 状态={latest.get('status')} "
+            f"{latest.get('start_date', '')} {latest.get('from_city', '')}→{latest.get('to_city', '')} "
+            f"{latest.get('duration_days', '')}天 {latest.get('people_count', '')}人 "
+            f"（{str(latest.get('summary', ''))[:100]}）"
+        )
+    else:
+        latest_text = "无"
     return (
-        f"最近对话：\n{turn.get('recent', '无')}\n\n活跃任务：\n{active_text}\n\n用户本轮请求：\n{turn['user_input']}"
+        f"最近对话：\n{turn.get('recent', '无')}\n\n活跃任务：\n{active_text}\n\n"
+        f"最近行程（可改期/改人数/改细节）：\n{latest_text}\n\n用户本轮请求：\n{turn['user_input']}"
     )
 
 
@@ -363,12 +407,22 @@ def _result(
     for key in _OUTPUT_KEYS:
         result[key] = next((out.get(key) for _, out in latest if out.get(key) is not None), None)
 
-    # 行程规划追问缺项（NeedsInfo → task_update.action == "set"）：最终答案直接复用子 Agent 的
-    # 缺项话术，禁止主管重写——重写会把思维链暴露给用户（曾输出「好的，目前没有常驻城市偏好…
-    # 我需要向用户确认」这类推理中间文本）。
+    # 行程规划追问缺项（NeedsInfo → task_update.action == "set"）或取消（action == "cancel"）：
+    # 最终答案直接复用子 Agent 的话术，禁止主管重写——重写会把思维链暴露给用户，或把
+    # 「已取消」变成口头应付（不落库）
     for _, out in latest:
         update = out.get("task_update")
-        if isinstance(update, dict) and update.get("action") == "set":
+        if isinstance(update, dict) and update.get("action") in ("set", "cancel"):
+            child_answer = out.get("answer")
+            if isinstance(child_answer, str) and child_answer.strip():
+                result["answer"] = child_answer
+            break
+
+    # 行程规划成功生成（out.plan 非空）：最终答案直接复用子 Agent 的完整话术（format_plan 输出 +
+    # 预算/天气/报销块），禁止主管重写——重写会丢弃安排理由与逐日备注等细节
+    # （「后天去南京两天」曾因主管重写而丢失 💡 安排理由与每日备注，回答不完整）。
+    for _, out in latest:
+        if out.get("plan"):
             child_answer = out.get("answer")
             if isinstance(child_answer, str) and child_answer.strip():
                 result["answer"] = child_answer

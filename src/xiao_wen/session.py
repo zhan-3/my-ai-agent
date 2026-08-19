@@ -122,9 +122,14 @@ def _resolve_deps(loop: Any, store: Any, cancelled: Callable[[], bool] | None = 
 
 def _prepare_turn(text: str, session_id: str, user_id: str, store: Any) -> tuple[dict[str, Any], str, dict | None]:
     from xiao_wen.dialogue import load_active_task
+    from xiao_wen.memory import get_latest_trip
 
     recent = store.format_recent_messages(6, session_id=session_id)
     active_task = load_active_task(store, session_id, user_id)
+    latest_trip = None
+    with suppress(Exception):
+        # memory 层的 session_id 参数语义是 user_id（行程/偏好按用户隔离，不按线程隔离）
+        latest_trip = get_latest_trip(session_id=user_id)
     return (
         {
             "user_input": text,
@@ -132,6 +137,7 @@ def _prepare_turn(text: str, session_id: str, user_id: str, store: Any) -> tuple
             "session_id": session_id,
             "user_id": user_id,
             "active_task": active_task,
+            "latest_trip": latest_trip,
         },
         recent,
         active_task,
@@ -185,6 +191,15 @@ def _commit_turn(
                 write["content"],
                 write.get("is_update", False),
                 session_id=user_id,
+            )
+        elif write.get("type") == "trip":
+            store.save_trip(
+                write["facts"],
+                write["plan"],
+                session_id=user_id,
+                thread_id=write.get("thread_id"),
+                trip_id=write.get("trip_id"),
+                status=write.get("status", "upcoming"),
             )
         elif write.get("type") == "itinerary":
             store.add_itinerary(write["facts"], write["summary"], session_id=user_id)

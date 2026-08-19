@@ -71,6 +71,203 @@ def test_format_plan_no_reasons_ok():
     assert "💡 安排理由" not in text
 
 
+def test_format_plan_overall_structure_not_daily():
+    """整体结构：去程/住宿/返程 + 每日要点，不再逐日切块【】。"""
+    plan = ItineraryPlan(
+        summary="10月8日从上海赴北京开会3天",
+        days=[
+            _it.DayPlan(
+                date="2026-10-08",
+                transport="高铁 G2 次",
+                hotel="全季酒店",
+                activities=["抵达后入住酒店"],
+                notes="带好身份证",
+            ),
+            _it.DayPlan(date="2026-10-09", transport="", hotel="", activities=["拜访客户"], notes=""),
+            _it.DayPlan(
+                date="2026-10-10", transport="高铁 G3 次", hotel="无（当晚返程）", activities=["返程"], notes=""
+            ),
+        ],
+        reasons=["按差旅标准选择住宿"],
+    )
+    text = _it.format_plan(plan)
+    assert "🚄 去程：高铁 G2 次" in text
+    assert "🏨 住宿：全季酒店" in text
+    assert "🚄 返程：高铁 G3 次" in text
+    assert "📌 行程安排" in text
+    assert "2026-10-09 拜访客户" in text
+    assert "【" not in text  # 不再逐日切块
+    assert "无（当晚返程）" not in text  # 返程日住宿不单独成行
+
+
+def test_format_plan_strips_transport_prefix():
+    """LLM 可能误加「去程：/返程：」前缀，format_plan 防御性去重。"""
+    plan = ItineraryPlan(
+        summary="x",
+        days=[
+            _it.DayPlan(
+                date="2026-10-08",
+                transport="去程：航班（具体航班以晓问商旅平台实时查询为准）",
+                hotel="酒店",
+                activities=[],
+                notes="",
+            )
+        ],
+        reasons=[],
+    )
+    text = _it.format_plan(plan)
+    assert "🚄 去程：航班（具体航班以晓问商旅平台实时查询为准）" in text
+    assert "去程：去程" not in text
+
+
+def test_format_plan_long_trip_folds_blank_days():
+    """长差（>5 天）折叠空白停留日为一行，结合 purpose。"""
+    days = [
+        _it.DayPlan(date="2026-10-08", transport="航班", hotel="当地商务酒店", activities=["抵达后入住酒店"], notes=""),
+        _it.DayPlan(date="2026-10-09", transport="", hotel="", activities=[], notes=""),
+        _it.DayPlan(date="2026-10-10", transport="", hotel="", activities=[], notes=""),
+        _it.DayPlan(date="2026-10-11", transport="", hotel="", activities=["拜访客户"], notes=""),
+        _it.DayPlan(date="2026-10-12", transport="", hotel="", activities=[], notes=""),
+        _it.DayPlan(date="2026-10-13", transport="", hotel="", activities=[], notes=""),
+        _it.DayPlan(date="2026-10-14", transport="航班", hotel="无（当晚返程）", activities=["返程"], notes=""),
+    ]
+    plan = ItineraryPlan(summary="去纽约7天", days=days, reasons=[])
+    text = _it.format_plan(plan, purpose="拜访客户")
+    assert "2026-10-08 抵达后入住酒店" in text
+    assert "2026-10-11 拜访客户" in text
+    assert "2026-10-14 返程" in text
+    assert "其余 4 天：继续拜访客户" in text
+    for blank_date in ("2026-10-09", "2026-10-10", "2026-10-12", "2026-10-13"):
+        assert blank_date not in text  # 空白日不逐日列
+
+
+def test_format_plan_long_trip_no_purpose():
+    """长差无 purpose 时折叠行写「无特别安排」。"""
+    days = [
+        _it.DayPlan(date="2026-10-08", transport="高铁", hotel="酒店", activities=["抵达后入住酒店"], notes=""),
+        _it.DayPlan(date="2026-10-09", transport="", hotel="", activities=[], notes=""),
+        _it.DayPlan(date="2026-10-10", transport="", hotel="", activities=[], notes=""),
+        _it.DayPlan(date="2026-10-11", transport="", hotel="", activities=[], notes=""),
+        _it.DayPlan(date="2026-10-12", transport="", hotel="", activities=[], notes=""),
+        _it.DayPlan(date="2026-10-13", transport="高铁", hotel="无（当晚返程）", activities=["返程"], notes=""),
+    ]
+    plan = ItineraryPlan(summary="去北京6天", days=days, reasons=[])
+    text = _it.format_plan(plan)
+    assert "其余 4 天：无特别安排" in text
+
+
+def test_format_plan_long_trip_filters_generic_activities():
+    """长差中间日 LLM 可能逐日填「出差/工作」泛化活动，代码层过滤并折叠。"""
+    days = [
+        _it.DayPlan(date="2026-10-08", transport="航班", hotel="当地商务酒店", activities=["抵达后入住酒店"], notes=""),
+        _it.DayPlan(date="2026-10-09", transport="", hotel="", activities=["出差"], notes="外出注意安全"),
+        _it.DayPlan(date="2026-10-10", transport="", hotel="", activities=["出差"], notes="外出注意安全"),
+        _it.DayPlan(date="2026-10-11", transport="", hotel="", activities=["拜访客户"], notes=""),
+        _it.DayPlan(date="2026-10-12", transport="", hotel="", activities=["出差"], notes="外出注意安全"),
+        _it.DayPlan(date="2026-10-13", transport="", hotel="", activities=["出差"], notes="外出注意安全"),
+        _it.DayPlan(date="2026-10-14", transport="航班", hotel="无（当晚返程）", activities=["返程"], notes=""),
+    ]
+    plan = ItineraryPlan(summary="去纽约7天", days=days, reasons=[])
+    text = _it.format_plan(plan, purpose="拜访客户")
+    assert "2026-10-11 拜访客户" in text
+    assert "其余 4 天：继续拜访客户" in text
+    for blank_date in ("2026-10-09", "2026-10-10", "2026-10-12", "2026-10-13"):
+        assert blank_date not in text
+    assert "外出注意安全" not in text  # 长差中间日通用备注不逐日重复
+
+
+def test_format_plan_diet_pref_between_hotel_and_itinerary():
+    """饮食偏好只在住宿之后提示一次，位于📌行程安排之前。"""
+    plan = ItineraryPlan(
+        summary="x",
+        days=[
+            _it.DayPlan(date="2026-10-08", transport="高铁", hotel="全季酒店", activities=["抵达后入住酒店"], notes="")
+        ],
+        reasons=[],
+    )
+    text = _it.format_plan(plan, diet_pref="🍽️ 饮食偏好：不吃辣")
+    assert text.index("🏨 住宿") < text.index("🍽️ 饮食偏好") < text.index("📌 行程安排")
+    assert "用餐：" not in text  # 不逐日写用餐
+
+
+def test_diet_pref_line_extracts_dining_pref(monkeypatch):
+    """饮食偏好从长期偏好/本轮陈述提取，去重；无餐饮偏好返回 None。"""
+    monkeypatch.setattr(
+        _it,
+        "get_preferences",
+        lambda session_id=None: [
+            {"category": "住宿", "content": "喜欢安静"},
+            {"category": "餐饮", "content": "不吃辣"},
+        ],
+    )
+    assert _it._diet_pref_line("u") == "🍽️ 饮食偏好：不吃辣"
+    monkeypatch.setattr(_it, "get_preferences", lambda session_id=None: [{"category": "住宿", "content": "喜欢安静"}])
+    assert _it._diet_pref_line("u") is None
+    # 本轮陈述偏好（turn_prefs）也提取，且与历史去重
+    monkeypatch.setattr(_it, "get_preferences", lambda session_id=None: [{"category": "餐饮", "content": "不吃辣"}])
+    assert _it._diet_pref_line("u", turn_prefs="餐饮:不吃辣；住宿:喜欢安静") == "🍽️ 饮食偏好：不吃辣"
+
+
+def test_cut_section_stops_at_next_numbered_section():
+    """极端天气节截取：只到「3. 疫情或传染病」之前，不混入后续小节。"""
+    text = (
+        "台风、暴雨等极端天气\n\n处理步骤：\n"
+        "a) 提前关注天气预报\n"
+        "b) 如已知有极端天气，考虑延期或取消出差\n"
+        "3. 疫情或传染病\n\n处理步骤：\n"
+        "a) 关注目的地疫情信息"
+    )
+    cut = _it._cut_section(text)
+    assert "台风、暴雨等极端天气" in cut
+    assert "考虑延期或取消出差" in cut
+    assert "疫情或传染病" not in cut
+    assert "关注目的地疫情信息" not in cut
+
+
+def test_cut_section_stops_at_next_section_space_separated():
+    """真实 chunk：换行已合并为空格，编号标题用空白边界分隔（不依赖 \n）。"""
+    text = (
+        "台风、暴雨等极端天气  处理步骤： a) 提前关注天气预报 "
+        "b) 考虑延期或取消出差  3. 疫情或传染病  处理步骤： a) 关注目的地疫情信息"
+    )
+    cut = _it._cut_section(text)
+    assert "台风、暴雨等极端天气" in cut
+    assert "考虑延期或取消出差" in cut
+    assert "疫情或传染病" not in cut
+    assert "关注目的地疫情信息" not in cut
+
+
+def test_cut_section_no_next_section_keeps_all():
+    assert _it._cut_section("台风、暴雨等极端天气\n处理步骤：a) 待在室内") == (
+        "台风、暴雨等极端天气\n处理步骤：a) 待在室内"
+    )
+
+
+def test_mixed_gender_detection():
+    assert _it._mixed_gender("改成一男一女")
+    assert _it._mixed_gender("男女各一人")
+    assert _it._mixed_gender("2男1女")
+    assert _it._mixed_gender("一男两女")
+    assert _it._mixed_gender("3男2女")
+    assert not _it._mixed_gender("两人同行")
+    assert not _it._mixed_gender("3人")
+    assert not _it._mixed_gender("")
+
+
+def test_format_emergency_breaks_glued_lines():
+    """chunk 粘连成单行的应急文本重新排成分条列表。"""
+    glued = (
+        "台风、暴雨等极端天气  处理步骤： a) 提前关注天气预报 "
+        "b) 如已在地： - 待在室内 - 关注预警 d) 如交通受影响： - 及时改签"
+    )
+    out = _it._format_emergency(glued)
+    assert "处理步骤：\na) 提前关注天气预报" in out
+    assert "\nb) 如已在地：" in out
+    assert "\n  - 待在室内" in out
+    assert "\nd) 如交通受影响：" in out
+    assert "\n  - 及时改签" in out
+
+
 # ---------------- 编排：plan()（模型用桩注入） ----------------
 
 
@@ -171,6 +368,18 @@ def test_plan_injects_upstream_policy_and_history(monkeypatch):
     payload2 = plan_chain2.calls[-1]
     assert "不得引用或推断政策" in payload2["policy"]
     assert payload2["history_ref"] == "无"
+
+
+def test_weather_window_days():
+    """天气窗口：未来 0~6 天在 7 天预报窗口内，第 7 天起超窗，模糊日期返回 None。"""
+    from datetime import date as _date
+    from datetime import timedelta
+
+    today = _date.today()
+    assert _it._weather_window_days((today + timedelta(days=3)).isoformat()) == 3
+    assert _it._weather_window_days((today + timedelta(days=6)).isoformat()) == 6
+    assert _it._weather_window_days((today + timedelta(days=7)).isoformat()) == 7  # 超窗
+    assert _it._weather_window_days("下周") is None
 
 
 def test_weather_unavailable_is_not_presented_as_weather(monkeypatch):
@@ -551,6 +760,33 @@ def test_format_budget_without_facts_hides_amount():
     text = _it.format_budget(req, ())
     assert "元/晚" not in text
     assert "政策服务未提供有效标准数字" in text
+
+
+def test_estimate_budget_overseas_no_local_rates():
+    """境外：本地人民币标准不适用，金额一律不估算（防止海外城市误套三线 300 元）。"""
+    req = _req(to_city="纽约", from_city="北京", duration_days=3)
+    b = _it.estimate_budget(req, _policy_facts(), overseas=True)
+    assert b["overseas"] is True
+    assert b["hotel_rate"] is None and b["hotel_cost"] is None
+    assert b["meal_cost"] is None and b["total"] is None
+    assert b["city_tier"] is None
+
+
+def test_format_budget_overseas_no_cny_amount():
+    """境外预算块：不显示人民币金额，明示以当地差旅政策为准。"""
+    req = _req(to_city="纽约", from_city="北京", duration_days=3)
+    text = _it.format_budget(req, _policy_facts(), overseas=True)
+    assert "元/晚" not in text and "元/餐" not in text
+    assert "海外出行" in text and "当地差旅政策" in text
+    assert "交通：不提供金额" in text  # 交通行不变
+
+
+def test_format_budget_unknown_overseas_hides_amount():
+    """境外无法判定（geocoding 失败）：不显示金额、不误套人民币标准。"""
+    req = _req(to_city="未知名城", from_city="北京", duration_days=3)
+    text = _it.format_budget(req, _policy_facts(), overseas=None)
+    assert "元/晚" not in text and "元/餐" not in text
+    assert "无法确定当地差旅标准" in text
 
 
 def test_missing_treats_garbage_city_as_missing(monkeypatch):

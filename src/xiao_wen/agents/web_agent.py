@@ -5,7 +5,7 @@
 """
 
 INTENT = "联网查询"
-DESCRIPTION = "用户要查实时信息（天气、汇率、空气质量） → 联网查询。"
+DESCRIPTION = "用户要查实时信息（天气、汇率、空气质量、当地时间/时差） → 联网查询。"
 
 from typing import Any  # noqa: E402
 
@@ -26,6 +26,8 @@ def _web_query(question: str, ctx: str = "无") -> tuple[str, str]:
         expected.add("get_currency_rate")
     if any(word in question for word in ("空气质量", "PM2.5", "雾霾")):
         expected.add("get_air_quality")
+    if any(word in question for word in ("时差", "几点", "当地时间", "当地几点", "现在时间")):
+        expected.add("get_local_time")
     tool_messages = [message for message in result["messages"] if message.type == "tool"]
     used = {message.name for message in tool_messages}
     if not expected or not expected.issubset(used):
