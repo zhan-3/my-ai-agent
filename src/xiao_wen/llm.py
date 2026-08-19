@@ -31,7 +31,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
     "extra_body": {"thinking": {"type": "disabled"}},
 }
 
-# 共享熔断器：进程级全局（ADR-0001：单用户演示可接受）
+# 共享熔断器：进程级全局（单体单 worker 部署，无需跨进程协调；ADR-0001）
 _breaker = CircuitBreaker(failure_threshold=3, recovery_time=5.0)
 
 
