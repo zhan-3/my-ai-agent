@@ -12,11 +12,12 @@ import functools
 import logging
 import threading
 import time
+from logging.handlers import TimedRotatingFileHandler
 
 from xiao_wen import ROOT
 from xiao_wen.config import EMBED_ENV_VAR, LLM_ENV_VARS, load_settings
 
-# ---- 日志记录（stdout + data/stability.log 双写） ----
+# ---- 日志记录（stdout + data/stability.log 双写，按天滚动保留 7 天） ----
 DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -25,9 +26,12 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(DATA_DIR / "stability.log", encoding="utf-8"),
+        TimedRotatingFileHandler(DATA_DIR / "stability.log", when="midnight", backupCount=7, encoding="utf-8"),
     ],
 )
+# 库噪音静音：httpx 的 INFO 是「每次 HTTP 请求一行」的调试输出（实测占日志九成以上），
+# 请求失败路径已有 llm/web 自有 WARNING 埋点，不靠 httpx 记成功请求。
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("stability")
 
 
