@@ -168,12 +168,77 @@ docker compose up -d --build
 - `/livez`：仅报告进程存活；`/readyz`：只读检查配置、Postgres、RAG 文档和前端静态资源；`/healthz`：兼容入口，语义与 `/readyz` 相同。
 - Compose、CI 与镜像 smoke 均固定 PostgreSQL 16（详见 [ADR-0006](docs/adr/ADR-0006-postgres-memory.md)）。
 
-## 架构与文档
+## 项目目录结构
 
-- `src/xiao_wen/`：领域深模块、主管 Agent Loop、子 Agent 薄适配器和 Web API。
-- `frontend/`：React/Vite 客户端及 Vitest 测试。
-- `tests/`：后端契约、单元与真实模型集成测试。
-- `docs/documents/`：政策 RAG 原始语料；`data/chroma/` 仅为本地运行状态。
+```text
+.
+├── README.md                   # 项目说明（本文件）
+├── CONTEXT.md                  # 领域术语与不变量
+├── AGENTS.md                   # Agent 协作约定
+├── .env.example                # 环境变量模板
+├── pyproject.toml / uv.lock    # 后端依赖与工具配置
+├── Dockerfile                  # 容器镜像
+├── docker-compose.yml          # Postgres + 应用编排
+├── .github/workflows/ci.yml    # CI：后端 gate / 前端检查 / 镜像 smoke
+│
+├── src/xiao_wen/               # 后端领域深模块
+│   ├── agent_loop.py           # 主管有界 Agent Loop
+│   ├── plugin_registry.py      # 子 Agent 注册中心（manifest 懒加载）
+│   ├── session.py / dialogue.py  # 会话闭环与对话编排
+│   ├── webapp.py               # FastAPI Web/SSE 层
+│   ├── auth.py                 # JWT 认证
+│   ├── trip_planner.py         # 行程规划深模块（提取/生成/校验/展示）
+│   ├── validation.py           # 行程校验（日期/返程/天数）
+│   ├── memory.py / memory_pg.py  # 记忆接口 / Postgres 后端（trips 表）
+│   ├── rag.py                  # 政策 RAG 检索
+│   ├── llm.py                  # LLM 接缝（熔断/重试）
+│   ├── web.py                  # 联网查询工具（天气/空气/时差/汇率）
+│   ├── reference_data.py       # 城市/时区/空气参考数据
+│   ├── stats.py                # 差旅画像统计
+│   ├── observability.py        # 对话观察日志
+│   └── agents/                 # 6 个子 Agent 薄适配
+│       ├── itinerary_agent.py  # 行程规划（collect-then-compose）
+│       ├── preference_agent.py # 偏好记录
+│       ├── history_agent.py    # 历史查询
+│       ├── knowledge_agent.py  # 知识问答（RAG）
+│       ├── web_agent.py        # 联网查询
+│       └── other_agent.py      # 其他
+│
+├── plugins/
+│   └── stats.py                # 差旅统计（外部扩展，动态注册）
+│
+├── frontend/                   # React 前端
+│   ├── package.json / vite.config.ts
+│   └── src/
+│       ├── App.tsx / main.tsx
+│       ├── api/                # auth/chat/memory/stats/contract
+│       ├── hooks/              # useAuth / useChat（SSE）
+│       ├── components/         # ChatShell / TripCard / MemorySidebar / AuthPanel…
+│       ├── lib/                # trip 解析 / agents 定义 / theme
+│       └── test/               # Vitest 测试（42 用例）
+│
+├── tests/                      # 后端测试
+│   ├── test_agent_loop.py / test_itinerary.py / test_memory_pg.py…
+│   └── test_dialogue_regression.py  # 对话细节回归集（28 个真实 LLM 用例）
+│
+├── scripts/
+│   ├── gate.sh                 # 确定性门禁（ruff/format/pytest/mypy）
+│   ├── init_test_db.sh         # 测试库初始化
+│   ├── generate_openapi.py     # OpenAPI 生成
+│   └── smoke_image.sh          # 镜像 smoke 测试
+│
+├── docs/
+│   ├── capability-matrix.md    # 能力分型与边界
+│   ├── test-map.md             # 测试分层与执行入口
+│   ├── adr/                    # 12 篇架构决策（ADR-0001 ~ ADR-0012）
+│   ├── agents/                 # Agent 协作机制文档
+│   └── documents/              # 8 份政策 RAG 语料
+│
+└── data/                       # 运行时状态（chroma 索引/锁/日志，git 忽略不提交）
+```
+
+## 相关文档
+
 - [`CONTEXT.md`](CONTEXT.md)：领域术语与不变量。
 - [`docs/capability-matrix.md`](docs/capability-matrix.md)：能力分型与边界。
 - [`docs/test-map.md`](docs/test-map.md)：测试分层与执行入口。
