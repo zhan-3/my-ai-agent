@@ -32,8 +32,6 @@ class Settings:
     rag_min_sim: str
     postgres_url: str
     jwt_secret: str
-    observability_debug: bool = False
-    observability_trace_file: str = "data/observability/turns.jsonl"
 
     def require_llm(self) -> LLMConfig:
         values = (self.deepseek_model, self.deepseek_base_url, self.deepseek_api_key)
@@ -100,6 +98,4 @@ def load_settings() -> Settings:
         rag_min_sim=values.get("RAG_MIN_SIM", ""),
         postgres_url=postgres_url,
         jwt_secret=values.get("JWT_SECRET", ""),
-        observability_debug=values.get("OBSERVABILITY_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"},
-        observability_trace_file=values.get("OBSERVABILITY_TRACE_FILE", "data/observability/turns.jsonl"),
     )

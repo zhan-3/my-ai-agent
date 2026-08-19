@@ -213,25 +213,6 @@ def _commit_turn(
     store.add_message("assistant", result.answer, session_id=session_id)
 
 
-def _record_final(recorder: Any, state: dict[str, Any], result: ChatResult) -> None:
-    if recorder is None:
-        return
-    recorder.record(
-        {
-            "type": "final",
-            "intent": result.intent,
-            "reason": result.reason,
-            "answer": result.answer,
-            "plan": state.get("plan"),
-            "stats": state.get("stats"),
-            "history": state.get("history"),
-            "sources": [source.model_dump() for source in result.sources],
-            "policy_status": result.policy_status,
-            "failure": result.failure.__dict__ if result.failure else None,
-        }
-    )
-
-
 def _finish_turn(
     text: str,
     state: dict[str, Any],
@@ -239,7 +220,6 @@ def _finish_turn(
     session_id: str,
     user_id: str,
     store: Any,
-    recorder: Any,
 ) -> ChatResult:
     from xiao_wen.dialogue import apply_task_update
 
@@ -256,9 +236,6 @@ def _finish_turn(
             )
             result = _result_from_state(state)
             _commit_turn(text, state, result, session_id, user_id, store)
-    _record_final(recorder, state, result)
-    if recorder is not None and result.failure is None:
-        recorder.record({"type": "memory_write", "user": text, "assistant": result.answer})
     return result
 
 
@@ -269,17 +246,14 @@ def chat(
     user_id: str | None = None,
     loop: Any = None,
     store: Any = None,
-    recorder: Any = None,
 ) -> ChatResult:
     """同步执行一轮 Agent Loop；成功后原子完成会话层写回。"""
     user_id = user_id or session_id
     with _session_coordinator.turn(session_id):
         runner, store = _resolve_deps(loop, store)
-        turn, recent, active_task = _prepare_turn(text, session_id, user_id, store)
-        if recorder is not None:
-            recorder.record({"type": "recent", "recent": recent})
-        state = runner.run(turn, recorder.record if recorder is not None else None)
-        return _finish_turn(text, state, active_task, session_id, user_id, store, recorder)
+        turn, _, active_task = _prepare_turn(text, session_id, user_id, store)
+        state = runner.run(turn)
+        return _finish_turn(text, state, active_task, session_id, user_id, store)
 
 
 def _stage_event(event: dict[str, Any]) -> dict[str, Any] | None:
@@ -299,22 +273,17 @@ async def stream_chat(
     user_id: str | None = None,
     loop: Any = None,
     store: Any = None,
-    recorder: Any = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """异步转发同一 Agent Loop 的生命周期事件；取消时不提交会话结果。"""
     user_id = user_id or session_id
     async with _session_coordinator.turn_async(session_id):
         cancelled = threading.Event()
         runner, store = _resolve_deps(loop, store, cancelled.is_set)
-        turn, recent, active_task = _prepare_turn(text, session_id, user_id, store)
-        if recorder is not None:
-            recorder.record({"type": "recent", "recent": recent})
+        turn, _, active_task = _prepare_turn(text, session_id, user_id, store)
         event_loop = asyncio.get_running_loop()
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
         def emit(event: dict[str, Any]) -> None:
-            if recorder is not None:
-                recorder.record(event)
             event_loop.call_soon_threadsafe(queue.put_nowait, event)
 
         task = asyncio.create_task(asyncio.to_thread(runner.run, turn, emit))
@@ -337,12 +306,10 @@ async def stream_chat(
             from xiao_wen.stability import logger
 
             logger.error("stream_chat 失败（session=%s）：%s", session_id, error)
-            if recorder is not None:
-                recorder.record({"type": "error", "code": "service_unavailable", "message": str(error)})
             yield service_error_event()
             return
 
-        result = _finish_turn(text, state, active_task, session_id, user_id, store, recorder)
+        result = _finish_turn(text, state, active_task, session_id, user_id, store)
         if result.failure is not None:
             yield service_error_event(result.failure)
             return

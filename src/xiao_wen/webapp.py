@@ -73,39 +73,6 @@ class AuthResponse(BaseModel):
     username: str
 
 
-def _observed_chat(text: str, user: str, thread_id: str):
-    from xiao_wen.observability import start_turn
-
-    observer = start_turn(text, thread_id)
-    if observer is None:
-        return run_chat(text, thread_id, user_id=user)
-    try:
-        return run_chat(text, thread_id, user_id=user, recorder=observer.recorder)
-    except Exception as error:
-        observer.recorder.record({"type": "error", "code": "unhandled", "message": str(error)})
-        raise
-    finally:
-        observer.finish()
-
-
-async def _observed_stream(text: str, user: str, thread_id: str):
-    from xiao_wen.observability import start_turn
-
-    observer = start_turn(text, thread_id)
-    if observer is None:
-        async for event in stream_chat(text, thread_id, user_id=user):
-            yield event
-        return
-    try:
-        async for event in stream_chat(text, thread_id, user_id=user, recorder=observer.recorder):
-            yield event
-    except Exception as error:
-        observer.recorder.record({"type": "error", "code": "unhandled", "message": str(error)})
-        raise
-    finally:
-        observer.finish()
-
-
 def _current_user(authorization: str | None = None) -> str:
     """从 Authorization: Bearer <token> 解出长期记忆所有者。
 
@@ -141,7 +108,7 @@ def chat(req: ChatRequest, authorization: str | None = Header(default=None)) -> 
     if not text:
         raise HTTPException(status_code=400, detail="输入不能为空")
     try:
-        r = _observed_chat(text, user, thread_id)
+        r = run_chat(text, thread_id, user_id=user)
     except Exception as e:
         from xiao_wen.stability import logger
 
@@ -186,7 +153,7 @@ def chat_stream(req: ChatRequest, authorization: str | None = Header(default=Non
 
     async def gen():
         try:
-            async for ev in _observed_stream(text, user, thread_id):
+            async for ev in stream_chat(text, thread_id, user_id=user):
                 yield _sse(ev)
         except Exception as e:  # 防御：任何未消化异常也转成 error 事件，客户端永不悬挂
             from xiao_wen.stability import logger
