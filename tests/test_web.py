@@ -232,6 +232,8 @@ def test_is_overseas_local_tables_and_nominatim(monkeypatch):
 
 def test_time_diff_from_beijing():
     """时差：东京早 1 小时、北京 0；纽约受夏令时影响 -12 或 -13。"""
-    assert abs(web.time_diff_from_beijing("东京") - 1.0) < 0.01
+    tokyo = web.time_diff_from_beijing("东京")
+    assert tokyo is not None
+    assert abs(tokyo - 1.0) < 0.01
     assert web.time_diff_from_beijing("北京") == 0.0
     assert web.time_diff_from_beijing("纽约") in (-12.0, -13.0)
