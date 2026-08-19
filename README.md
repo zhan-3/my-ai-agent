@@ -168,6 +168,10 @@ docker compose up -d --build
 - `/livez`：仅报告进程存活；`/readyz`：只读检查配置、Postgres、RAG 文档和前端静态资源；`/healthz`：兼容入口，语义与 `/readyz` 相同。
 - Compose、CI 与镜像 smoke 均固定 PostgreSQL 16（详见 [ADR-0006](docs/adr/ADR-0006-postgres-memory.md)）。
 
+## 日志与排障
+
+日志双写：`data/stability.log`（按天滚动保留 7 天，git 忽略）+ stdout（前台运行时在终端，`nohup` 启动进 `nohup.out`，容器部署进 `docker logs`）。级别 INFO+，`httpx` 库噪音已静音；业务链路日志按 `xiao_wen.*` 模块名区分（`agent_loop` / `trip_planner` / `web` / `llm` / `memory_pg` / `dialogue`），出问题先查该文件。
+
 ## 项目目录结构
 
 ```text
