@@ -18,6 +18,10 @@ Before committing code changes, run `scripts/gate.sh`; it executes the determini
 
 Unit tests use the single Postgres memory backend. Start it with `docker compose up -d postgres` and export `POSTGRES_TEST_URL=postgresql://postgres:123456@localhost:5432/xiao_wen_test` before running tests. Tests refuse to fall back to `POSTGRES_URL`.
 
+### Logging
+
+Use the stdlib `logging` for new code: `logging.getLogger("xiao_wen.<module>")`. INFO for key paths, WARNING/ERROR for failures and silent degradations (always include the reason). No `print`, no bare `except:` that swallows errors. Logs go to `data/stability.log` (daily rotation, git-ignored) plus stdout; the `httpx` library logger is muted — do not re-enable it.
+
 ### Domain guardrails
 
 - **Supervisor runtime:** Production uses a bounded Pi-inspired `decide → call child Agent → observe → decide → final` loop. Preserve registered child Agents as domain executors; do not reintroduce fixed supervisor Workflow branches. Test the Loop interface rather than internal topology.
