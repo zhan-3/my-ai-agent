@@ -229,29 +229,65 @@ def get_currency_rate(from_currency: str, to_currency: str) -> str:
 
 
 @tool
-def get_air_quality(city: str) -> str:
-    """查询指定城市的当前空气质量。city：城市名，如「北京」「上海」「杭州」"""
+def get_air_quality(city: str, date: str = "今天") -> str:
+    """查询指定城市指定日期的空气质量（与天气共用日期语义：今天/明天/后天 或 YYYY-MM-DD，
+    支持未来 7 天预报）。city：城市名，如「北京」「上海」「杭州」"""
     try:
-        # ① 地理编码：与 get_weather 共用 _geocode（本地 CITY_COORDS 优先，未收录才走 nominatim）
+        # ① 日期本地解析（与天气一致）：过去/超 7 天立即报错，不发网络请求
+        idx = _date_index(date)
+        # ② 地理编码：与 get_weather 共用 _geocode（本地 CITY_COORDS 优先，未收录才走 nominatim）
         lat, lon = _geocode(city)
-        # ② 空气质量：air-quality-api 只收经纬度（不认城市名）
-        cur = _get_json(
+        if idx == 0:
+            # 今天：取当前实时值（与出行日对应）
+            cur = _get_json(
+                "https://air-quality-api.open-meteo.com/v1/air-quality",
+                params={
+                    "latitude": lat,
+                    "longitude": lon,
+                    "current": "pm10,pm2_5,carbon_monoxide",
+                    "timezone": "auto",
+                },
+            )["current"]
+            return (
+                f"{city} 今天 空气质量（当前）：PM2.5 {cur['pm2_5']} μg/m³，"
+                f"PM10 {cur['pm10']} μg/m³，CO {cur['carbon_monoxide']} μg/m³"
+            )
+        # 未来日期：hourly 预报（显式 forecast_days=7 与天气 7 天窗口对齐），按目标日聚合日均
+        target = (_date.today() + timedelta(days=idx)).isoformat()
+        hourly = _get_json(
             "https://air-quality-api.open-meteo.com/v1/air-quality",
             params={
                 "latitude": lat,
                 "longitude": lon,
-                "current": "pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,ozone,sulphur_dioxide",
+                "hourly": "pm10,pm2_5,carbon_monoxide",
+                "forecast_days": 7,
                 "timezone": "auto",
             },
-        )["current"]
+        )["hourly"]
+        times = hourly["time"]
+
+        def _daily(values: list) -> list:
+            return [v for v, t in zip(values, times, strict=True) if t.startswith(target) and v is not None]
+
+        pm25 = _daily(hourly["pm2_5"])
+        if not pm25:
+            raise ValueError(f"暂无 {date} 的空气质量预报")
+        pm10, co = _daily(hourly["pm10"]), _daily(hourly["carbon_monoxide"])
+
+        def _avg(xs: list) -> float:
+            return round(sum(xs) / len(xs), 1)
+
+        def _fmt(xs: list) -> str:
+            return f"{_avg(xs)}" if xs else "—"
+
         return (
-            f"{city}当前空气质量：PM2.5 {cur['pm2_5']} μg/m³，PM10 {cur['pm10']} μg/m³，"
-            f"CO {cur['carbon_monoxide']} μg/m³"
+            f"{city} {date} 空气质量（预报日均）：PM2.5 {_fmt(pm25)} μg/m³，"
+            f"PM10 {_fmt(pm10)} μg/m³，CO {_fmt(co)} μg/m³"
         )
-    except ValueError:
-        return f"未找到城市：{city}"
+    except ValueError as e:
+        return str(e)
     except Exception as e:
-        logger.warning("查询空气质量失败 city=%s：%s", city, e)
+        logger.warning("查询空气质量失败 city=%s date=%s：%s", city, date, e)
         return f"查询空气质量失败（服务可能不稳定，请稍后再试）：{type(e).__name__}"
 
 

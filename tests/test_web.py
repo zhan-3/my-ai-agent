@@ -76,9 +76,41 @@ def test_air_quality_known_city_uses_local_coords(monkeypatch):
 
     monkeypatch.setattr(web, "_get_json", fake_get)
     out = web.get_air_quality.func("北京")  # type: ignore[attr-defined]
-    assert "PM2.5 10" in out and "北京" in out
+    assert "PM2.5 10" in out and "北京" in out and "今天" in out
     assert all("nominatim" not in u for u in urls)
     assert any("air-quality-api" in u for u in urls)
+
+
+def test_air_quality_future_date_uses_hourly_forecast(monkeypatch):
+    """未来日期：走 hourly 预报（forecast_days=7）并按目标日聚合日均，不混入今天数据"""
+    from datetime import date as _date
+    from datetime import timedelta
+
+    target = _date.today() + timedelta(days=2)
+    today_iso, target_iso = _date.today().isoformat(), target.isoformat()
+    urls, params_seen = [], []
+
+    def fake_get(url, params=None, headers=None, retries=2):
+        urls.append(url)
+        params_seen.append(params or {})
+        if "nominatim" in url:
+            raise AssertionError("已知城市不应触发地理编码网络请求")
+        times, pm10, pm25, co = [], [], [], []
+        for day, (p10, p25, c) in ((today_iso, (40, 20, 0.4)), (target_iso, (50, 30, 0.5))):
+            for hour in range(24):
+                times.append(f"{day}T{hour:02d}:00")
+                pm10.append(p10)
+                pm25.append(p25)
+                co.append(c)
+        return {"hourly": {"time": times, "pm10": pm10, "pm2_5": pm25, "carbon_monoxide": co}}
+
+    monkeypatch.setattr(web, "_get_json", fake_get)
+    out = web.get_air_quality.func("北京", target_iso)  # type: ignore[attr-defined]
+    assert "北京" in out and target_iso in out
+    assert "PM2.5 30.0" in out  # 目标日均值（不混入今天的 20）
+    assert "PM10 50.0" in out and "CO 0.5" in out
+    assert any("forecast_days" in p and p["forecast_days"] == 7 for p in params_seen)
+    assert all("nominatim" not in u for u in urls)
 
 
 def test_air_quality_unknown_city_friendly(monkeypatch):

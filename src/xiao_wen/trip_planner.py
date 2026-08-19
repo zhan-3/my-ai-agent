@@ -899,7 +899,7 @@ def handle(
         from xiao_wen.web import get_air_quality
 
         try:
-            aq = get_air_quality.invoke({"city": req.to_city})
+            aq = get_air_quality.invoke({"city": req.to_city, "date": req.start_date})
             m = re.search(r"PM2\.5\s*(\d+(?:\.\d+)?)", aq)
             if m and float(m.group(1)) >= 75:
                 answer += f"\n\n😷 空气质量提醒：{aq}"
