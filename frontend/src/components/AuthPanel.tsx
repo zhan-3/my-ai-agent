@@ -3,12 +3,16 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { useAuth } from '@/hooks/useAuth'
 import ThemeToggle from '@/components/ThemeToggle'
+import type { AuthResult } from '@/api/auth'
 
-// 登录/注册面板：认证成功后回调 onAuthed（App 层切换主界面）
-export default function AuthPanel({ onAuthed }: { onAuthed: (username: string) => void }) {
-  const { authenticate } = useAuth()
+// 登录/注册面板：authenticate 由 App 传入（App 持有唯一 useAuth 实例），
+// 成功后 App 的 token state 变化自动切换主界面
+export default function AuthPanel({
+  authenticate,
+}: {
+  authenticate: (mode: 'login' | 'register', user: string, password: string) => Promise<AuthResult>
+}) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -25,7 +29,6 @@ export default function AuthPanel({ onAuthed }: { onAuthed: (username: string) =
     try {
       const data = await authenticate(mode, u, password)
       toast.success(mode === 'register' ? `注册成功，已自动登录：${data.username}` : `欢迎回来，${data.username}`)
-      onAuthed(data.username)
     } catch (e) {
       const msg = e instanceof Error ? e.message : '失败，请重试'
       setError(msg)

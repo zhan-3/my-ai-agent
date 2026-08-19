@@ -159,8 +159,8 @@ export default function MemorySidebar({
       </div>
       <StatsPanel refreshKey={refreshKey} />
       <div className="mt-auto text-[11px] leading-relaxed text-muted-foreground">
-        💡 左侧是<b>当前账号</b>的长期记忆（Postgres / 内存后端），由子 Agent 自动读写——住宿偏好、
-        常驻城市、历史行程都会实时落在这里，下次规划自动生效。
+        💡 这里是<b>当前账号</b>的长期记忆：住宿/餐饮/交通偏好、常驻城市与历史行程由助手自动沉淀，
+        下次规划时自动生效。
       </div>
     </aside>
   )
