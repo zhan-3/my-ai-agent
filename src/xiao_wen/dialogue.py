@@ -1,7 +1,10 @@
 """线程级对话状态：分离 transcript、长期记忆所有者和未完成任务。"""
 
+import logging
 import re
 from typing import Any
+
+logger = logging.getLogger("xiao_wen.dialogue")
 
 _CONVERSATION_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
 _MAX_RESUME_CONTEXT = 4000
@@ -10,6 +13,7 @@ _MAX_RESUME_CONTEXT = 4000
 def make_thread_id(user_id: str, conversation_id: str) -> str:
     """派生用户作用域内的线程键；客户端不能借 conversation_id 越过用户隔离。"""
     if not _CONVERSATION_ID.fullmatch(conversation_id):
+        logger.warning("conversation_id 格式无效：%r", conversation_id)
         raise ValueError("conversation_id 格式无效")
     return f"{user_id}:{conversation_id}"
 

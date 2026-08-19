@@ -9,6 +9,7 @@
 - ReAct 循环：agent 节点 → (LLM 想调工具?) → tools 节点 → 回 agent → …直到 LLM 认为信息够了直接回答
 """
 
+import logging
 import os
 import time
 from datetime import date as _date
@@ -27,6 +28,8 @@ from typing_extensions import TypedDict
 
 from xiao_wen import llm
 from xiao_wen.reference_data import CITY_COORDS, CITY_TIMEZONES
+
+logger = logging.getLogger("xiao_wen.web")
 
 # ---- 网络工具：代理 + 重试（免费 API 不稳定，工程上必须健壮）----
 
@@ -105,7 +108,8 @@ def is_overseas(city: str) -> bool | None:
         return False
     try:
         geo = _nominatim(city)
-    except Exception:
+    except Exception as exc:
+        logger.warning("is_overseas 判定失败 city=%s：%s", city, exc)
         return None
     if not geo:
         return None
@@ -118,7 +122,8 @@ def time_diff_from_beijing(city: str) -> float | None:
         local_off = datetime.now(ZoneInfo(_timezone_of(city))).utcoffset() or timedelta(0)
         bj_off = datetime.now(ZoneInfo("Asia/Shanghai")).utcoffset() or timedelta(0)
         return (local_off - bj_off).total_seconds() / 3600
-    except Exception:
+    except Exception as exc:
+        logger.warning("time_diff_from_beijing 计算失败 city=%s：%s", city, exc)
         return None
 
 
@@ -180,6 +185,7 @@ def get_weather(city: str, date: str = "今天") -> str:
     except ValueError as e:
         return str(e)
     except Exception as e:
+        logger.warning("查询天气失败 city=%s date=%s：%s", city, date, e)
         return f"查询天气失败（服务可能不稳定，请稍后再试）：{type(e).__name__}"
 
 
@@ -218,6 +224,7 @@ def get_currency_rate(from_currency: str, to_currency: str) -> str:
         rate = (1.0 / rates[fc]) * rates[tc]  # 1 单位 from = ? to
         return f"当前汇率：1 {fc} = {rate:.4f} {tc}"
     except Exception as e:
+        logger.warning("查询汇率失败 %s→%s：%s", from_currency, to_currency, e)
         return f"查询汇率失败（服务可能不稳定，请稍后再试）：{type(e).__name__}"
 
 
@@ -244,6 +251,7 @@ def get_air_quality(city: str) -> str:
     except ValueError:
         return f"未找到城市：{city}"
     except Exception as e:
+        logger.warning("查询空气质量失败 city=%s：%s", city, e)
         return f"查询空气质量失败（服务可能不稳定，请稍后再试）：{type(e).__name__}"
 
 
@@ -264,6 +272,7 @@ def get_local_time(city: str) -> str:
     except ValueError as e:
         return str(e)
     except Exception as e:
+        logger.warning("查询当地时间失败 city=%s：%s", city, e)
         return f"查询当地时间失败（服务可能不稳定，请稍后再试）：{type(e).__name__}"
 
 

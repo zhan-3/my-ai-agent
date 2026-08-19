@@ -7,6 +7,7 @@
 - 注入点：override 参数供测试传假模型（跳过 env 校验）；overrides 覆盖默认构造参数
 """
 
+import logging
 from functools import lru_cache
 from typing import Any
 
@@ -17,6 +18,8 @@ from pydantic import SecretStr
 
 from xiao_wen.config import LLM_ENV_VARS, load_settings
 from xiao_wen.stability import CircuitBreaker
+
+logger = logging.getLogger("xiao_wen.llm")
 
 # 接缝校验的环境变量（唯一来源；health_check 复用见 C7）
 REQUIRED_ENV_VARS = LLM_ENV_VARS
@@ -46,7 +49,8 @@ class _GuardedLLM(Runnable):
             raise RuntimeError("服务熔断已打开（LLM 连续失败），请稍后再试")
         try:
             result = self._inner.invoke(input, config=config, **kwargs)
-        except Exception:
+        except Exception as exc:
+            logger.warning("LLM 调用失败（计入熔断）：%s", exc)
             _breaker.record_failure()
             raise
         _breaker.record_success()

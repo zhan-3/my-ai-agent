@@ -5,6 +5,7 @@
 - 会话隔离：所有读写 WHERE session_id = %s
 """
 
+import logging
 import time
 from contextlib import contextmanager
 from datetime import date, timedelta
@@ -12,6 +13,8 @@ from threading import local
 
 import psycopg
 from psycopg.types.json import Jsonb
+
+logger = logging.getLogger("xiao_wen.memory_pg")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -98,7 +101,8 @@ class PostgresBackend:
         try:
             yield
             conn.commit()
-        except Exception:
+        except Exception as exc:
+            logger.error("事务回滚：%s", exc, exc_info=True)
             conn.rollback()
             raise
         finally:

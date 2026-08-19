@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from collections import Counter
@@ -14,6 +15,8 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from xiao_wen.llm import get_llm
 from xiao_wen.plugin_registry import discover, load_agent
+
+logger = logging.getLogger("xiao_wen.agent_loop")
 
 Emit = Callable[[dict[str, Any]], None]
 
@@ -118,6 +121,7 @@ class AgentLoop:
         deadline = time.monotonic() + self._limits.timeout_seconds
 
         send({"type": "run_start"})
+        logger.info("run 开始 user=%s intent=%s", turn.get("user_id"), turn.get("intent"))
         for step in range(1, self._limits.max_steps + 1):
             failure = self._boundary_failure(deadline, tokens)
             if failure:
@@ -150,13 +154,16 @@ class AgentLoop:
                 signature = json.dumps([intent, request], ensure_ascii=False)
                 repeats[signature] += 1
                 send({"type": "agent_start", "agent": intent or name, "request": request, "tool_call_id": call_id})
+                logger.info("调用子 Agent %s request=%s", intent or name, request[:100])
                 post_failure: dict[str, Any] | None = None
                 outcome: dict[str, Any]
 
                 if intent is None:
+                    logger.warning("门禁拒绝：未知子 Agent %s", name)
                     outcome = {"error": f"未知子 Agent：{name}"}
                     is_error = True
                 elif not request:
+                    logger.warning("门禁拒绝：request 为空（intent=%s）", intent)
                     outcome = {"error": "request 不能为空"}
                     is_error = True
                 elif tool_count > self._limits.max_tool_calls:
@@ -168,12 +175,15 @@ class AgentLoop:
                         "retryable": True,
                     }
                 elif intent == "行程规划" and not _trip_requested(turn):
+                    logger.warning("门禁拒绝：未请求新行程且无活跃行程缺项（step=%d）", step)
                     outcome = {"error": "用户没有请求新行程，也没有提供活跃行程当前所缺的信息"}
                     is_error = True
                 elif signature in completed:
+                    logger.warning("门禁拒绝：相同子 Agent 请求已执行（intent=%s）", intent)
                     outcome = {"error": "相同子 Agent 请求已执行过，不会重复产生副作用"}
                     is_error = True
                 elif repeats[signature] > self._limits.max_repeat_calls:
+                    logger.warning("门禁拒绝：失败重试达上限（intent=%s request=%s）", intent, request[:80])
                     outcome = {"error": "相同子 Agent 请求已达到失败重试上限"}
                     is_error = True
                 else:
@@ -199,6 +209,9 @@ class AgentLoop:
                             completed.add(signature)
                             is_error = False
                     except Exception as error:
+                        logger.warning(
+                            "子 Agent %s 执行失败（%s）：%s", intent, type(error).__name__, error, exc_info=True
+                        )
                         outcome = {
                             "error": "子 Agent 执行失败，请选择重试、降级或结束。",
                             "error_type": type(error).__name__,
@@ -509,6 +522,7 @@ def _transcript(messages: list[Any]) -> list[dict[str, Any]]:
 
 
 def _failed(failure: dict[str, Any], emit: Emit, messages: list[Any]) -> dict[str, Any]:
+    logger.warning("回合边界失败 code=%s message=%s", failure.get("code"), failure.get("message"))
     result = {
         "answer": failure["message"],
         "intent": "",

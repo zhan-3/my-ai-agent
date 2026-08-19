@@ -7,6 +7,7 @@
 
 # ruff: noqa: E501 —— 本模块是 prompt 密集模块：发给 LLM 的提示词内容行
 # （要素示例、约束、reasons 说明）天然超行宽，拆分会改变提示词（换行=内容）。
+import logging
 import re
 from collections.abc import Callable
 from contextlib import suppress
@@ -19,6 +20,8 @@ from pydantic import BaseModel, Field
 
 from xiao_wen import llm
 from xiao_wen.memory import add_or_update_preference, get_home_city, get_preferences, save_trip
+
+logger = logging.getLogger("xiao_wen.trip_planner")
 
 # 相对日期解析：给提取器注入「今天」（含周几），让「下周/明天」能推算成具体日期
 _WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
@@ -788,6 +791,8 @@ def handle(
     """
     from xiao_wen.web import get_weather
 
+    logger.info("行程规划 handle session=%s trip_id=%s", session_id, trip_id)
+
     r = plan(
         user_input,
         session_id=session_id,
@@ -799,6 +804,7 @@ def handle(
         trip_id=trip_id,
     )
     if isinstance(r, NeedsInfo):
+        logger.info("行程缺项 missing=%s", r.missing)
         from xiao_wen.dialogue import task_update_set
 
         answer = needs_info_text(r)
@@ -822,6 +828,7 @@ def handle(
             ),
         )
     if isinstance(r, ValidationFailure):
+        logger.warning("行程校验失败 issues=%s", r.issues)
         return TripOutcome(
             answer="⚠️ 行程候选未通过一致性校验，暂未写入历史记录：\n· " + "\n· ".join(r.issues),
             plan=None,
@@ -896,8 +903,8 @@ def handle(
             m = re.search(r"PM2\.5\s*(\d+(?:\.\d+)?)", aq)
             if m and float(m.group(1)) >= 75:
                 answer += f"\n\n😷 空气质量提醒：{aq}"
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("空气质量查询失败（静默降级）：%s", exc)
     if req and policy_status != "unavailable":
         # 返程报销提醒：行程含返程时附时限一句（读 reimbursement_deadline fact），细节引导追问。
         has_return = bool(req.return_date) or (
