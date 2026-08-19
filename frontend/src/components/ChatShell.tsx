@@ -119,7 +119,10 @@ export default function ChatShell({
                 type="button"
                 disabled={busy}
                 className="rounded-full border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={() => void handleSend(s)}
+                onClick={() => {
+                  setInput(s) // 快捷提问只填入输入框，不直接发送；用户确认后回车/点发送
+                  inputRef.current?.focus()
+                }}
               >
                 {s}
               </button>
