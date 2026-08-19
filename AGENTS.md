@@ -22,8 +22,7 @@ Unit tests use the single Postgres memory backend. Start it with `docker compose
 
 - **Supervisor runtime:** Production uses a bounded Pi-inspired `decide → call child Agent → observe → decide → final` loop. Preserve registered child Agents as domain executors; do not reintroduce fixed supervisor Workflow branches. Test the Loop interface rather than internal topology.
 - **Trip orchestration:** Preserve the existing multi-agent `collect-then-compose` flow inside the itinerary child Agent. Keep domain logic in deep modules and child Agents thin. Policy claims in answers must carry RAG evidence, and weather failures must be represented explicitly rather than filled with guesses.
-- **12306 tickets:** 晓问不生成购票链接、不查询车次/余票/票价、不代购票；购票与票务查询由商旅平台承担。行程中只建议交通方式（如「高铁」），不编造车次或时刻。
-- **Ticket dates:** Use the official dynamic sale-until page when available; fallback is 15 days including today (`today + 14 days`). Validate both outbound and return dates, with return date not earlier than outbound. Preserve commas in `fs`, `ts`, and two-date `date` query parameters. The user’s explicit date always wins over defaults.
-- **Station ambiguity:** If official station data cannot uniquely resolve a station, return a clarification/error and do not guess a code. City defaults such as `临沂→临沂北` or `北京→北京南` must remain visibly confirmable to the user.
+- **Ticket boundary:** 晓问不生成购票链接、不查询或编造车次/时刻/余票/票价、不代购票、不解析车站；购票与票务查询由商旅平台（travel.xiaowen.com）承担。行程中只建议交通方式（如「高铁」），写「以晓问商旅平台实时查询为准」；不要从旧版 12306 接入找回任何逻辑（已全删）。
+- **Trip dates:** 行程日期验证由代码层确定性执行（validation.py / trip_planner）：返程不早于出发、过去日期拦截、用户明确日期优先于默认值。
 - **Chroma:** `data/chroma/` is runtime state, not source. Access persistent Chroma through the existing cross-process lock; keep `data/chroma.lock` and `data/chroma.corrupt-*` ignored and never commit local indexes or backups.
 - **Configuration:** `.env` takes precedence over inherited shell variables for project settings. Keep the configured model (`deepseek-v4-flash`) unless a user explicitly requests a change; treat transient Pateway 402 errors as an operational issue, not a reason to silently switch models or keys.
