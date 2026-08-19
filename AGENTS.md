@@ -20,7 +20,7 @@ Unit tests use the single Postgres memory backend. Start it with `docker compose
 
 ### Logging
 
-Use the stdlib `logging` for new code: `logging.getLogger("xiao_wen.<module>")`. INFO for key paths, WARNING/ERROR for failures and silent degradations (always include the reason). No `print`, no bare `except:` that swallows errors. Logs go to `data/stability.log` (daily rotation, git-ignored) plus stdout; the `httpx` library logger is muted — do not re-enable it.
+Use the stdlib `logging` for new code: `logging.getLogger("xiao_wen.<module>")`. INFO for key paths; WARNING/ERROR for failures and silent degradations, always naming the reason — never a bare `except: pass`. Keep the `httpx` logger muted (see `stability.py`); logs land in `data/stability.log` (daily rotation, git-ignored) plus stdout.
 
 ### Domain guardrails
 
