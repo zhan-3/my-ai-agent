@@ -234,7 +234,7 @@ docker compose up -d --build
 ├── docs/
 │   ├── capability-matrix.md    # 能力分型与边界
 │   ├── test-map.md             # 测试分层与执行入口
-│   ├── adr/                    # 12 篇架构决策（ADR-0001 ~ ADR-0012）
+│   ├── adr/                    # 14 篇架构决策（ADR-0001 ~ ADR-0014）
 │   ├── agents/                 # Agent 协作机制文档
 │   └── documents/              # 8 份政策 RAG 语料
 │
