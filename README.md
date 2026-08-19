@@ -78,7 +78,6 @@ Compose、CI 与镜像 smoke 均固定 PostgreSQL 16。旧浮动版本卷若由�
 - [`CONTEXT.md`](CONTEXT.md)：领域术语与不变量。
 - [`docs/test-map.md`](docs/test-map.md)：测试分层与执行入口。
 - [`docs/adr/`](docs/adr/)：关键架构决策。
-- [`.scratch/agent-loop/spec.md`](.scratch/agent-loop/spec.md)：当前最高优先级与实施票据。
 
 ## 已知限制与后续优化
 

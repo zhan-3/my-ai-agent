@@ -1,5 +1,7 @@
 # ADR-0001：模型接缝（LLM seam）设计
 
+- 状态：已接受（2026-08）
+
 `ChatOpenAI` 构造曾散落在图、RAG 和联网模块，重试/超时配置发生漂移，导入期构造还让单元测试与交付自检依赖凭据。决定：由 `src/xiao_wen/llm.py` 提供 `get_llm(*, override=None, **overrides)` 懒构造——首次调用时校验 3 个 `DEEPSEEK_*` 变量（缺失报齐）并组装默认配置，返回值包一层代理：`invoke` 走共享 `CircuitBreaker`（3 次失败 / 5 秒恢复期），其余方法透传；链（prompt+schema）留在各消费者模块懒构建。
 
 ## Considered Options
