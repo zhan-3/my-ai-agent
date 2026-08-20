@@ -1,5 +1,5 @@
 import { request } from './client'
-import type { MemorySnapshot } from './contract'
+import type { KnowledgeSource, MemorySnapshot } from './contract'
 
 export type { MemorySnapshot }
 
@@ -14,6 +14,7 @@ export function cancelTrip(token: string, tripId: number): Promise<{ ok: boolean
 export interface HistoryMessage {
   role: 'user' | 'ai'
   text: string
+  sources?: KnowledgeSource[]
 }
 
 export function getMessages(token: string, conversationId: string): Promise<{ messages: HistoryMessage[] }> {
