@@ -116,6 +116,7 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 - **确定性策略门**：政策结论必须携带本轮 RAG 证据；无命中/依赖不可用有不同结果语义；天气失败显式呈现；写回前验证（日期/天数/返程不早于出发）。
 - **政策数字分层**：金额/时限等"硬伤"由代码读 RAG facts；渠道/流程等"软伤"由 LLM 回答；RAG 不可用时不显示金额。
 - **深模块 + 薄适配**（[ADR-0003](docs/adr/ADR-0003-trip-planner.md)）：`trip_planner.py` 封装提取/补全/缺项/生成/验证/写回/展示；子 Agent 只做 `collect-then-compose` 薄适配。
+- **对话隔离**：每个前端对话持有独立 `conversation_id`，工具 transcript 按对话隔离、长期记忆（偏好/行程）按用户全局生效；"新对话"不继承旧 transcript。
 
 ## 已完成基础项
 
@@ -141,11 +142,11 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 
 ## 已知问题与后续优化方向
 
-- **汇率换算**：已具备汇率工具但暂未接入行程预算换算（记入待办，暂不排期）。
-- 每个前端对话使用独立 `conversation_id`，工具 transcript 与长期记忆分离；"新对话"不继承旧 transcript。
-- 第一版不实现运行中 steering/follow-up 队列、自动上下文压缩或完整 Session 树。
-- 多实例会话顺序、数据库 migration、连接池和高可用属于后续独立设计。
-- 长差中间日如用户无具体安排，展示层折叠为"其余 N 天"，未来接入地图/POI 数据可扩展逐日内容。
+- **汇率换算待接入**：汇率工具已具备，但行程预算尚未接入当地货币实时折算——境外预算目前按当地政策标准呈现（记入待办，暂不排期）。
+- **政策知识库规模固定**：RAG 语料为 8 份固定文档（`docs/documents/`），暂无文档增量上传与索引重建的管理入口，新增政策需人工落盘并重启生效。
+- **模型质量评估靠人工回归**：对话细节回归集（28 个真实 LLM 用例）不进确定性门禁，按需人工诊断判读；暂无自动评分基准与质量趋势监控，模型/提示词升级后需手动跑回归集人工验收。
+- **第一版刻意取舍**：不实现运行中 steering/follow-up 队列、自动上下文压缩或完整 Session 树——以独立对话 + 可恢复历史兜底，后续如需长对话深度探索再演进。
+- **长差中间日内容扩展**：如用户无具体安排，当前折叠为"其余 N 天"；接入地图/POI 数据后可扩展为真实逐日内容。
 
 ## 测试与质量门禁
 
@@ -199,7 +200,6 @@ docker compose up -d --build
 │   ├── web.py                  # 联网查询工具（天气/空气/时差/汇率）
 │   ├── reference_data.py       # 城市/时区/空气参考数据
 │   ├── stats.py                # 差旅画像统计
-│   ├── observability.py        # 对话观察日志
 │   └── agents/                 # 6 个子 Agent 薄适配
 │       ├── itinerary_agent.py  # 行程规划（collect-then-compose）
 │       ├── preference_agent.py # 偏好记录
@@ -246,6 +246,4 @@ docker compose up -d --build
 - [`CONTEXT.md`](CONTEXT.md)：领域术语与不变量。
 - [`docs/capability-matrix.md`](docs/capability-matrix.md)：能力分型与边界。
 - [`docs/test-map.md`](docs/test-map.md)：测试分层与执行入口。
-- [`docs/adr/`](docs/adr/)：关键架构决策（12 篇）。
-
-本地调试可在 `.env` 设置 `OBSERVABILITY_DEBUG=true`，同步与 SSE 对话会按轮追加到 `data/observability/turns.jsonl`（不含请求头/密码/Key，仅用于专门测试账号，被 Git 忽略）。
+- [`docs/adr/`](docs/adr/)：关键架构决策（14 篇）。
