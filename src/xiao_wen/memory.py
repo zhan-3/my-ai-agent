@@ -20,7 +20,7 @@ from xiao_wen.config import load_settings
 class MemoryBackend(Protocol):
     """记忆存储后端协议：三个域（消息/偏好/行程）按 session 的基础读写"""
 
-    def add_message(self, session_id: str, role: str, content: str) -> dict: ...
+    def add_message(self, session_id: str, role: str, content: str, sources: list | None = None) -> dict: ...
 
     def get_recent_messages(self, session_id: str, n: int) -> list[dict]: ...
 
@@ -108,8 +108,8 @@ def _get_backend() -> MemoryBackend:
 
 
 # ---------- 短期记忆：最近 N 轮对话（session 维度） ----------
-def add_message(role: str, content: str, *, session_id: str = "default") -> dict:
-    return _get_backend().add_message(session_id, role, content)
+def add_message(role: str, content: str, *, session_id: str = "default", sources: list | None = None) -> dict:
+    return _get_backend().add_message(session_id, role, content, sources)
 
 
 def get_recent_messages(n: int = 6, *, session_id: str = "default") -> list[dict]:

@@ -210,7 +210,8 @@ def _commit_turn(
     if add_transcript and isinstance(transcript, list):
         add_transcript(transcript, session_id=session_id)
     store.add_message("user", text, session_id=session_id)
-    store.add_message("assistant", result.answer, session_id=session_id)
+    source_payload = [s.model_dump() for s in result.sources]
+    store.add_message("assistant", result.answer, session_id=session_id, sources=source_payload)
 
 
 def _finish_turn(

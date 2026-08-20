@@ -141,8 +141,9 @@ export function useChat({ onUnauthorized }: { onUnauthorized: () => void }) {
         history.map((m) => ({
           role: m.role,
           text: m.text,
-          // 历史消息只持久化了纯文本：行程答案靠文本特征回退识别（后端未存 intent）
+          // 后端持久化了文本与 sources；intent/plan 未存，行程答案靠文本特征回退识别
           intent: m.role === 'ai' && m.text.includes('📋') ? '行程规划' : undefined,
+          ...(m.sources?.length ? { sources: m.sources } : {}),
         })),
       )
       return true

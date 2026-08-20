@@ -33,10 +33,12 @@ function TripRow({ it }: { it: HistoryItinerary }) {
 // 历史查询结果卡片：纯展示（数据来自聊天消息的 history 字段）
 export default function HistoryCard({ history }: { history: HistoryResult }) {
   const isPlan = history.direction === '计划'
+  const isAll = history.direction === '全部'
+  const title = isPlan ? '📅 已规划的行程' : isAll ? '📋 最近行程' : '🗂️ 历史行程'
   return (
     <div className="space-y-1.5 text-xs">
       <div className="mb-0.5 font-medium">
-        {isPlan ? '📅 已规划的行程' : '🗂️ 历史行程'}
+        {title}
         {history.itineraries.length > 0 && (
           <span className="ml-1 text-muted-foreground">（{history.itineraries.length} 条）</span>
         )}

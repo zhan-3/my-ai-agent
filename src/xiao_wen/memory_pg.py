@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS messages (
     content TEXT NOT NULL,
     ts TEXT NOT NULL
 );
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS sources JSONB;
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
 CREATE TABLE IF NOT EXISTS agent_transcripts (
     id BIGSERIAL PRIMARY KEY,
@@ -123,22 +124,22 @@ class PostgresBackend:
             conn.commit()
 
     # ---------- 短期记忆：消息 ----------
-    def add_message(self, session_id: str, role: str, content: str) -> dict:
+    def add_message(self, session_id: str, role: str, content: str, sources: list | None = None) -> dict:
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
         with self._connection() as conn:
             conn.execute(
-                "INSERT INTO messages (session_id, role, content, ts) VALUES (%s, %s, %s, %s)",
-                (session_id, role, content, ts),
+                "INSERT INTO messages (session_id, role, content, ts, sources) VALUES (%s, %s, %s, %s, %s)",
+                (session_id, role, content, ts, Jsonb(sources) if sources else None),
             )
-        return {"role": role, "content": content, "ts": ts}
+        return {"role": role, "content": content, "ts": ts, "sources": sources or []}
 
     def get_recent_messages(self, session_id: str, n: int) -> list[dict]:
         with self._connection() as conn:
             rows = conn.execute(
-                "SELECT role, content, ts FROM messages WHERE session_id = %s ORDER BY id DESC LIMIT %s",
+                "SELECT role, content, ts, sources FROM messages WHERE session_id = %s ORDER BY id DESC LIMIT %s",
                 (session_id, n),
             ).fetchall()
-        return [{"role": r[0], "content": r[1], "ts": r[2]} for r in reversed(rows)]
+        return [{"role": r[0], "content": r[1], "ts": r[2], "sources": r[3] or []} for r in reversed(rows)]
 
     def add_agent_transcript(self, session_id: str, transcript: list[dict]) -> dict:
         ts = time.strftime("%Y-%m-%d %H:%M:%S")

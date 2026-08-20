@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from xiao_wen import llm
 from xiao_wen.memory import add_or_update_preference, get_home_city, get_preferences, save_trip
+from xiao_wen.reference_data import CITY_COORDS
 
 logger = logging.getLogger("xiao_wen.trip_planner")
 
@@ -172,6 +173,30 @@ def _plan_model():
 # 未知城市/日期哨兵族：提取 LLM 可能输出多个变体（prompt 要求「待定」但有方差），
 # 归一化后所有下游（缺项检查/常驻补全/记忆/历史显示）看到同一哨兵
 _UNKNOWN_CITIES = ("待定", "未知", "出差", "无")
+
+# 交通与距离的确定性匹配阈值（公里）：
+# ≤ _TRAIN_PREFERRED_KM 且用户未声明交通偏好时，默认高铁（依据《差旅标准》环保线「300km 内
+# 鼓励高铁而非飞机」+ 常识扩展）；超过该距离不干预（LLM 按距离自由，远程航班合理）。
+_TRAIN_PREFERRED_KM = 700
+
+
+def _distance_km(city_a: str, city_b: str) -> float | None:
+    """两城市直线距离（Haversine，公里）。任一城市未收录（reference_data.CITY_COORDS）
+    返回 None → 调用方跳过确定性修正（避免把未收录城市误判成短途）。"""
+    a = CITY_COORDS.get(city_a)
+    b = CITY_COORDS.get(city_b)
+    if not a or not b:
+        return None
+    from math import asin, cos, radians, sin, sqrt
+
+    lat1, lon1 = a
+    lat2, lon2 = b
+    radius = 6371.0
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    h = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+    return 2 * radius * asin(sqrt(h))
+
 
 # 纯城市名补全兜底：排除含方向/回复/时间词的表述（那是完整句，交给 LLM），
 # 排除含数字（「4天」「10月8日」不是城市）——只认「临沂」「北京」这类纯城市名
@@ -392,6 +417,18 @@ def plan(
         for day in plan.days:
             if any(token in day.transport for token in ("高铁", "动车", "火车")):
                 day.transport = "高铁（具体车次和时间以晓问商旅平台实时查询为准）"
+    # 交通方式与距离的确定性匹配（LLM「交通符合城市间距离」是软约束，实测把 550km 的
+    # 临沂→北京判成「较远」选航班）：用户未声明偏好且两端城市可查时，短途按
+    # 《差旅标准》环保线降级为高铁，并把 LLM 的「选航班」理由一并纠正。用户明说偏好不覆盖。
+    if req.transport_pref == "无":
+        km = _distance_km(req.from_city, req.to_city)
+        if km is not None and km <= _TRAIN_PREFERRED_KM:
+            for day in plan.days:
+                if any(token in day.transport for token in ("航班", "飞机", "航空")):
+                    day.transport = "高铁（具体车次和时间以晓问商旅平台实时查询为准）"
+            if plan.reasons:
+                plan.reasons = [r for r in plan.reasons if not any(token in r for token in ("航班", "飞机", "航空"))]
+                plan.reasons.append(f"两地直线约 {km:.0f} 公里，属中短途，按公司环保倡议选择高铁")
     # 生成后、写回前做确定性验证：日期/天数/政策证据不满足时不污染历史记忆。
     from xiao_wen.validation import validate_trip
 

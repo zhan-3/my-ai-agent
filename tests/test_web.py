@@ -55,6 +55,24 @@ def test_web_agent_weather_grounding_requires_weather_tool(monkeypatch):
     assert web_agent._web_query("北京天气") == ("工具结果", "grounded")
 
 
+def test_web_agent_dedupes_repeated_tool_output(monkeypatch):
+    """ReAct 重复调用同一工具返回相同内容（如连续越界日期提示）→ 只保留一次，不重复拼接"""
+    from langchain_core.messages import ToolMessage
+
+    from xiao_wen.agents import web_agent
+
+    class App:
+        def invoke(self, _state):
+            msg = "仅支持未来 7 天预报（2026-08-20 至 2026-08-26）"
+            return {"messages": [ToolMessage(content=msg, tool_call_id=f"c{i}", name="get_weather") for i in (1, 2, 3)]}
+
+    monkeypatch.setattr(web_agent._web, "app", App())
+    assert web_agent._web_query("北京天气") == (
+        "仅支持未来 7 天预报（2026-08-20 至 2026-08-26）",
+        "invalid",
+    )
+
+
 def test_air_quality_known_city_uses_local_coords(monkeypatch):
     """北京在本地 CITY_COORDS → 不打 nominatim（零依赖承诺），只调空气质量 API"""
     urls = []

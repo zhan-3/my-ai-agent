@@ -153,3 +153,50 @@ def test_run_limits_recent_five(monkeypatch):
     result = history_agent.run(_state("我的出差记录"))
     assert result["answer"].count("· 2026-07") == 5
     assert len(result["history"]["itineraries"]) == 5
+
+
+# ---- 中性问法（最近有哪些行程）：upcoming 不能丢 ----
+
+
+def _future_it(start: str, summary: str = "未来会议") -> dict:
+    return {**_IT, "start_date": start, "summary": summary}
+
+
+def test_run_neutral_query_shows_all_three_states(monkeypatch):
+    """「最近有哪些行程」→ 中性：历史/进行中/已规划三态全展示，各自标状态。"""
+    from datetime import date
+
+    today = date.today()
+    its = [
+        {**_IT, "start_date": "2026-07-01"},  # 过去 → 历史
+        {**_IT, "start_date": today.isoformat(), "duration_days": 2},  # 进行中
+        _future_it("2026-09-01"),  # 未来 → 已规划
+    ]
+    _seed(monkeypatch, its=its)
+    result = history_agent.run(_state("我最近有哪些行程"))
+    assert "📋 最近行程：" in result["answer"]
+    statuses = [it["status"] for it in result["history"]["itineraries"]]
+    assert statuses == ["已规划", "进行中", "历史"]  # reversed 后：未来在前
+    assert result["history"]["direction"] == "全部"
+
+
+def test_run_neutral_query_keeps_upcoming_only(monkeypatch):
+    """回归：两条未来行程，「最近有哪些行程」必须两条都显示（不能只剩 1 条）。"""
+    its = [_future_it("2026-08-26", "杭州出差"), _future_it("2026-08-28", "西安出差")]
+    _seed(monkeypatch, its=its)
+    result = history_agent.run(_state("我最近有哪些行程"))
+    assert "杭州出差" in result["answer"]
+    assert "西安出差" in result["answer"]
+    assert len(result["history"]["itineraries"]) == 2
+    assert all(it["status"] == "已规划" for it in result["history"]["itineraries"])
+    assert result["history"]["direction"] == "全部"
+
+
+def test_run_past_word_limits_to_history(monkeypatch):
+    """明确历史词（去过/之前）→ 只查已发生，upcoming 不显示。"""
+    its = [_future_it("2026-09-01"), {**_IT, "start_date": "2026-07-01"}]
+    _seed(monkeypatch, its=its)
+    result = history_agent.run(_state("我上次去过哪些地方"))
+    assert "2026-07-01" in result["answer"]
+    assert "2026-09-01" not in result["answer"]
+    assert result["history"]["direction"] == "历史"

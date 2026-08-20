@@ -254,7 +254,14 @@ def messages(conversation_id: str, authorization: str | None = Header(default=No
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     rows = get_recent_messages(n=200, session_id=thread_id)
-    msgs = [{"role": "user" if m.get("role") == "user" else "ai", "text": m.get("content", "")} for m in rows]
+    msgs = [
+        {
+            "role": "user" if m.get("role") == "user" else "ai",
+            "text": m.get("content", ""),
+            "sources": m.get("sources") or [],
+        }
+        for m in rows
+    ]
     return {"messages": msgs}
 
 

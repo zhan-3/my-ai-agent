@@ -35,7 +35,14 @@ def _web_query(question: str, ctx: str = "无") -> tuple[str, str]:
     used = {message.name for message in tool_messages}
     if not expected or not expected.issubset(used):
         return "暂时无法获取可靠实时信息，请稍后重试。", "unavailable"
-    tool_text = "\n".join(str(message.content) for message in tool_messages if message.name in expected)
+    # 去重：ReAct 可能重复调用同一工具返回相同内容（如连续两次越界日期提示），保留首次
+    seen: list[str] = []
+    for message in tool_messages:
+        if message.name in expected:
+            content = str(message.content).strip()
+            if content and content not in seen:
+                seen.append(content)
+    tool_text = "\n".join(seen)
     if any(word in tool_text for word in ("失败", "服务可能不稳定", "暂时无法")):
         return tool_text, "unavailable"
     if any(word in tool_text for word in ("未找到", "仅支持", "不支持", "无法识别", "已经过去", "超出")):

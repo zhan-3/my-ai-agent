@@ -24,7 +24,7 @@ class Store:
         items = self.messages.get(session_id, [])[-n:]
         return "\n".join(content for _, content in items) or "无"
 
-    def add_message(self, role, content, *, session_id="default"):
+    def add_message(self, role, content, *, session_id="default", sources=None):
         self.messages.setdefault(session_id, []).append((role, content))
 
     def add_agent_transcript(self, transcript, *, session_id="default"):
@@ -379,9 +379,9 @@ def test_same_session_chat_is_serialized():
             return {"answer": f"{turn['user_input']}-答", "intent": "其他", "reason": "测试"}
 
     class RecordingStore(Store):
-        def add_message(self, role, content, *, session_id="default"):
+        def add_message(self, role, content, *, session_id="default", sources=None):
             sequence.append(f"{content}:{role}")
-            super().add_message(role, content, session_id=session_id)
+            super().add_message(role, content, session_id=session_id, sources=sources)
 
     store = RecordingStore()
 

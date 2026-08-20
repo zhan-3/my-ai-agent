@@ -671,6 +671,126 @@ def test_handle_validation_failure_writes_resumable_missing(monkeypatch):
     assert out2.task_update is None
 
 
+def test_transport_distance_rule_downgrades_short_hop_flight(monkeypatch):
+    """确定性距离规则：用户未声明交通偏好时，短途（≤700km）LLM 误选航班 → 降级高铁，
+    并把「选航班」的理由一并纠正（实测 550km 临沂→北京被判「较远」选航班的回归）。"""
+    flight_plan = ItineraryPlan(
+        summary="天津出差",
+        days=[
+            _it.DayPlan(
+                date="2026-10-08",
+                transport="航班（具体航班和时间以晓问商旅平台实时查询为准）",
+                hotel="如家（天津店）",
+                activities=["抵达后入住酒店"],
+                notes="",
+            )
+        ],
+        reasons=["天津距北京较远，选择航班出行更高效", "用户无其他偏好"],
+    )
+    _stub_models(monkeypatch, _req(from_city="北京", to_city="天津", duration_days=1), plan_out=flight_plan)
+    r = _it.plan("去天津开会")
+    assert isinstance(r, _it.PlanResult)
+    assert "高铁" in r.plan.days[0].transport, f"短途航班应降级为高铁：{r.plan.days[0].transport}"
+    assert not any("航班" in x for x in r.plan.reasons), f"航班理由应被纠正：{r.plan.reasons}"
+    assert any("高铁" in x and "公里" in x for x in r.plan.reasons), f"应补充高铁距离理由：{r.plan.reasons}"
+
+
+def test_transport_distance_rule_keeps_long_hop_flight(monkeypatch):
+    """远程（>700km）选航班不干预；用户明说飞机偏好时短途也不降级（偏好优先）。"""
+    flight_plan = ItineraryPlan(
+        summary="广州出差",
+        days=[
+            _it.DayPlan(
+                date="2026-10-08",
+                transport="航班（具体航班和时间以晓问商旅平台实时查询为准）",
+                hotel="酒店",
+                activities=["抵达后入住酒店"],
+                notes="",
+            )
+        ],
+        reasons=["北京至广州距离远，选择航班更高效"],
+    )
+    # 远程：北京→广州 ~1890km > 700km → 保留航班
+    _stub_models(monkeypatch, _req(from_city="北京", to_city="广州", duration_days=1), plan_out=flight_plan)
+    r = _it.plan("去广州开会")
+    assert isinstance(r, _it.PlanResult)
+    assert "航班" in r.plan.days[0].transport, "远程航班不应被降级"
+    # 用户明说飞机：短途北京→天津也不降级（用户偏好优先，不覆盖）
+    _stub_models(
+        monkeypatch,
+        _req(from_city="北京", to_city="天津", transport_pref="飞机", duration_days=1),
+        plan_out=flight_plan,
+    )
+    r2 = _it.plan("去天津开会，飞机往返")
+    assert isinstance(r2, _it.PlanResult)
+    assert "航班" in r2.plan.days[0].transport, "用户明说飞机偏好不得被覆盖"
+
+
+def test_transport_distance_rule_skips_unknown_city(monkeypatch):
+    """城市未收录（如乌兰察布）→ 距离不可知 → 跳过确定性修正，LLM 输出原样保留。"""
+    flight_plan = ItineraryPlan(
+        summary="乌兰察布出差",
+        days=[
+            _it.DayPlan(
+                date="2026-10-08",
+                transport="航班（具体航班和时间以晓问商旅平台实时查询为准）",
+                hotel="酒店",
+                activities=["抵达后入住酒店"],
+                notes="",
+            )
+        ],
+        reasons=["乌兰察布至北京距离较远，选择航班出行更高效"],
+    )
+    _stub_models(monkeypatch, _req(from_city="乌兰察布", to_city="北京", duration_days=1), plan_out=flight_plan)
+    r = _it.plan("从乌兰察布去北京开会")
+    assert isinstance(r, _it.PlanResult)
+    assert "航班" in r.plan.days[0].transport, "未收录城市不干预，保留 LLM 选择"
+
+
+def test_transport_distance_rule_covers_expanded_city_table(monkeypatch):
+    """扩表后临沂（35.06,118.34）进 CITY_COORDS：临沂→北京约 550km ≤ 700km，
+    LLM 判「较远」选航班 → 确定性降级为高铁（用户演示场景的回归）。"""
+    flight_plan = ItineraryPlan(
+        summary="北京开会",
+        days=[
+            _it.DayPlan(
+                date="2026-10-08",
+                transport="航班（具体航班和时间以晓问商旅平台实时查询为准）",
+                hotel="如家（北京国贸店）",
+                activities=["抵达后入住酒店"],
+                notes="",
+            )
+        ],
+        reasons=["临沂至北京距离较远，选择航班出行更高效"],
+    )
+    _stub_models(monkeypatch, _req(from_city="临沂", to_city="北京", duration_days=1), plan_out=flight_plan)
+    r = _it.plan("从临沂去北京开会")
+    assert isinstance(r, _it.PlanResult)
+    assert "高铁" in r.plan.days[0].transport, "临沂→北京（550km）应被降级为高铁"
+    assert not any("航班" in x for x in r.plan.reasons), f"航班理由应被纠正：{r.plan.reasons}"
+
+
+def test_transport_distance_rule_overseas_flight_kept(monkeypatch):
+    """境外/长途（上海→东京 ~1760km）选航班不干预（国际差旅航班天然合理）。"""
+    flight_plan = ItineraryPlan(
+        summary="东京出差",
+        days=[
+            _it.DayPlan(
+                date="2026-10-08",
+                transport="航班（具体航班和时间以晓问商旅平台实时查询为准）",
+                hotel="商务酒店",
+                activities=["抵达后入住酒店"],
+                notes="",
+            )
+        ],
+        reasons=["上海至东京为国际航班"],
+    )
+    _stub_models(monkeypatch, _req(from_city="上海", to_city="东京", duration_days=1), plan_out=flight_plan)
+    r = _it.plan("从上海去东京出差")
+    assert isinstance(r, _it.PlanResult)
+    assert "航班" in r.plan.days[0].transport, "境外长途航班不应被降级"
+
+
 def test_plan_derives_duration_from_return_date(monkeypatch):
     """用户给了明确返程日期但没说天数 → 用日期差推算 duration_days（含首尾）"""
     req = _req(duration_days=0, return_date="2026-10-12")  # 默认 10-08 出发

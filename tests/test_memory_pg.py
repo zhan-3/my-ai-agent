@@ -34,6 +34,24 @@ class TestPostgresBackend:
         assert [m["content"] for m in b.get_recent_messages("B", 6)] == ["B的消息"]
         assert b.get_recent_messages("C", 6) == []
 
+    def test_message_sources_persisted(self, b):
+        """行程消息的 RAG 证据持久化：历史恢复时前端「查看政策原文」按钮的数据不丢"""
+        sources = [
+            {
+                "evidence_id": "01_travel_standards#abc",
+                "source": "01_travel_standards",
+                "text": "一线城市住宿不超过500元/晚",
+                "similarity": 0.91,
+                "section": "住宿标准",
+            }
+        ]
+        b.add_message("A", "assistant", "📋 行程", sources=sources)
+        b.add_message("A", "assistant", "无来源回答")  # 默认无来源
+        got = b.get_recent_messages("A", 6)
+        assert got[0]["sources"] == sources  # 来源往返一致（JSONB 序列化）
+        assert got[1]["sources"] == []  # 无来源消息返回空列表
+        assert [m["content"] for m in got] == ["📋 行程", "无来源回答"]
+
     def test_agent_transcripts_roundtrip_and_isolated(self, b):
         transcript = [{"role": "assistant", "tool_calls": [{"name": "agent_0"}]}, {"role": "tool", "content": "结果"}]
         b.add_agent_transcript("A", transcript)

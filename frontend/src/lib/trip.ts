@@ -137,7 +137,7 @@ export function parseTrip(text: string): ParsedTrip {
       diet = t
       continue
     }
-    if (t.startsWith('📌')) {
+    if (t.startsWith('📌 行程安排')) {
       inReasons = false
       flushDay()
       inItinerary = true

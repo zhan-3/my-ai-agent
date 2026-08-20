@@ -29,6 +29,9 @@ _TRIP_WORDS = ("行程", "出差", "去哪", "路线", "计划", "安排", "游�
 _PREF_WORDS = ("偏好", "习惯", "常住", "记忆", "喜欢", "不吃", "口味", "住宿", "忌口")
 # 计划向词：问「接下来/安排/什么时候出发」→ 未来规划；其余行程词 → 历史（已发生）
 _PLAN_WORDS = ("计划", "安排", "规划", "接下来", "下次", "什么时候", "出发", "即将", "将要", "准备", "待办")
+# 历史向词：明确过去语义 → 只查已发生（past+ongoing）；与 _PLAN_WORDS 都未命中 →
+# 中性（「最近有哪些行程」）→ 全部行程（三态一起展示，各自标注状态）
+_PAST_WORDS = ("历史", "上次", "之前", "以前", "去过", "以往", "旧的", "过去的")
 
 # 城市词表：白名单（有经纬度坐标的常用差旅城市）为基础；
 # 问题提到城市 → 按城市过滤行程。只认白名单会漏掉临沂等非坐标表城市，
@@ -73,6 +76,7 @@ def run(state) -> dict:
 
     cls = classify(its)
     plan_hit = any(w in q for w in _PLAN_WORDS)
+    past_hit = any(w in q for w in _PAST_WORDS)
 
     cities = _mentioned_cities(q, its)
     trip_hit = any(w in q for w in _TRIP_WORDS)
@@ -83,11 +87,17 @@ def run(state) -> dict:
 
     parts: list[str] = []
     items: list[dict] = []  # 结构化行程（前端卡片）：status 标注时空语义三态
+    direction = "历史"
     if want_trip:
         if plan_hit:
-            pool, title = cls["upcoming"], "📅 已规划的行程："
+            pool, title, direction = cls["upcoming"], "📅 已规划的行程：", "计划"
+        elif past_hit:
+            pool, title, direction = cls["past"] + cls["ongoing"], "🗂️ 历史行程：", "历史"
         else:
-            pool, title = cls["past"] + cls["ongoing"], "🗂️ 历史行程："
+            # 中性问法（「最近有哪些行程」）：三态全展示，每条自标状态；
+            # 未来行程不能丢——它们也是「最近的行程”（修复：只问“行程”时 upcoming 消失）
+            pool = cls["past"] + cls["ongoing"] + cls["upcoming"]
+            title, direction = "📋 最近行程：", "全部"
         matched = [it for it in pool if _itinerary_matches(it, cities)]
         if matched:
             lines = [title]
@@ -96,7 +106,7 @@ def run(state) -> dict:
                     f"· {it.get('start_date', '?')} {it.get('from_city', '?')}→{it.get('to_city', '?')}，"
                     f"{it.get('duration_days', '?')}天：{it.get('summary', '')}"
                 )
-                if plan_hit:
+                if plan_hit or it in cls["upcoming"]:
                     status = "已规划"
                 elif it in cls["ongoing"]:
                     status = "进行中"
@@ -125,9 +135,5 @@ def run(state) -> dict:
         else:
             parts.append("💡 暂无记忆偏好。")
     # 结构化输出（前端渲染卡片；空查询不产出 → None，前端不渲染）
-    history = (
-        {"itineraries": items, "preferences": prefs_out, "direction": "计划" if plan_hit else "历史"}
-        if items or prefs_out
-        else None
-    )
+    history = {"itineraries": items, "preferences": prefs_out, "direction": direction} if items or prefs_out else None
     return {"answer": "\n\n".join(parts), "history": history}
