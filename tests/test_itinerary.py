@@ -622,6 +622,55 @@ def test_plan_generates_and_writes_back(monkeypatch):
     assert its[0]["summary"] == "出差计划"
 
 
+def test_plan_normalizes_night_count_to_days(monkeypatch):
+    """「待2晚/住2晚」= N+1 天（确定性归一化，不依赖 LLM）：
+    LLM 常把「待2晚」提取成 2 天，与候选行程（3 天）校验冲突，
+    曾致「校验失败不落库 → 用户确认时门禁死循环」。"""
+    plan_out = ItineraryPlan(summary="杭州出差", days=[], reasons=[])
+
+    # 「待2晚」→ 提取 2 天 → 归一化 3 天 → 直接生成成功
+    _stub_models(monkeypatch, _req(duration_days=2), plan_out=plan_out)
+    r = _it.plan("8月25日从北京去杭州出差，待2晚")
+    assert isinstance(r, _it.PlanResult)
+    assert r.request is not None and r.request.duration_days == 3
+
+    # 提取已是 3 天（不重复 +1）
+    _stub_models(monkeypatch, _req(duration_days=3), plan_out=plan_out)
+    r2 = _it.plan("8月25日从北京去杭州出差，待2晚")
+    assert isinstance(r2, _it.PlanResult)
+    assert r2.request is not None and r2.request.duration_days == 3
+
+    # 非「N晚」模式不触发（4 天保持 4 天）
+    _stub_models(monkeypatch, _req(duration_days=4), plan_out=plan_out)
+    r3 = _it.plan("8月25日从北京去杭州出差，4天")
+    assert isinstance(r3, _it.PlanResult)
+    assert r3.request is not None and r3.request.duration_days == 4
+
+
+def test_handle_validation_failure_writes_resumable_missing(monkeypatch):
+    """校验失败（天数不一致）也落库 drafting 缺项：用户确认后门禁可放行，
+    避免「确认消息既非新行程又无活跃缺项 → Agent Loop 死循环」（实测回归）。"""
+    req = _req(duration_days=2)
+    monkeypatch.setattr(
+        _it,
+        "plan",
+        lambda *a, **k: _it.ValidationFailure(issues=["请求 2 天，候选行程有 3 天"], request=req),
+    )
+    out = _it.handle("帮我规划行程：8月25日去杭州出差，待2晚", session_id="t", thread_id="t1")
+    assert out.plan is None
+    assert out.task_update is not None
+    assert out.task_update["task"]["missing"] == ["出差天数"]
+
+    # 非天数类校验失败（如过去日期）是硬错误，不写 drafting，避免无意义任务状态
+    monkeypatch.setattr(
+        _it,
+        "plan",
+        lambda *a, **k: _it.ValidationFailure(issues=["出发日期 2026-01-01 已过"], request=req),
+    )
+    out2 = _it.handle("去北京开会", session_id="t", thread_id="t2")
+    assert out2.task_update is None
+
+
 def test_plan_derives_duration_from_return_date(monkeypatch):
     """用户给了明确返程日期但没说天数 → 用日期差推算 duration_days（含首尾）"""
     req = _req(duration_days=0, return_date="2026-10-12")  # 默认 10-08 出发

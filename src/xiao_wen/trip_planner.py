@@ -92,6 +92,7 @@ class ValidationFailure:
     """候选行程未通过运行时验证；失败结果不得写回长期记忆。"""
 
     issues: list[str]
+    request: TripRequest | None = None  # 保留提取结果，供校验失败后缺项续接（如「天数不一致」）
 
 
 # ---- 两阶段提示词（与验收契约一致） ----
@@ -331,6 +332,12 @@ def plan(
         days = _days_between(req.start_date, req.return_date)
         if days and days > 0:
             req.duration_days = days
+    # 「待N晚/住N晚/N晚」语义归一化（确定性规则，不依赖 LLM）：
+    # 8/25 出发「待 2 晚」= 25、26 两晚 + 27 返程 = 3 天。LLM 常把「待2晚」提取成 2 天，
+    # 与候选行程（3 天）校验冲突 → 校验失败不落库 → 用户确认缺项时门禁死循环。
+    night_m = re.search(r"(?:待|住|共)?\s*(\d+)\s*晚", user_input or "")
+    if night_m and isinstance(req.duration_days, int) and req.duration_days == int(night_m.group(1)):
+        req.duration_days += 1
     # 常驻城市补全：先于缺项检查（"用户没说出发城市但记忆里有"不算缺项）
     hc = get_home_city(session_id=session_id)
     if (not req.from_city or req.from_city in _UNKNOWN_CITIES) and hc:
@@ -342,7 +349,7 @@ def plan(
     # 提取后、生成前拦截，避免花 LLM 生成一条过去日期的行程再落库成 completed。
     try:
         if date.fromisoformat(req.start_date) < date.today():
-            return ValidationFailure(issues=[f"出发日期 {req.start_date} 已过，请指定今天或之后的日期"])
+            return ValidationFailure(issues=[f"出发日期 {req.start_date} 已过，请指定今天或之后的日期"], request=req)
     except (ValueError, TypeError):
         pass
     prefs = get_preferences(session_id=session_id)
@@ -400,7 +407,7 @@ def plan(
         budget=budget,
     )
     if validation.blocking_issues:
-        return ValidationFailure(issues=[issue.message for issue in validation.blocking_issues])
+        return ValidationFailure(issues=[issue.message for issue in validation.blocking_issues], request=req)
     # 写库前剔除无效天数（0/缺）：facts 缺 duration_days = 旧记录缺天数语义，
     # 差旅统计按「字段缺失」计 skipped_days，不被 0 污染平均天数
     facts = req.model_dump()
@@ -829,9 +836,32 @@ def handle(
         )
     if isinstance(r, ValidationFailure):
         logger.warning("行程校验失败 issues=%s", r.issues)
+        from xiao_wen.dialogue import task_update_set
+
+        answer = "⚠️ 行程候选未通过一致性校验，暂未写入历史记录：\n· " + "\n· ".join(r.issues)
+        # 校验失败也落库为可续接缺项（如「天数不一致」→ 用户确认后门禁放行），
+        # 避免「确认消息既不是新行程又没有活跃缺项」导致 Agent Loop 门禁死循环。
+        task_update = None
+        if any("天" in str(issue) for issue in r.issues):
+            resume_context = "\n".join(
+                part
+                for part in (
+                    task_context.strip(),
+                    f"用户: {user_input}",
+                    f"助手: {answer}",
+                )
+                if part
+            )
+            task_update = task_update_set(
+                resume_context=resume_context,
+                missing=["出差天数"],
+                trip_id=trip_id,
+                facts=r.request.model_dump() if r.request else None,
+            )
         return TripOutcome(
-            answer="⚠️ 行程候选未通过一致性校验，暂未写入历史记录：\n· " + "\n· ".join(r.issues),
+            answer=answer,
             plan=None,
+            task_update=task_update,
         )
     req = r.request
     diet = _diet_pref_line(session_id, (upstream or {}).get("prefs_turn") or "")

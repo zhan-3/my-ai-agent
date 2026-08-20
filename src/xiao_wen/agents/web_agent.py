@@ -22,7 +22,10 @@ def _web_query(question: str, ctx: str = "无") -> tuple[str, str]:
     expected = set()
     if any(word in question for word in ("天气", "气温", "下雨", "降雨", "台风", "雷暴")):
         expected.add("get_weather")
-    if any(word in question for word in ("汇率", "兑换", "换多少")):
+    if any(
+        word in question
+        for word in ("汇率", "兑换", "兑", "换多少", "等于多少", "美元", "人民币", "欧元", "日元", "港币", "英镑")
+    ):
         expected.add("get_currency_rate")
     if any(word in question for word in ("空气质量", "PM2.5", "雾霾")):
         expected.add("get_air_quality")

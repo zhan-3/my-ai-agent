@@ -248,6 +248,33 @@ def test_web_agent_local_time_grounding(monkeypatch):
     assert web_agent._web_query("纽约现在几点") == ("纽约当前当地时间...", "grounded")
 
 
+def test_web_agent_currency_amount_phrasing_grounding(monkeypatch):
+    """金额问法（如「100美元等于多少人民币」）也必须要求汇率工具：关键词门禁漏判回归。"""
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    from xiao_wen.agents import web_agent
+
+    class App:
+        def __init__(self, tool_name):
+            self.tool_name = tool_name
+
+        def invoke(self, _state):
+            return {
+                "messages": [
+                    ToolMessage(content="当前汇率：1 USD = 6.7500 CNY", tool_call_id="call-1", name=self.tool_name),
+                    AIMessage(content="100美元约等于 675 人民币"),
+                ]
+            }
+
+    monkeypatch.setattr(web_agent._web, "app", App("get_currency_rate"))
+    assert web_agent._web_query("100美元等于多少人民币？") == ("当前汇率：1 USD = 6.7500 CNY", "grounded")
+    monkeypatch.setattr(web_agent._web, "app", App("get_weather"))
+    assert web_agent._web_query("100美元等于多少人民币？") == (
+        "暂时无法获取可靠实时信息，请稍后重试。",
+        "unavailable",
+    )
+
+
 def test_is_overseas_local_tables_and_nominatim(monkeypatch):
     """境外判定：中国城市表→境内，国际城市表（含港澳台）→境外，兜底 Nominatim display_name 含「中国」"""
     assert web.is_overseas("北京") is False
